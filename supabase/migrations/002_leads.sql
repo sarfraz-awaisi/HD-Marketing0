@@ -1,0 +1,8 @@
+create table public.leads(id uuid primary key default gen_random_uuid(),name text not null check(length(name)>0),masked_phone text not null,email text,source text not null default 'manual' check(source in ('manual','CSV','Meta','WhatsApp','other')),property_id uuid, budget_min numeric not null default 0 check(budget_min>=0),budget_max numeric check(budget_max>=budget_min),preferred_location text,assigned_agent uuid references public.profiles(id),status text not null default 'new' check(status in ('new','contacted','interested','follow_up','site_visit','negotiation','won','lost')),created_at timestamptz not null default now(),updated_at timestamptz not null default now(),last_activity_at timestamptz not null default now());
+create table crm_private.lead_phones(lead_id uuid primary key references public.leads(id) on delete cascade,phone text not null unique);
+create table public.assignments(id uuid primary key default gen_random_uuid(),lead_id uuid not null references public.leads(id),agent_id uuid references public.profiles(id),actor_id uuid references public.profiles(id),created_at timestamptz not null default now());
+create table public.notes(id uuid primary key default gen_random_uuid(),lead_id uuid not null references public.leads(id),agent_id uuid not null references public.profiles(id),body text not null,created_at timestamptz not null default now());
+create index leads_agent_status on public.leads(assigned_agent,status);
+create index leads_created on public.leads(created_at);
+create index leads_activity on public.leads(last_activity_at);
+create index leads_search on public.leads using gin(to_tsvector('simple',name));

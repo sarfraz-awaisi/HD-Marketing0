@@ -1,0 +1,29 @@
+# Replace this address with the actual CRM host before installing.
+crm.example.com {
+	root * /srv/hd-crm/client/dist
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	@api path /api /api/* /health
+	handle @api {
+		reverse_proxy 127.0.0.1:3001
+	}
+	# Missing old chunks return 404, never SPA HTML with an immutable cache header.
+	handle /assets/* {
+		@existing file
+		header @existing Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+	handle {
+		route {
+			try_files {path} /index.html
+			header Cache-Control "no-store"
+			file_server
+		}
+	}
+}

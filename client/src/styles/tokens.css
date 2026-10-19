@@ -1,0 +1,119 @@
+/* HD Marketing design tokens (UI redesign, October 2026).
+   Loaded after index.css and animations.css. The legacy names (--navy,
+   --gold, --line, --muted…) are kept as aliases so older rules and the
+   attendance command center pick up the same palette. */
+:root {
+  /* Brand */
+  --brand-navy: #14283f;
+  --brand-navy-800: #1b3352;
+  --brand-navy-900: #0e1e30;
+  --brand-gold: #b68c45;
+  --brand-gold-700: #8a6727;
+  --brand-gold-300: #dcbd84;
+  --brand-gold-50: #fbf6ec;
+
+  /* Surfaces and lines */
+  --page: #f4f6f9;
+  --surface: #ffffff;
+  --surface-muted: #f8f9fb;
+  --surface-sunken: #f1f4f8;
+  --border: #e6eaf0;
+  --border-strong: #d6dde6;
+
+  /* Text */
+  --ink: #142238;
+  --ink-2: #2b3a50;
+  --ink-3: #66758a;
+  --ink-4: #97a2b2;
+
+  /* Status: text on soft background */
+  --success: #2c7650;
+  --success-soft: #e9f6ee;
+  --warning: #87621a;
+  --warning-soft: #fbf1de;
+  --danger: #b04545;
+  --danger-soft: #fcebeb;
+  --info: #2e5d91;
+  --info-soft: #e9f1fb;
+  --neutral: #55697f;
+  --neutral-soft: #eef2f6;
+
+  /* Type */
+  --font-body: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Manrope", "DM Sans", system-ui, sans-serif;
+  --text-2xs: 10.5px;
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-md: 13.5px;
+  --text-lg: 15px;
+  --text-xl: 18px;
+  --text-2xl: 22px;
+  --text-3xl: 26px;
+
+  /* Spacing (4 px grid) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Shape and depth */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  --shadow-xs: 0 1px 2px rgb(16 24 40 / 4%);
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / 4%), 0 2px 6px rgb(20 40 63 / 4%);
+  --shadow-md: 0 6px 18px rgb(20 40 63 / 8%), 0 2px 4px rgb(20 40 63 / 4%);
+  --shadow-lg: 0 24px 56px rgb(14 30 48 / 18%), 0 4px 12px rgb(14 30 48 / 8%);
+  --focus-ring: 0 0 0 3px rgb(182 140 69 / 28%);
+
+  /* Layout */
+  --sidebar-w: 244px;
+  --sidebar-w-collapsed: 76px;
+  --topbar-h: 64px;
+  --control-h: 40px;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur: 200ms;
+  --dur-slow: 300ms;
+
+  /* Legacy aliases */
+  --navy: var(--brand-navy);
+  --navy-dark: var(--brand-navy-900);
+  --gold: var(--brand-gold);
+  --gold-light: var(--brand-gold-50);
+  --text: var(--ink-2);
+  --muted: var(--ink-3);
+  --line: var(--border);
+  --bg: var(--page);
+  --white: var(--surface);
+  --radius: 12px;
+  --fx-fast: var(--dur-fast);
+  --fx-med: var(--dur);
+  --fx-slow: var(--dur-slow);
+  --fx-shadow: var(--shadow-sm);
+  --fx-shadow-lift: var(--shadow-md);
+  --cc-page: var(--page);
+  --cc-border: var(--border);
+  --cc-ink: var(--ink);
+  --cc-muted: var(--ink-3);
+  --cc-shadow: var(--shadow-sm);
+  --cc-shadow-hover: var(--shadow-md);
+  --cc-radius: 12px;
+
+  font-family: var(--font-body);
+  color: var(--ink-2);
+  background: var(--page);
+}
+/* Touch screens keep 44 px controls. */
+@media (pointer: coarse) {
+  :root {
+    --control-h: 44px;
+  }
+}

@@ -1,0 +1,4 @@
+# Install in the crm deployment user's crontab. UTC VPS: 22:00 = 03:00 Pakistan.
+# Backup file retention is 30 days. Review logs and copy ciphertext off the VPS.
+PATH=/usr/local/bin:/usr/bin:/bin
+0 22 * * * /bin/bash /srv/hd-crm/deploy/backup.sh >> /srv/hd-crm/backup.log 2>&1

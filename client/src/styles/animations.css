@@ -1,0 +1,415 @@
+/* Adapted from the animation reference supplied for HD Marketing CRM.
+   Import after index.css. Motion uses the existing navy/gold theme. */
+:root {
+  --fx-navy: var(--navy);
+  --fx-gold: var(--gold);
+  --fx-gold-soft: #b68c452e;
+  --fx-shadow: 0 1px 2px #14283f0f, 0 2px 8px #14283f0f;
+  --fx-shadow-lift: 0 10px 28px #14283f24, 0 3px 8px #14283f14;
+  --fx-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --fx-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --fx-fast: 160ms;
+  --fx-med: 280ms;
+  --fx-slow: 520ms;
+}
+
+@keyframes fx-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fx-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes fx-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fx-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fx-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+@keyframes fx-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes fx-grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes fx-draw {
+  from {
+    stroke-dasharray: 0 999;
+  }
+}
+@keyframes fx-grow-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes fx-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@keyframes fx-pulse-dot {
+  0% {
+    box-shadow: 0 0 0 0 #b68c4570;
+  }
+  70%,
+  100% {
+    box-shadow: 0 0 0 7px #b68c4500;
+  }
+}
+@keyframes fx-bell {
+  0%,
+  100% {
+    transform: rotate(0);
+  }
+  20% {
+    transform: rotate(14deg);
+  }
+  40% {
+    transform: rotate(-12deg);
+  }
+  60% {
+    transform: rotate(8deg);
+  }
+  80% {
+    transform: rotate(-4deg);
+  }
+}
+
+.fx-card {
+  position: relative;
+  box-shadow: var(--fx-shadow);
+  transition:
+    transform var(--fx-med) var(--fx-ease),
+    box-shadow var(--fx-med) var(--fx-ease),
+    border-color var(--fx-med);
+}
+.fx-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: linear-gradient(90deg, var(--fx-gold), #e8c766);
+  transform: scaleX(0);
+  transform-origin: left;
+  pointer-events: none;
+  transition: transform var(--fx-slow) var(--fx-ease);
+}
+.fx-card:focus-within::before {
+  transform: scaleX(1);
+}
+.property-illustration > span {
+  transition: transform var(--fx-slow) var(--fx-ease);
+}
+.photo-gallery figure {
+  overflow: hidden;
+  border-radius: 7px;
+}
+.photo-gallery img {
+  transition: filter var(--fx-med) var(--fx-ease);
+}
+
+.fx-btn,
+a.button,
+label.button {
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform var(--fx-fast) var(--fx-ease),
+    box-shadow var(--fx-med) var(--fx-ease),
+    background-color var(--fx-med),
+    color var(--fx-med),
+    border-color var(--fx-med);
+}
+.fx-btn:active:not(:disabled),
+a.button:active,
+label.button:active:not(:has(input:disabled)) {
+  transform: scale(0.97);
+}
+.icon-button {
+  transition:
+    color var(--fx-fast),
+    background-color var(--fx-fast),
+    transform var(--fx-fast);
+}
+.icon-button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.fx-nav {
+  position: relative;
+  --fx-nav-pad: 15px;
+  transition:
+    background-color var(--fx-med) var(--fx-ease),
+    color var(--fx-med),
+    padding-left var(--fx-med) var(--fx-ease);
+}
+.fx-nav::before {
+  content: "";
+  position: absolute;
+  inset: 18% auto 18% 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--fx-gold);
+  transform: scaleY(0);
+  transition: transform var(--fx-med) var(--fx-spring);
+  pointer-events: none;
+}
+.sidebar nav .fx-nav.active {
+  box-shadow: none;
+}
+.fx-nav.active::before {
+  transform: scaleY(1);
+}
+.fx-nav svg {
+  flex-shrink: 0;
+  transition: transform var(--fx-med) var(--fx-spring);
+}
+.fx-table tbody tr {
+  transition:
+    background-color var(--fx-fast),
+    box-shadow var(--fx-fast);
+}
+.fx-table tbody tr:focus-within {
+  background: #b68c4512;
+  box-shadow: inset 3px 0 var(--fx-gold);
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select,
+textarea {
+  transition:
+    border-color var(--fx-med),
+    box-shadow var(--fx-med) var(--fx-ease);
+}
+input:not([type="checkbox"]):not([type="radio"]):not(
+    [type="file"]
+  ):focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  border-color: var(--fx-gold);
+  box-shadow: 0 0 0 4px var(--fx-gold-soft);
+  outline: none;
+}
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--fx-gold);
+  transition: transform var(--fx-fast) var(--fx-spring);
+}
+input[type="checkbox"]:active:not(:disabled),
+input[type="radio"]:active:not(:disabled) {
+  transform: scale(0.88);
+}
+.tag-picker label {
+  transition:
+    background-color var(--fx-med),
+    border-color var(--fx-med),
+    box-shadow var(--fx-med);
+}
+.tag-picker label:has(input:checked) {
+  border-color: var(--fx-gold);
+  background: var(--gold-light);
+  box-shadow: inset 0 0 0 1px #b68c4520;
+}
+
+/* Mouse-only hover avoids sticky lift/shine states on touchscreens. */
+@media (hover: hover) and (pointer: fine) {
+  .fx-card:hover {
+    transform: translateY(-2px);
+    border-color: #b68c4540;
+    box-shadow: var(--fx-shadow-lift);
+  }
+  .fx-card:hover::before {
+    transform: scaleX(1);
+  }
+  .fx-card:hover .property-illustration > span {
+    transform: scale(1.06);
+  }
+  .photo-gallery img:hover {
+    filter: brightness(1.05);
+  }
+  .fx-btn:hover:not(:disabled),
+  a.button:hover,
+  label.button:hover:not(:has(input:disabled)) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px #14283f1f;
+  }
+  .fx-btn:active:not(:disabled),
+  a.button:active,
+  label.button:active:not(:has(input:disabled)) {
+    transform: scale(0.97);
+  }
+  .fx-nav:hover svg {
+    transform: scale(1.06);
+  }
+  .fx-table tbody tr:hover {
+    background: #f8f6f1;
+    box-shadow: inset 2px 0 var(--fx-gold);
+  }
+  .fx-badge:hover {
+    transform: translateY(-1px) scale(1.04);
+  }
+  .fx-bell:hover svg {
+    animation: fx-bell 700ms ease-in-out;
+  }
+}
+
+/* Backwards fill reveals delayed cards without pinning their transform after
+   the entrance finishes, so hover and focus effects remain available. */
+.fx-page {
+  min-width: 0;
+  animation: fx-fade-up var(--fx-slow) var(--fx-ease);
+}
+.fx-stagger > * {
+  --i: 7;
+  animation: fx-pop-in var(--fx-slow) var(--fx-ease) backwards;
+  animation-delay: calc(var(--i) * 55ms);
+}
+.fx-stagger > :nth-child(1) {
+  --i: 0;
+}
+.fx-stagger > :nth-child(2) {
+  --i: 1;
+}
+.fx-stagger > :nth-child(3) {
+  --i: 2;
+}
+.fx-stagger > :nth-child(4) {
+  --i: 3;
+}
+.fx-stagger > :nth-child(5) {
+  --i: 4;
+}
+.fx-stagger > :nth-child(6) {
+  --i: 5;
+}
+.fx-stagger > :nth-child(7) {
+  --i: 6;
+}
+
+dialog[open] {
+  animation: fx-pop-in var(--fx-med) var(--fx-ease);
+}
+/* Set by Modal for ~140 ms before it closes, so the dialog fades out. */
+dialog.fx-closing {
+  animation: fx-pop-out 140ms ease-in forwards;
+}
+dialog.fx-closing::backdrop {
+  animation: fx-fade-out 140ms ease-in forwards;
+}
+.fx-toast.fx-leaving {
+  animation: fx-fade-out 180ms ease-in forwards;
+}
+.fx-bar {
+  transform-origin: bottom;
+  animation: fx-grow-y 700ms var(--fx-ease) backwards;
+}
+.fx-ring {
+  animation: fx-draw 900ms var(--fx-ease) backwards;
+}
+dialog[open]::backdrop {
+  animation: fx-fade-in var(--fx-med) ease;
+}
+.notification-panel {
+  animation: fx-pop-in var(--fx-med) var(--fx-ease);
+}
+.nav-backdrop {
+  animation: fx-fade-in var(--fx-med) ease;
+}
+.fx-badge {
+  transition: transform var(--fx-fast) var(--fx-spring);
+}
+.fx-unread {
+  animation: fx-pulse-dot 1.8s ease-out 3;
+}
+.fx-progress {
+  transform-origin: left;
+  animation: fx-grow-x 900ms var(--fx-ease);
+}
+.fx-toast {
+  animation: fx-slide-in 420ms var(--fx-spring);
+}
+.fx-skeleton {
+  width: 100%;
+  height: 18px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef1f5 25%, #f8f9fb 37%, #eef1f5 63%);
+  background-size: 400% 100%;
+  animation: fx-shimmer 1.4s ease-in-out infinite;
+}
+.loading-copy {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.loading-copy .fx-skeleton {
+  height: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  /* Preserve focus, color and gold-edge feedback without moving controls. */
+  .fx-card:hover,
+  .fx-btn:hover:not(:disabled),
+  .fx-btn:active:not(:disabled),
+  a.button:hover,
+  a.button:active,
+  label.button:hover,
+  label.button:active,
+  .icon-button:active,
+  .fx-nav:hover svg,
+  .fx-badge:hover,
+  .fx-card:hover .property-illustration > span,
+  input[type="checkbox"]:active,
+  input[type="radio"]:active {
+    transform: none;
+  }
+}

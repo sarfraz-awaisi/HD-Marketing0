@@ -1,0 +1,41 @@
+project_id = "hd-marketing-crm"
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+[studio]
+enabled = true
+port = 54323
+[auth]
+enabled = true
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173/login", "http://localhost:5173/accept-invitation**"]
+jwt_expiry = 3600
+enable_signup = false
+[auth.email]
+enable_confirmations = true
+otp_expiry = 600
+otp_length = 6
+[auth.email.template.magic_link]
+subject = "HD Marketing verification code"
+content_path = "./supabase/templates/agent-email-code.html"
+[auth.email.template.confirmation]
+subject = "HD Marketing email verification"
+content_path = "./supabase/templates/confirmation-email.html"
+[auth.mfa]
+max_enrolled_factors = 10
+[auth.mfa.totp]
+enroll_enabled = true
+verify_enabled = true
+[storage]
+enabled = true
+file_size_limit = "50MiB"
