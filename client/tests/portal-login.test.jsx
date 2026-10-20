@@ -187,7 +187,7 @@ describe("separate login portals", () => {
   it("defaults to Agent and clears entered credentials when switching portals", async () => {
     openLogin();
     expect(
-      screen.getByRole("heading", { name: "Agent sign in" }),
+      screen.getByRole("heading", { name: "Agent Login" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Agent", exact: true }),
@@ -206,7 +206,7 @@ describe("separate login portals", () => {
       screen.getByRole("button", { name: "Admin", exact: true }),
     );
     expect(
-      screen.getByRole("heading", { name: "Admin sign in" }),
+      screen.getByRole("heading", { name: "Admin Login" }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Email address")).toHaveValue("");
     expect(screen.getByLabelText("Password", { exact: true })).toHaveValue("");
@@ -300,14 +300,9 @@ describe("separate login portals", () => {
     await waitFor(() => expect(finish).toBeTypeOf("function"));
     expect(mocks.setSession).not.toHaveBeenCalled();
     expect(
-      screen.getByRole("heading", { name: "Agent sign in" }),
+      screen.getByRole("heading", { name: "Agent Login" }),
     ).toBeInTheDocument();
-    for (const label of [
-      "Agent",
-      "Admin",
-      "Forgot your password?",
-      "Show password",
-    ])
+    for (const label of ["Agent", "Admin", "Forgot password?", "Show password"])
       expect(
         screen.getByRole("button", { name: label, exact: true }),
       ).toBeDisabled();
@@ -507,7 +502,7 @@ describe("separate login portals", () => {
       screen.getByRole("button", { name: "Admin", exact: true }),
     );
     await userEvent.click(
-      screen.getByRole("button", { name: "Forgot your password?" }),
+      screen.getByRole("button", { name: "Forgot password?" }),
     );
     expect(
       screen.queryByRole("group", { name: "Login portal" }),
@@ -534,7 +529,7 @@ describe("separate login portals", () => {
       screen.getByRole("button", { name: "Back to sign in" }),
     );
     expect(
-      screen.getByRole("heading", { name: "Admin sign in" }),
+      screen.getByRole("heading", { name: "Admin Login" }),
     ).toBeInTheDocument();
   });
 });

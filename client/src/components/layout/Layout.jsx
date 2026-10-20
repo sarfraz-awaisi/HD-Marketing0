@@ -1,6 +1,6 @@
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   LogOut,
@@ -60,6 +60,22 @@ export default function Layout() {
     document.addEventListener("keydown", close);
     return () => document.removeEventListener("keydown", close);
   }, []);
+  // A press anywhere outside an open menu (and its own button) closes it.
+  const bellButton = useRef(null),
+    noticePanel = useRef(null),
+    profileButton = useRef(null),
+    profilePanel = useRef(null);
+  useEffect(() => {
+    if (!notices && !profile) return;
+    const outside = (event) => {
+      const inside = (...refs) =>
+        refs.some((ref) => ref.current?.contains(event.target));
+      if (notices && !inside(bellButton, noticePanel)) setNotices(false);
+      if (profile && !inside(profileButton, profilePanel)) setProfile(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [notices, profile]);
   const inbox = useQuery({
     queryKey: ["notifications"],
     queryFn: ({ signal }) => api("/notifications", { signal }),
@@ -228,6 +244,7 @@ export default function Layout() {
           </div>
           <div className="top-actions">
             <button
+              ref={bellButton}
               className="icon-button top-icon fx-bell"
               aria-label={
                 unread
@@ -249,6 +266,7 @@ export default function Layout() {
               )}
             </button>
             <button
+              ref={profileButton}
               type="button"
               className="profile-trigger"
               aria-label={`My profile: ${user.name}`}
@@ -278,7 +296,11 @@ export default function Layout() {
           </div>
         </header>
         {notices && (
-          <div id="workspace-reminders" className="notification-panel">
+          <div
+            ref={noticePanel}
+            id="workspace-reminders"
+            className="notification-panel"
+          >
             <div className="notification-head">
               <h3>Notifications</h3>
               {!legacy && inbox.data?.unread > 0 && (
@@ -401,6 +423,7 @@ export default function Layout() {
         )}
         {profile && (
           <section
+            ref={profilePanel}
             id="workspace-profile"
             className="notification-panel profile-panel"
             aria-labelledby="workspace-profile-title"

@@ -388,6 +388,33 @@ describe("navigation and notification controls", () => {
       expect(toggle).toHaveAttribute("aria-expanded", "false");
     }
   });
+  it("closes the notification and profile menus on a click outside them", async () => {
+    const user = userEvent.setup();
+    const { container } = workspace(<Layout />);
+    const bell = screen.getByRole("button", { name: /^View notifications/ });
+    await user.click(bell);
+    expect(bell).toHaveAttribute("aria-expanded", "true");
+    // Clicks inside the open menu keep it open.
+    await user.click(screen.getByRole("heading", { name: "Notifications" }));
+    expect(bell).toHaveAttribute("aria-expanded", "true");
+    await user.click(container.querySelector("main"));
+    expect(bell).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelector("#workspace-reminders")).toBeNull();
+    // Its own button still toggles it closed.
+    await user.click(bell);
+    await user.click(bell);
+    expect(bell).toHaveAttribute("aria-expanded", "false");
+    const profile = screen.getByRole("button", { name: /^My profile:/ });
+    await user.click(profile);
+    const panel = screen.getByRole("region", { name: "My profile" });
+    await user.click(within(panel).getByText("Employee UID"));
+    expect(profile).toHaveAttribute("aria-expanded", "true");
+    await user.click(document.body);
+    expect(profile).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("region", { name: "My profile" }),
+    ).not.toBeInTheDocument();
+  });
   it("keeps follow-up reminders working before database update 038", async () => {
     const original = mocks.api.getMockImplementation();
     mocks.api.mockImplementation((path, options) =>
