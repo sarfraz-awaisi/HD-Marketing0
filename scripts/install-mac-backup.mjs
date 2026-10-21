@@ -109,19 +109,59 @@ writeFileSync(
 chmodSync(settings, 0o600);
 
 const runner = join(bin, "run-backup.sh");
+const at = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 writeFileSync(
   runner,
   `#!/bin/bash
-# Daily HD Marketing CRM backup: database, then uploaded files.
+# HD Marketing CRM backup: database, then uploaded files. launchd starts this
+# at login, every hour and at ${at}. Each part runs only when it is due: once
+# a day after ${at}, or whenever its last success is over 24 hours old (the
+# Mac was off or offline). Waking from sleep can start this before Wi-Fi is
+# back, so it waits for Supabase and retries before giving up until next hour.
 set -uo pipefail
 umask 077
 # Homebrew's libpq is not linked into the usual PATH, so name the tools here.
 export PATH="${[...new Set([dirname(node), ...toolDirs])].join(":")}"
 dir="$HOME/.hd-crm"
+# One run at a time; a lock older than three hours was left by a crash.
+lock="$dir/run.lock"
+if ! mkdir "$lock" 2>/dev/null; then
+  [ -n "$(find "$lock" -maxdepth 0 -mmin +180 2>/dev/null)" ] || exit 0
+  rm -rf "$lock" && mkdir "$lock" || exit 0
+fi
+trap 'rm -rf "$lock"' EXIT
+now=$(date +%s)
+cutoff=$(date -j -f "%Y-%m-%d %H:%M:%S" "$(date +%Y-%m-%d) ${at}:00" +%s)
+due() {
+  local last=0
+  [ -f "$dir/last-$1-success" ] && last=$(cat "$dir/last-$1-success")
+  { [ "$now" -ge "$cutoff" ] && [ "$last" -lt "$cutoff" ]; } || [ $((now - last)) -gt 86400 ]
+}
+due database || due files || exit 0
 echo "== $(date '+%Y-%m-%d %H:%M:%S') HD Marketing CRM backup"
+url=$(grep -E '^SUPABASE_URL=' "$dir/backup.env" | head -1 | cut -d= -f2-)
+for wait in $(seq 1 20); do
+  curl -s -o /dev/null --max-time 10 "$url/auth/v1/health" && break
+  if [ "$wait" -eq 20 ]; then
+    echo "No connection to Supabase after 10 minutes; trying again next hour."
+    exit 1
+  fi
+  sleep 30
+done
+step() {
+  due "$1" || return 0
+  for attempt in 1 2 3; do
+    if "${node}" --env-file="$dir/backup.env" "$dir/bin/$2"; then
+      date +%s > "$dir/last-$1-success"
+      return 0
+    fi
+    [ "$attempt" -lt 3 ] && sleep 60
+  done
+  return 1
+}
 status=0
-"${node}" --env-file="$dir/backup.env" "$dir/bin/backup.mjs" || status=1
-"${node}" --env-file="$dir/backup.env" "$dir/bin/backup-files.mjs" || status=1
+step database backup.mjs || status=1
+step files backup-files.mjs || status=1
 exit $status
 `,
   { mode: 0o700 },
@@ -143,6 +183,8 @@ writeFileSync(
   <array><string>/bin/bash</string><string>${xml(runner)}</string></array>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>${hour}</integer><key>Minute</key><integer>${minute}</integer></dict>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>3600</integer>
   <key>EnvironmentVariables</key>
   <dict><key>PATH</key><string>${xml([...new Set([dirname(node), ...toolDirs])].join(":"))}</string></dict>
   <key>StandardOutPath</key><string>${xml(join(config, "backup.log"))}</string>
@@ -161,7 +203,7 @@ try {
 }
 execFileSync("launchctl", ["bootstrap", domain, plist]);
 
-console.log(`Daily backup scheduled for ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")} (runs on wake if the Mac was asleep).
+console.log(`Daily backup scheduled after ${at}. The Mac checks at login and every hour, waits for the network, retries, and catches up on missed days.
   Settings:      ${settings}
   Backups:       ${backupDir}
   Log:           ${join(config, "backup.log")}

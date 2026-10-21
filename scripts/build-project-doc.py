@@ -145,7 +145,7 @@ MODULE_PURPOSES = {
     "auditLogger": "Persist request-linked, bounded audit records.",
     "auth": "Verify native identity, confirmation, current active role (with UID when update 036 is installed), signed assurance and reset state before CRM access.",
     "role": "Reject requests lacking the required administrator role.",
-    "rateLimit": "General and sensitive-route IP request limits.",
+    "rateLimit": "Sensitive-route IP limits; general limits per verified user after sign-in, per IP for public and unauthenticated requests.",
     "accounts.routes": "Personal PIN/grant endpoints and protected account operations.",
     "security.routes": "Protected phone-usage status and administrator-only alert listing/review.",
     "phoneAccess": "Load audited authorized page contacts; translate private RPC failures and preserve historical usage settings.",

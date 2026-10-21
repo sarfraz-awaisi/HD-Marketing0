@@ -41,3 +41,16 @@ Browser, in `client/.env`: `VITE_IDLE_TIMEOUT_MINUTES` (default `30`, 5–480). 
 - Locks expire on their own after the lock period; there is no early-unlock button yet. An admin can see a locked account in Login history.
 - The lockout protects the CRM sign-in page. Supabase's public sign-in endpoint is protected separately by its per-IP rate limits and the 12-character password rule. Supabase Pro plans can also enforce session inactivity and time-boxing at the Auth level.
 - Sign-ins are checked by the server, so Supabase's own per-IP sign-in limit applies to the server's address. Raise it under **Authentication → Rate Limits** if a large team signs in at the same moment.
+
+## API request limits for shared office networks (20 October 2026)
+
+Several employees usually share one public office IP, so the general API limit no longer counts everyone on that IP together.
+
+- **Signed-in requests:** 1,000 per 15 minutes **per user**, counted after the server has verified the session with Supabase and found the account active. The user is never taken from a request header, the body or an unverified token claim. An idle admin Overview polls roughly 80–90 times in 15 minutes, so normal use stays far below the limit.
+- **Requests that fail sign-in checks** (no token, invalid or expired token, disabled account, two-factor not completed): 300 per 15 minutes **per IP**, as before. Verified requests are released from this count when they finish.
+- **Unchanged:** the sign-in route's 30 attempts per 15 minutes per network, the account lockout above, the 300-per-15-minutes limit on public sign-in and onboarding routes, the 30-per-minute limit on sensitive actions (accounts, PIN, phone numbers, call logging, webhooks) and the two-factor limit.
+- A blocked request still receives HTTP 429 with the same message and `RateLimit` headers.
+- Counts are kept in the API process's memory. That suits the single PM2 API process; running several API processes would need a shared store.
+
+Code: `server/src/middleware/rateLimit.js` (`createApiLimiters`) and `server/src/app.js`. Tests: `server/tests/api-rate-limits.test.js`.
+

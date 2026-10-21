@@ -6,8 +6,8 @@ import { ZodError } from "zod";
 import { auth } from "./middleware/auth.js";
 import {
   sensitiveLimit,
-  apiLimit,
   metaWebhookLimit,
+  createApiLimiters,
 } from "./middleware/rateLimit.js";
 import { crmRouter } from "./routes/crm.routes.js";
 import { webhooksRouter } from "./routes/webhooks.routes.js";
@@ -21,6 +21,10 @@ import { trustProxy } from "./config/runtime.js";
 import { healthRouter } from "./routes/health.routes.js";
 export function createApp(db, options = {}) {
   const app = express();
+  // options.rateLimits lets tests use small limits; production uses defaults.
+  const { publicLimit, unauthenticatedLimit, userLimit } = createApiLimiters(
+    options.rateLimits,
+  );
   app.disable("x-powered-by");
   app.set("trust proxy", trustProxy(process.env.TRUST_PROXY || "loopback"));
   app.use(helmet());
@@ -48,25 +52,34 @@ export function createApp(db, options = {}) {
     webhooksRouter(db),
   );
   app.use(express.json({ limit: "256kb" }));
-  app.use("/api/auth", apiLimit, authRouter(db, options));
-  app.use("/api/onboarding", apiLimit, onboardingRouter(db));
-  app.use("/api/health", apiLimit, auth(db), healthRouter(db));
+  app.use("/api/auth", publicLimit, authRouter(db, options));
+  app.use("/api/onboarding", publicLimit, onboardingRouter(db));
+  app.use(
+    "/api/health",
+    unauthenticatedLimit,
+    auth(db),
+    userLimit,
+    healthRouter(db),
+  );
   app.use(
     "/api/mfa",
-    apiLimit,
+    unauthenticatedLimit,
     auth(db, { allowMfaSetup: true }),
+    userLimit,
     mfaRouter(db, options),
   );
   app.use(
     "/api/integrations/meta",
-    apiLimit,
+    unauthenticatedLimit,
     auth(db),
+    userLimit,
     metaRouter(db, options),
   );
   app.use(
     "/api",
-    apiLimit,
+    unauthenticatedLimit,
     auth(db),
+    userLimit,
     protectAgentPhones,
     crmRouter(db, options),
   );

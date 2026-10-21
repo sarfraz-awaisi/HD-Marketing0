@@ -24,7 +24,6 @@ import { requiredMetaPermissions } from "../src/routes/meta.routes.js";
 import { digest } from "../src/services/accountsSecurity.js";
 import {
   sensitiveLimit,
-  apiLimit,
   metaWebhookLimit,
 } from "../src/middleware/rateLimit.js";
 const admin = "d1000000-0000-4000-8000-000000000001",
@@ -189,7 +188,8 @@ beforeAll(async () => {
 afterAll(async () => pg?.close());
 afterEach(() => vi.unstubAllEnvs());
 beforeEach(async () => {
-  for (const limiter of [sensitiveLimit, apiLimit, metaWebhookLimit])
+  // General API limiters are created per app, so each test's app starts fresh.
+  for (const limiter of [sensitiveLimit, metaWebhookLimit])
     for (const ip of ["127.0.0.1", "::ffff:127.0.0.1"]) limiter.resetKey(ip);
   await pg.exec("truncate auth.users,public.integration_events cascade;");
   await pg.query(

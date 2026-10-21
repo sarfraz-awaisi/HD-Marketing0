@@ -155,5 +155,85 @@ export function authRouter(db, options = {}) {
       user: { id: session.user.id, email: session.user.email },
     });
   });
+  router.post("/forgot-password", loginLimit, async (req, res) => {
+    const { email } = z
+      .object({
+        email: z
+          .string()
+          .trim()
+          .toLowerCase()
+          .email("Please enter a valid email address.")
+          .max(254),
+      })
+      .strict()
+      .parse(req.body);
+    const user = await findUserByEmail(db, email, options);
+    if (!user) {
+      return res.status(404).json({
+        error: "This email is not registered in our system.",
+      });
+    }
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("id, role, active")
+      .eq("id", user.id)
+      .single();
+    if (profileError || !profile) {
+      return res.status(404).json({
+        error: "No administrator profile found for this account.",
+      });
+    }
+    if (profile.role !== "admin") {
+      return res.status(403).json({
+        error:
+          "Password reset is only available for administrator accounts. Agents must contact an administrator to change their password.",
+      });
+    }
+    if (!profile.active) {
+      return res.status(403).json({
+        error: "This administrator account is disabled. Contact system support.",
+      });
+    }
+    const redirectTo = `${process.env.FRONTEND_URL || "http://localhost:5173"}/login`;
+    const reset =
+      options.resetPasswordForEmail ||
+      ((e, opts) => db.auth.resetPasswordForEmail(e, opts));
+    const result = await reset(user.email, { redirectTo });
+    if (result?.error) {
+      throw fail(
+        result.error.message || "Failed to send reset email. Please try again.",
+        500,
+      );
+    }
+    res.json({
+      message:
+        "If your administrator account exists, check your inbox for a reset link.",
+    });
+  });
   return router;
 }
+
+export async function findUserByEmail(db, email, options = {}) {
+  const normalized = email.trim().toLowerCase();
+  if (typeof options.findUserByEmail === "function") {
+    return options.findUserByEmail(normalized);
+  }
+  if (typeof db.auth?.admin?.listUsers === "function") {
+    let page = 1;
+    while (true) {
+      const { data, error } = await db.auth.admin.listUsers({
+        page,
+        perPage: 100,
+      });
+      if (error || !data?.users) break;
+      const found = data.users.find(
+        (u) => u.email?.trim().toLowerCase() === normalized,
+      );
+      if (found) return found;
+      if (data.users.length < 100) break;
+      page++;
+    }
+  }
+  return null;
+}
+

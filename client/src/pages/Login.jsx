@@ -8,6 +8,7 @@ import GlassForm from "../components/login/GlassForm";
 import { authErrorMessage } from "../lib/authErrors";
 import { signInToPortal } from "../lib/portalLogin";
 import { savedLoginEmails } from "../lib/loginEmails";
+import { api } from "../lib/api";
 import MfaChallenge from "../components/common/MfaChallenge";
 import { restoreMfa, cancelMfa } from "../lib/mfaLogin";
 import { SIGNED_OUT_KEY, idleSettings } from "../lib/useIdleLogout";
@@ -140,6 +141,7 @@ export default function Login() {
     if (pending.current || next === side) return;
     setSide(next);
     setMessage("");
+    if (next === "agent" && mode === "reset") setMode("login");
     clearTimeout(swapTimer.current);
     if (!motionAllowed()) {
       setPortal(next);
@@ -248,6 +250,21 @@ export default function Login() {
                   Back to sign in
                 </button>
               </>
+            ) : mode === "update" && user?.role === "agent" ? (
+              <>
+                <ErrorBox error="Password reset is only available for administrator accounts. Agents cannot reset their own passwords. Please contact your administrator." />
+                <button
+                  className="glass-ghost"
+                  onClick={async () => {
+                    await supabase.auth.signOut();
+                    finishRecovery();
+                    setMode("login");
+                    setMessage("");
+                  }}
+                >
+                  Back to sign in
+                </button>
+              </>
             ) : (
               <>
                 <GlassForm
@@ -317,12 +334,27 @@ export default function Login() {
                         return;
                       }
                       let result;
-                      if (mode === "reset")
-                        result = await supabase.auth.resetPasswordForEmail(
-                          data.email,
-                          { redirectTo: location.origin + "/login" },
+                      if (mode === "reset") {
+                        if (portal === "agent")
+                          throw new Error(
+                            "Agents cannot reset their own passwords. Please contact your administrator.",
+                          );
+                        const res = await api("/auth/forgot-password", {
+                          method: "POST",
+                          body: { email: data.email.trim() },
+                        });
+                        setMessage(
+                          res.message ||
+                            "If your administrator account exists, check your inbox for a reset link.",
                         );
-                      else {
+                        return;
+                      } else {
+                        if (user && user.role !== "admin") {
+                          await supabase.auth.signOut();
+                          throw new Error(
+                            "Agents cannot reset their own passwords. Please contact your administrator.",
+                          );
+                        }
                         if (data.password.length < 12)
                           throw new Error("Use at least 12 characters");
                         result = await supabase.auth.updateUser({
@@ -331,10 +363,6 @@ export default function Login() {
                       }
                       if (result.error)
                         throw new Error(authErrorMessage(result.error));
-                      if (mode === "reset")
-                        setMessage(
-                          "If your account exists, check your inbox for a reset link.",
-                        );
                       if (mode === "update") {
                         finishRecovery();
                         setMode("login");
@@ -346,7 +374,7 @@ export default function Login() {
                     }
                   }}
                 >
-                  {mode === "login" && (
+                  {mode === "login" && portal === "admin" && (
                     <div className="glass-row">
                       <button
                         type="button"
@@ -385,7 +413,9 @@ export default function Login() {
               </p>
             )}
             <small className="glass-footnote">
-              Access is provisioned by your administrator.
+              {portal === "agent"
+                ? "Access is provisioned and passwords are managed by your administrator."
+                : "Access is provisioned by your administrator."}
             </small>
           </div>
         </section>

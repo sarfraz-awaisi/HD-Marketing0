@@ -162,6 +162,16 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (url, options) => {
       if (isLogin(url)) return serverLogin(options);
+      if (String(url).endsWith("/api/auth/forgot-password")) {
+        const { email } = JSON.parse(options.body);
+        await mocks.resetPasswordForEmail(email, {
+          redirectTo: location.origin + "/login",
+        });
+        return response({
+          message:
+            "If your administrator account exists, check your inbox for a reset link.",
+        });
+      }
       const portal = new URL(url, "http://localhost").searchParams.get(
         "portal",
       );
@@ -302,7 +312,10 @@ describe("separate login portals", () => {
     expect(
       screen.getByRole("heading", { name: "Agent Login" }),
     ).toBeInTheDocument();
-    for (const label of ["Agent", "Admin", "Forgot password?", "Show password"])
+    expect(
+      screen.queryByRole("button", { name: "Forgot password?" }),
+    ).not.toBeInTheDocument();
+    for (const label of ["Agent", "Admin", "Show password"])
       expect(
         screen.getByRole("button", { name: label, exact: true }),
       ).toBeDisabled();

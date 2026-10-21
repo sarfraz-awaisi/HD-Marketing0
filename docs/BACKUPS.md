@@ -7,7 +7,9 @@ Added 17 October 2026. Every evening this Mac saves two **encrypted** backups of
 | Database       | All CRM records: accounts, leads, calls, deals, audit history and more | `hd-crm-<time>.dump.age`      |
 | Uploaded files | Property photos, documentation and KYC files, call recordings          | `hd-crm-files-<time>.tar.age` |
 
-Backups are kept for **30 days** in `~/HD-CRM-Backups` and run daily at **21:30**. If the Mac is asleep or off at that time, the backup runs when it next wakes. Each database backup is recorded in the admin **System status** card. Both files are encrypted with your own key, so a copied backup file is unreadable without it.
+Backups are kept for **30 days** in `~/HD-CRM-Backups` and run once a day after **21:30**. Each database backup is recorded in the admin **System status** card. Both files are encrypted with your own key, so a copied backup file is unreadable without it.
+
+Since 20 October 2026 the Mac checks at login, every hour and at 21:30, and each part runs only when it is due: once a day after 21:30, or whenever its last success is more than 24 hours old (for example after the Mac was off all evening). After waking from sleep it waits up to 10 minutes for the internet connection, and it retries a failed part three times before trying again the next hour. Earlier runs failed when the Mac woke at backup time before Wi-Fi had reconnected. The Mac must be switched on and online for a backup to run; once the CRM is deployed on its VPS, the server's nightly cron backup takes over (see [DEPLOYMENT.md](DEPLOYMENT.md)).
 
 ## One-time setup
 

@@ -181,6 +181,10 @@ describe("glass sign-in page", () => {
   });
   it("hides the switch controls while resetting a password", () => {
     openLogin();
+    expect(
+      screen.queryByRole("button", { name: "Forgot password?" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Admin", exact: true }));
     fireEvent.click(screen.getByRole("button", { name: "Forgot password?" }));
     expect(heading()).toHaveTextContent("Reset password");
     expect(
