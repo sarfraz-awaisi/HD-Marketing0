@@ -3,36 +3,80 @@ import { useState } from "react";
 import { api } from "../../lib/api";
 import { usePropertyPhotos } from "../../lib/usePropertyPhotos";
 import { Button, ErrorBox } from "../common/UI";
-export default function PhotoGallery({ propertyId, admin = false }) {
+// canManage: the viewer may change this property's pictures (administrators
+// for company inventory, the owning agent for their own). The server checks.
+export default function PhotoGallery({ propertyId, canManage = false }) {
   const qc = useQueryClient(),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const q = usePropertyPhotos(propertyId);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["photos", propertyId] });
+    qc.invalidateQueries({ queryKey: ["properties"] });
+  };
+  const run = async (action) => {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+      refresh();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
       <ErrorBox error={q.error || error} />
       <div className="photo-gallery">
-        {q.data?.map((p) => (
+        {q.data?.map((p, index) => (
           <figure key={p.id}>
             <img src={p.url} alt="Property photograph" />
-            {admin && (
-              <Button
-                variant="secondary"
-                onClick={async () => {
-                  if (!window.confirm("Delete this photo permanently?")) return;
-                  try {
-                    await api("/properties/" + propertyId + "/photos/" + p.id, {
-                      method: "DELETE",
-                    });
-                    qc.invalidateQueries({ queryKey: ["photos", propertyId] });
-                    qc.invalidateQueries({ queryKey: ["properties"] });
-                  } catch (e) {
-                    setError(e.message);
-                  }
-                }}
-              >
-                Delete photo
-              </Button>
+            {index === 0 && q.data.length > 1 && (
+              <figcaption>Cover picture</figcaption>
+            )}
+            {canManage && (
+              <div className="photo-actions">
+                {index > 0 && (
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      run(() =>
+                        api(`/properties/${propertyId}/photos/order`, {
+                          method: "PUT",
+                          body: {
+                            photo_ids: [
+                              p.id,
+                              ...q.data
+                                .filter((x) => x.id !== p.id)
+                                .map((x) => x.id),
+                            ],
+                          },
+                        }),
+                      )
+                    }
+                  >
+                    Make cover
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!window.confirm("Delete this photo permanently?"))
+                      return;
+                    run(() =>
+                      api("/properties/" + propertyId + "/photos/" + p.id, {
+                        method: "DELETE",
+                      }),
+                    );
+                  }}
+                >
+                  Delete photo
+                </Button>
+              </div>
             )}
           </figure>
         ))}
@@ -42,7 +86,7 @@ export default function PhotoGallery({ propertyId, admin = false }) {
           ⌂<small>No photos added</small>
         </div>
       )}
-      {admin && (
+      {canManage && (
         <label className="button secondary">
           {busy ? "Uploading…" : "Upload photo (max 5 MB)"}
           <input
@@ -59,22 +103,15 @@ export default function PhotoGallery({ propertyId, admin = false }) {
                 setError("Maximum upload size is 5 MB");
                 return;
               }
-              setBusy(true);
-              try {
-                const body = new FormData();
-                body.append("file", file);
-                await api("/properties/" + propertyId + "/photos", {
+              const body = new FormData();
+              body.append("file", file);
+              await run(() =>
+                api("/properties/" + propertyId + "/photos", {
                   method: "POST",
                   body,
-                });
-                qc.invalidateQueries({ queryKey: ["photos", propertyId] });
-                qc.invalidateQueries({ queryKey: ["properties"] });
-              } catch (e) {
-                setError(e.message);
-              } finally {
-                setBusy(false);
-                e.target.value = "";
-              }
+                }),
+              );
+              e.target.value = "";
             }}
           />
         </label>

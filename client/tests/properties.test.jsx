@@ -18,7 +18,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import Properties from "../src/pages/admin/Properties";
+import Inventory from "../src/pages/shared/Inventory";
 import Layout from "../src/components/layout/Layout";
 import { ToastProvider } from "../src/components/common/UI";
 
@@ -36,6 +36,8 @@ const property = {
   id: "50000000-0000-4000-8000-000000000001",
   title: "Test residence",
   location: "Islamabad",
+  city: "Islamabad",
+  purpose: "sale",
   price: 25000000,
   type: "House",
   area: 10,
@@ -43,7 +45,7 @@ const property = {
   availability: "available",
   description: "Test description",
 };
-let records;
+let records, ownProperty;
 const originalDialog = Object.getOwnPropertyDescriptor(
   HTMLDialogElement.prototype,
   "showModal",
@@ -68,6 +70,7 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   records = [property];
+  ownProperty = false;
   mocks.auth.user = {
     id: "50000000-0000-4000-8000-000000000002",
     name: "Property admin",
@@ -81,17 +84,37 @@ beforeEach(() => {
     if (path.endsWith("/photos")) return [];
     if (path === "/reminders")
       return [{ id: "reminder-1", due_at: "2026-10-09T10:00:00Z" }];
+    if (path === "/inventory/summary")
+      return {
+        role: mocks.auth.user.role,
+        mine: { total: 0 },
+        company: { total: records.length },
+        agents: { total: 0 },
+        all: { total: records.length, sold: 0, rented: 0 },
+      };
+    // The full record (GET /properties/:id) says whether the viewer may edit.
+    const detail = /^\/properties\/([0-9a-f-]{36})$/.exec(path);
+    if (detail) {
+      const row = records.find((r) => r.id === detail[1]);
+      const admin = mocks.auth.user.role === "admin";
+      return {
+        ...row,
+        ownership: ownProperty ? "agent" : "company",
+        created_at: "2026-10-01T10:00:00Z",
+        can_edit: ownProperty ? !admin : admin,
+      };
+    }
     return { data: records, count: records.length };
   });
 });
-function workspace(element = <Properties />) {
+function workspace(element = <Inventory />, entry = "/inventory") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const view = render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <MemoryRouter>{element}</MemoryRouter>
+        <MemoryRouter initialEntries={[entry]}>{element}</MemoryRouter>
       </ToastProvider>
     </QueryClientProvider>,
   );
@@ -102,6 +125,8 @@ async function openProperty(user) {
     await screen.findByRole("button", { name: /View property/ }),
   );
 }
+// Management controls appear once the full record has loaded.
+const control = (name) => screen.findByRole("button", { name });
 const deletes = () =>
   mocks.api.mock.calls.filter(([, options]) => options?.method === "DELETE");
 
@@ -110,9 +135,7 @@ describe("property administration", () => {
     const user = userEvent.setup();
     workspace();
     await openProperty(user);
-    expect(
-      screen.getByRole("button", { name: "Edit property" }),
-    ).toBeInTheDocument();
+    expect(await control("Edit property")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Delete property" }));
     expect(
       screen.getByRole("dialog", { name: "Delete property?" }),
@@ -129,7 +152,7 @@ describe("property administration", () => {
     const { queryClient } = workspace();
     queryClient.setQueryData(["property-options"], { data: [property] });
     await openProperty(user);
-    await user.click(screen.getByRole("button", { name: "Delete property" }));
+    await user.click(await control("Delete property"));
     await user.click(
       screen.getByRole("button", { name: "Delete permanently" }),
     );
@@ -155,7 +178,7 @@ describe("property administration", () => {
     const user = userEvent.setup();
     workspace();
     await openProperty(user);
-    await user.click(screen.getByRole("button", { name: "Delete property" }));
+    await user.click(await control("Delete property"));
     await user.click(
       screen.getByRole("button", { name: "Delete permanently" }),
     );
@@ -176,7 +199,7 @@ describe("property administration", () => {
     const user = userEvent.setup();
     workspace();
     await openProperty(user);
-    await user.click(screen.getByRole("button", { name: "Delete property" }));
+    await user.click(await control("Delete property"));
     await user.click(
       screen.getByRole("button", { name: "Delete permanently" }),
     );
@@ -194,11 +217,15 @@ describe("property administration", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
   });
-  it("lets agents view properties without edit/delete/archive controls", async () => {
+  it("lets agents view company properties without edit/delete/archive controls", async () => {
     mocks.auth.user.role = "agent";
     const user = userEvent.setup();
-    workspace();
+    workspace(<Inventory />, "/inventory?tab=company");
     await openProperty(user);
+    // Wait for the full record before checking that nothing can be changed.
+    expect(
+      await within(screen.getByRole("dialog")).findByText("Company inventory"),
+    ).toBeInTheDocument();
     for (const name of [
       "Edit property",
       "Delete property",
@@ -206,13 +233,37 @@ describe("property administration", () => {
       "+ Add property",
     ])
       expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Change status")).not.toBeInTheDocument();
     expect(deletes()).toHaveLength(0);
+    expect(
+      mocks.api.mock.calls.some(([path]) =>
+        path.startsWith("/properties?scope=company&"),
+      ),
+    ).toBe(true);
+  });
+  it("lets agents add and manage the properties in their own inventory", async () => {
+    mocks.auth.user.role = "agent";
+    ownProperty = true;
+    const user = userEvent.setup();
+    workspace();
+    expect(
+      screen.getByRole("tab", { name: "My properties", selected: true }),
+    ).toBeInTheDocument();
+    expect(await control("+ Add property")).toBeInTheDocument();
+    await openProperty(user);
+    for (const name of ["Edit property", "Delete property", "Archive property"])
+      expect(await control(name)).toBeInTheDocument();
+    expect(
+      mocks.api.mock.calls.some(([path]) =>
+        path.startsWith("/properties?scope=mine&"),
+      ),
+    ).toBe(true);
   });
   it("keeps the Edit action available and opens its existing form", async () => {
     const user = userEvent.setup();
     workspace();
     await openProperty(user);
-    await user.click(screen.getByRole("button", { name: "Edit property" }));
+    await user.click(await control("Edit property"));
     expect(screen.getByLabelText("Property title")).toHaveValue(property.title);
     expect(
       screen.getByRole("button", { name: "Save record" }),
@@ -272,8 +323,8 @@ describe("property card pictures and details", () => {
       for (const text of [
         property.location,
         property.type,
-        "10 marla",
-        property.availability,
+        "10 Marla",
+        "Available",
         property.description,
       ])
         expect(within(details).getByText(text)).toBeInTheDocument();

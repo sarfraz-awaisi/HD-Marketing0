@@ -116,6 +116,8 @@ Admins and Agents check in and out under **My attendance**, using the database c
 
 Absences are worked out from the schedule, never stored, and attendance never changes lead ownership. Apply **040_attendance.sql after 039**. [Full guide](docs/ATTENDANCE_MANAGEMENT.md).
 
+**Inventory** (formerly Properties) gives every agent a private property inventory and keeps the administrators' company inventory, which agents can browse but not change. Administrators can open any agent's inventory read-only from **Inventory → Agent inventories**. Apply **041_property_inventory.sql after 040** before deploying this code. [Full guide](docs/PROPERTY_INVENTORY.md).
+
 This Mac can keep **daily encrypted backups** of the database and all uploaded files (30 days, in `~/HD-CRM-Backups`). Set it up once with `brew install libpq age` and `node scripts/install-mac-backup.mjs`, then add the database address. [Setup, checking and restore](docs/BACKUPS.md).
 
 ## Administrator sign-in and optional agent MFA
@@ -133,7 +135,7 @@ Agents remain optional by default (`REQUIRE_AGENT_MFA=false`); unenrolled agents
 | Documentation & policies                | Create/edit/delete all entries and files                          | Shared guidance; own clients' KYC  |
 | Full phone                              | Automatic; all leads, audited                                     | Automatic; assigned leads, audited |
 | Calls, notes, follow-ups, visits, deals | All records                                                       | Current assigned lead only         |
-| Properties                              | Create/edit/archive/delete; private photos                        | Read and authorized photo links    |
+| Inventory (properties)                  | Manage company inventory; read every agent's inventory            | Manage own; read company inventory |
 | Targets                                 | Set per agent/month                                               | Personal targets/progress          |
 | Team, reports CSV, audit, recordings    | Allowed                                                           | Denied                             |
 | Accounts and admin security settings    | Active admin; account operations also require personal PIN unlock | Denied                             |

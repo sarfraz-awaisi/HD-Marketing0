@@ -44,7 +44,10 @@ export function invalidateWorkspace(client, family = "leads") {
     family === "properties"
       ? new Set([
           "properties",
+          "property",
           "property-options",
+          "inventory-summary",
+          "inventory-agents",
           "photos",
           "leads",
           "lead",

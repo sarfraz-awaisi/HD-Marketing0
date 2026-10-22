@@ -27,7 +27,6 @@ import {
 import { normalizePhone, csvCell } from "../utils/phoneMask.js";
 import { callingProvider, callCapabilities } from "../services/cloudCalling.js";
 import { assign } from "../services/leadAssignment.js";
-import { cleanupPropertyPhotos } from "../jobs/cleanupPropertyPhotos.js";
 import { importLeadFile, fileRpc } from "../services/importFiles.js";
 import { documentsRouter } from "./documents.routes.js";
 import { accountsRouter } from "./accounts.routes.js";
@@ -39,7 +38,7 @@ import {
 } from "./attendance.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
-import { propertyCovers } from "../services/propertyCovers.js";
+import { inventoryRouter } from "./inventory.routes.js";
 export function unwrap(r) {
   if (r.error)
     throw Object.assign(new Error("Database operation failed"), {
@@ -72,6 +71,7 @@ export function crmRouter(db, options = {}) {
   router.use(salesRouter(db));
   router.use("/attendance", attendanceRouter(db));
   router.use("/admin/attendance", adminOnly, attendanceAdminRouter(db));
+  router.use(inventoryRouter(db));
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 1 },
@@ -550,122 +550,6 @@ export function crmRouter(db, options = {}) {
         );
     },
   );
-  router.delete("/properties/:id", adminOnly, async (req, res) => {
-    const id = uuid.parse(req.params.id);
-    const result = await db.rpc("delete_property", {
-      p_property: id,
-      p_actor: req.user.id,
-      p_request: req.id,
-    });
-    if (result.error?.code === "23503")
-      throw Object.assign(
-        new Error(
-          "This property is linked to leads, visits or deals. Archive it to retain their history.",
-        ),
-        { status: 409 },
-      );
-    if (result.error?.code === "PGRST202")
-      throw Object.assign(
-        new Error("Apply database migration 013 to enable property deletion."),
-        { status: 503 },
-      );
-    unwrap(result);
-    try {
-      await cleanupPropertyPhotos(db, id);
-    } catch {
-      // The committed queue is retried by the jobs runner. The property itself
-      // has already been deleted successfully and must not appear as a failure.
-      console.error("Property photo cleanup pending; jobs will retry");
-    }
-    res.status(204).end();
-  });
-  router.post(
-    "/properties/:id/photos",
-    adminOnly,
-    upload.single("file"),
-    async (req, res) => {
-      const id = uuid.parse(req.params.id);
-      unwrap(await db.from("properties").select("id").eq("id", id).single());
-      const f = req.file;
-      const b = f?.buffer;
-      const png = b
-        ?.subarray(0, 8)
-        .equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-      const jpg = b?.[0] === 255 && b?.[1] === 216 && b?.[2] === 255;
-      const webp =
-        b?.subarray(0, 4).toString() === "RIFF" &&
-        b?.subarray(8, 12).toString() === "WEBP";
-      const type = png
-        ? "image/png"
-        : jpg
-          ? "image/jpeg"
-          : webp
-            ? "image/webp"
-            : null;
-      if (!f || !type || type !== f.mimetype)
-        throw Object.assign(
-          new Error("Upload a valid JPEG, PNG or WebP under 5 MB"),
-          { status: 400 },
-        );
-      const path = `${id}/${crypto.randomUUID()}`;
-      unwrap(
-        await db.storage
-          .from("property-photos")
-          .upload(path, b, { contentType: type }),
-      );
-      const inserted = await db
-        .from("property_photos")
-        .insert({ property_id: id, storage_path: path })
-        .select("id")
-        .single();
-      if (inserted.error) {
-        await db.storage.from("property-photos").remove([path]);
-        unwrap(inserted);
-      }
-      await audit(db, req, "upload_photo", "properties", id);
-      res.status(201).json(inserted.data);
-    },
-  );
-  router.get("/properties/:id/photos", async (req, res) => {
-    const photos = unwrap(
-      await db
-        .from("property_photos")
-        .select("id,storage_path")
-        .eq("property_id", uuid.parse(req.params.id)),
-    );
-    res.json(
-      await Promise.all(
-        photos.map(async (p) => ({
-          id: p.id,
-          url: unwrap(
-            await db.storage
-              .from("property-photos")
-              .createSignedUrl(p.storage_path, 60),
-          ).signedUrl,
-        })),
-      ),
-    );
-  });
-  router.delete(
-    "/properties/:id/photos/:photo",
-    adminOnly,
-    async (req, res) => {
-      const photo = unwrap(
-        await db
-          .from("property_photos")
-          .select("*")
-          .eq("property_id", uuid.parse(req.params.id))
-          .eq("id", uuid.parse(req.params.photo))
-          .single(),
-      );
-      unwrap(
-        await db.storage.from("property-photos").remove([photo.storage_path]),
-      );
-      unwrap(await db.from("property_photos").delete().eq("id", photo.id));
-      await audit(db, req, "delete_photo", "properties", req.params.id);
-      res.status(204).end();
-    },
-  );
   const reportQuery = z
     .object({
       from: z.iso.datetime({ offset: true }),
@@ -749,18 +633,13 @@ export function crmRouter(db, options = {}) {
   for (const table of [
     "leads",
     "calls",
-    "properties",
     "targets",
     "followups",
     "visits",
     "deals",
   ]) {
     router.get("/" + table, async (req, res) => {
-      const q = (
-        table === "properties"
-          ? listQuery.extend({ covers: z.enum(["true", "false"]).optional() })
-          : listQuery
-      ).parse(req.query);
+      const q = listQuery.parse(req.query);
       let query = db
         .from(table)
         .select(
@@ -769,7 +648,7 @@ export function crmRouter(db, options = {}) {
             : "*",
           { count: "exact" },
         );
-      if (req.user.role !== "admin" && table !== "properties") {
+      if (req.user.role !== "admin") {
         if (table === "leads") query = query.eq("assigned_agent", req.user.id);
         else if (table === "targets") query = query.eq("agent_id", req.user.id);
         else
@@ -784,7 +663,7 @@ export function crmRouter(db, options = {}) {
       if (["calls", "followups", "visits", "deals"].includes(table))
         query = query.is("leads.deleted_at", null);
       if (q.search) {
-        if (!["leads", "properties"].includes(table))
+        if (table !== "leads")
           throw Object.assign(new Error("Search not supported"), {
             status: 400,
           });
@@ -794,10 +673,7 @@ export function crmRouter(db, options = {}) {
           /^\d+$/.test(number) &&
           BigInt(number) <= 9223372036854775807n
             ? query.or(`name.ilike.%${q.search}%,lead_no.eq.${BigInt(number)}`)
-            : query.ilike(
-                table === "properties" ? "title" : "name",
-                "%" + q.search + "%",
-              );
+            : query.ilike("name", "%" + q.search + "%");
       }
       if (q.status) {
         if (!["leads", "calls", "followups", "visits"].includes(table))
@@ -837,7 +713,7 @@ export function crmRouter(db, options = {}) {
           );
         query = query.eq("lost_reason", q.lost_reason);
       }
-      if (q.agent && req.user.role === "admin" && table !== "properties")
+      if (q.agent && req.user.role === "admin")
         query = query.eq(
           table === "leads" ? "assigned_agent" : "agent_id",
           q.agent,
@@ -878,9 +754,7 @@ export function crmRouter(db, options = {}) {
         q.sort === "name"
           ? table === "leads"
             ? "name"
-            : table === "properties"
-              ? "title"
-              : "created_at"
+            : "created_at"
           : q.sort === "updated_at" && ["calls", "targets"].includes(table)
             ? "created_at"
             : q.sort === "call_due_at" && table !== "leads"
@@ -894,9 +768,7 @@ export function crmRouter(db, options = {}) {
         data:
           table === "leads"
             ? await leadContacts(db, req, unwrap(result))
-            : table === "properties" && q.covers === "true"
-              ? await propertyCovers(db, req.user.id, unwrap(result))
-              : unwrap(result),
+            : unwrap(result),
         count: result.count,
         page: q.page,
         limit: q.limit,
@@ -910,10 +782,7 @@ export function crmRouter(db, options = {}) {
       });
     if (!["leads", "calls"].includes(table))
       router.post("/" + table, async (req, res) => {
-        if (
-          ["properties", "targets"].includes(table) &&
-          req.user.role !== "admin"
-        )
+        if (table === "targets" && req.user.role !== "admin")
           return res
             .status(403)
             .json({ error: "Administrator access required" });
@@ -928,10 +797,7 @@ export function crmRouter(db, options = {}) {
       });
     router.patch("/" + table + "/:id", sensitiveLimit, async (req, res) => {
       const id = uuid.parse(req.params.id);
-      if (
-        ["properties", "targets"].includes(table) &&
-        req.user.role !== "admin"
-      )
+      if (table === "targets" && req.user.role !== "admin")
         return res.status(403).json({ error: "Administrator access required" });
       const parsed = (
         table === "leads"
