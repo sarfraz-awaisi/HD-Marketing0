@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate real templates with temporary certificates; never start/reload Nginx.
 Runs as an unprivileged user: only file locations move into the temporary
-folder, and every directive in the templates is still checked."""
+folder and the listen ports above 1024; every directive is still checked."""
 import importlib.util
 import re
 import shutil
@@ -32,6 +32,20 @@ with tempfile.TemporaryDirectory() as temporary:
     site = site.replace('/etc/nginx/hd-crm/production.conf', str(folder / 'active.conf'))
     site = site.replace('/var/log/nginx/crm-production-access.log', str(folder / 'access.log'))
     site = site.replace('/var/log/nginx/crm-production-error.log', str(folder / 'error.log'))
+    # nginx -t binds every listener, and ports below 1024 need root. Only the
+    # port number moves (80 -> 8080, 443 -> 8443); every listen parameter stays.
+    site, moved = re.subn(r'^(\s*listen\s+(?:\S*:)?)(80|443)(?=[\s;])',
+                          lambda m: m.group(1) + {'80': '8080', '443': '8443'}[m.group(2)], site, flags=re.M)
+
+    def port(listen):
+        found = re.match(r'\s*listen\s+(?:\S*:)?(\d+)', listen)
+        return int(found[1]) if found else None  # unix sockets have no port
+
+    privileged = [listen.strip() for listen in re.findall(r'^\s*listen\s+[^;]*;', site, re.M)
+                  if port(listen) is not None and port(listen) < 1024]
+    if not moved or privileged:
+        raise SystemExit('Cannot test these listen directives unprivileged; update check-nginx.py: '
+                         + ', '.join(privileged or ['no listen 80/443 found']))
     # Test-only defaults, used where the templates set none (Ubuntu's own
     # nginx.conf provides them on the server): the port-80 server's access log
     # and the temporary folders.
