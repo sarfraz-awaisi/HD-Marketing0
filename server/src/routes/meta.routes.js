@@ -3,7 +3,11 @@ import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { digest } from "../services/accountsSecurity.js";
 import { adminOnly } from "../middleware/role.js";
-import { sensitiveLimit } from "../middleware/rateLimit.js";
+import {
+  callbackLimit,
+  reportLimit,
+  sensitiveLimit,
+} from "../middleware/rateLimit.js";
 import { metaConfig, metaReady } from "../services/meta/config.js";
 import { encryptToken, decryptToken } from "../services/meta/crypto.js";
 import { graphClient, leadFields } from "../services/meta/graph.js";
@@ -31,7 +35,8 @@ function cookieValue(req) {
 }
 export function metaCallbackRouter(db, options = {}) {
   const router = Router();
-  router.get("/", sensitiveLimit, async (req, res) => {
+  // Meta redirects the admin's browser here before any CRM sign-in check.
+  router.get("/", callbackLimit, async (req, res) => {
     let config;
     try {
       config = metaConfig();
@@ -497,7 +502,7 @@ export function metaRouter(db, options = {}) {
     });
     res.status(204).end();
   });
-  router.get("/report", async (req, res) => {
+  router.get("/report", reportLimit, async (req, res) => {
     const data = z
       .object({
         from: z.iso.datetime({ offset: true }),

@@ -22,3 +22,12 @@ supabase/.branches/
 backups/
 *.dump
 *.sql.gz
+# Encrypted backups (age) and decrypted file archives from deploy/backup*.mjs
+*.age
+*.tar
+*.tar.gz
+HD-CRM-Backups/
+
+# Deployment validation temporary outputs
+__pycache__/
+deployment-target.json

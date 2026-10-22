@@ -1,5 +1,7 @@
 # HD Marketing CRM deployment (P6)
 
+**Legacy Caddy/single-process guide.** For new Hostinger deployments, follow [the Nginx/PM2 blue-green guide](../HD_MARKETING_PRODUCTION_DEPLOYMENT.md). Do not combine these proxy/service setup instructions.
+
 Prepared 14 October 2026 for one Ubuntu 24.04 VPS, Caddy, one PM2 API process, one PM2 jobs process and hosted Supabase. These files are implemented locally. The owner has not prepared a VPS/domain/custom SMTP, so no live deployment, DNS, hosted migration or backup was performed. Administrator login stays email/password under the user's latest request.
 
 ## What is needed

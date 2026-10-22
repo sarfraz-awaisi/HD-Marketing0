@@ -1,15 +1,22 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
+import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { useAuth } from "../../context/AuthContext";
 import { ErrorBox } from "../common/UI";
 export default function KycClientPicker({ value, onChange, selectedName }) {
   const { user } = useAuth(),
     [search, setSearch] = useState("");
+  // One request once typing pauses, not one per keystroke.
+  const term = useDebouncedValue(search);
   const q = useQuery({
-    queryKey: ["kyc-clients", user.id, search],
-    queryFn: () =>
-      api("/documents/clients?" + new URLSearchParams({ search, limit: "20" })),
+    queryKey: ["kyc-clients", user.id, term],
+    queryFn: ({ signal }) =>
+      api(
+        "/documents/clients?" +
+          new URLSearchParams({ search: term, limit: "20" }),
+        { signal },
+      ),
   });
   const selected = useQuery({
     queryKey: ["kyc-client", user.id, value],

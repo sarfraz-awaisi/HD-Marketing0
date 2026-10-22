@@ -3,9 +3,12 @@ import { mfaResetRequest } from "../utils/validators.js";
 import { mfaRpc } from "../services/mfa.js";
 import { z } from "zod";
 import { randomBytes, randomUUID } from "node:crypto";
-import { rateLimit } from "express-rate-limit";
 import { adminOnly } from "../middleware/role.js";
-import { sensitiveLimit } from "../middleware/rateLimit.js";
+import {
+  accountCreationLimit,
+  accountSecurityLimit as securityLimit,
+  sensitiveLimit,
+} from "../middleware/rateLimit.js";
 import {
   digest,
   pinSecret,
@@ -51,14 +54,6 @@ const accountChange = z
   })
   .strict()
   .refine((v) => Object.keys(v).length > 0);
-const securityLimit = rateLimit({
-  windowMs: 15 * 60000,
-  limit: 10,
-  keyGenerator: (req) => req.user.id,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-});
-export { securityLimit as accountsSecurityLimit };
 const fail = (message, status, code) =>
   Object.assign(new Error(message), { status, code });
 function checked({ data, error }) {
@@ -798,11 +793,17 @@ export function accountsRouter(db, options = {}) {
       }
     },
   );
-  router.post("/accounts", sensitiveLimit, gate, async (req, res) => {
-    res
-      .status(201)
-      .json(await provisioning.create(grant(req), req.body, req.id));
-  });
+  router.post(
+    "/accounts",
+    sensitiveLimit,
+    accountCreationLimit,
+    gate,
+    async (req, res) => {
+      res
+        .status(201)
+        .json(await provisioning.create(grant(req), req.body, req.id));
+    },
+  );
   router.post(
     "/accounts/:id/invitation",
     sensitiveLimit,

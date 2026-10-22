@@ -33,9 +33,11 @@ export default function LeadDetail() {
     [call, setCall] = useState(null),
     [busy, setBusy] = useState(false);
   const manualPending = useRef(false);
+  // Server configuration: fetched once, not again for every lead opened.
   const capabilities = useQuery({
     queryKey: ["call-capabilities"],
     queryFn: ({ signal }) => api("/call-capabilities", { signal }),
+    staleTime: Infinity,
   });
   const q = useQuery({
     queryKey: ["lead", user.id, user.role, id],

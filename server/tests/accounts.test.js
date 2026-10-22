@@ -14,7 +14,6 @@ import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { trustedMfaFixture } from "./trusted-mfa-fixture.js";
-import { sensitiveLimit } from "../src/middleware/rateLimit.js";
 import {
   digest,
   hashPin,
@@ -311,8 +310,6 @@ beforeEach(async () => {
       role,
     ]);
   }
-  sensitiveLimit.resetKey("127.0.0.1");
-  sensitiveLimit.resetKey("::ffff:127.0.0.1");
   db = database();
   app = createApp(trustedMfaFixture(db), {
     createEmailOtpClient: () => ({

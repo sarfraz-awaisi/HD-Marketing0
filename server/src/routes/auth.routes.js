@@ -1,21 +1,10 @@
 import { Router } from "express";
 import { createClient } from "@supabase/supabase-js";
-import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
+import { loginLimit, passwordResetLimit } from "../middleware/rateLimit.js";
 // One message for a wrong password and a locked account (no account probing).
 export const SIGN_IN_REFUSED =
   "Email or password is incorrect, or sign-in is temporarily locked after repeated attempts. Check your details or try again in 15 minutes.";
-const loginLimit = rateLimit({
-  windowMs: 15 * 60000,
-  limit: 30,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-  message: {
-    error:
-      "Too many sign-in attempts from this network. Wait 15 minutes and try again.",
-  },
-});
-export { loginLimit };
 const credentials = z
   .object({
     email: z.string().trim().toLowerCase().min(3).max(254),
@@ -155,7 +144,7 @@ export function authRouter(db, options = {}) {
       user: { id: session.user.id, email: session.user.email },
     });
   });
-  router.post("/forgot-password", loginLimit, async (req, res) => {
+  router.post("/forgot-password", passwordResetLimit, async (req, res) => {
     const { email } = z
       .object({
         email: z
@@ -191,7 +180,8 @@ export function authRouter(db, options = {}) {
     }
     if (!profile.active) {
       return res.status(403).json({
-        error: "This administrator account is disabled. Contact system support.",
+        error:
+          "This administrator account is disabled. Contact system support.",
       });
     }
     const redirectTo = `${process.env.FRONTEND_URL || "http://localhost:5173"}/login`;
@@ -236,4 +226,3 @@ export async function findUserByEmail(db, email, options = {}) {
   }
   return null;
 }
-

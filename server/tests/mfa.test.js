@@ -15,7 +15,6 @@ import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { digest } from "../src/services/accountsSecurity.js";
-import { mfaVerifyLimit, sensitiveLimit } from "../src/middleware/rateLimit.js";
 import { createMfaClient } from "../src/services/mfa.js";
 const admin = "e1000000-0000-4000-8000-000000000001",
   other = "e1000000-0000-4000-8000-000000000002",
@@ -116,9 +115,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 beforeEach(async () => {
-  // General API limiters are created per app, so each test's app starts fresh.
-  for (const limiter of [mfaVerifyLimit, sensitiveLimit])
-    for (const ip of ["127.0.0.1", "::ffff:127.0.0.1"]) limiter.resetKey(ip);
   await pg.exec("truncate auth.users cascade");
   await pg.query(
     "insert into auth.users(id,email,email_confirmed_at) values($1,'admin@example.test',now()),($2,'second@example.test',now()),($3,'agent@example.test',now())",

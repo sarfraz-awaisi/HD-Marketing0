@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { api } from "../src/lib/api";
+import { api, retryQuery } from "../src/lib/api";
 import { authErrorMessage } from "../src/lib/authErrors";
 
 vi.mock("../src/lib/supabase", () => ({
@@ -111,4 +111,35 @@ it("explains unconfirmed email and expired confirmation links without accepting 
       message: "Provider internal error",
     }),
   ).toContain("new confirmation link");
+});
+describe("refused and failed requests", () => {
+  it("explains Nginx's plain-text 429 as too many requests", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      }),
+    );
+    await expect(api("/leads")).rejects.toMatchObject({
+      status: 429,
+      message: "Too many requests. Please wait a moment and try again.",
+    });
+  });
+  it("retries a query once after a network or server error, never after a refusal", () => {
+    const failure = (status) => Object.assign(new Error("Failed"), { status });
+    for (const status of [400, 401, 403, 404, 429])
+      expect(retryQuery(0, failure(status))).toBe(false);
+    for (const error of [
+      failure(500),
+      failure(503),
+      Object.assign(new Error("offline"), { code: "API_UNREACHABLE" }),
+    ]) {
+      expect(retryQuery(0, error)).toBe(true);
+      expect(retryQuery(1, error)).toBe(false);
+    }
+  });
 });

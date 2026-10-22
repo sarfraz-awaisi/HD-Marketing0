@@ -213,6 +213,60 @@ describe("background workspace checks", () => {
     },
   );
 
+  it("skips the minute check in a hidden tab and checks as soon as it is shown", async () => {
+    let visibility = "hidden";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    });
+    try {
+      await openWorkspace();
+      expect(mocks.api).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(180000);
+      });
+      expect(mocks.api).toHaveBeenCalledTimes(1);
+      // A disabled account is found the moment the tab is shown again.
+      mocks.api.mockRejectedValueOnce(
+        new Error("Account disabled or not provisioned"),
+      );
+      visibility = "visible";
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(mocks.api).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Login screen")).toBeInTheDocument();
+    } finally {
+      delete document.visibilityState;
+    }
+  });
+
+  it("does not recheck on every tab switch within the minute", async () => {
+    let visibility = "visible";
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => visibility,
+    });
+    try {
+      await openWorkspace();
+      for (const state of ["hidden", "visible", "hidden", "visible"]) {
+        visibility = state;
+        await act(async () => {
+          document.dispatchEvent(new Event("visibilitychange"));
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+      }
+      expect(mocks.api).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60000);
+      });
+      expect(mocks.api).toHaveBeenCalledTimes(2);
+    } finally {
+      delete document.visibilityState;
+    }
+  });
+
   it("removes the workspace when a background check finds disabled access", async () => {
     await openWorkspace();
     mocks.api.mockRejectedValueOnce(

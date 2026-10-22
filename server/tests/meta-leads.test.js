@@ -22,10 +22,6 @@ import { graphClient } from "../src/services/meta/graph.js";
 import { normalizeSubmission } from "../src/services/meta/normalize.js";
 import { requiredMetaPermissions } from "../src/routes/meta.routes.js";
 import { digest } from "../src/services/accountsSecurity.js";
-import {
-  sensitiveLimit,
-  metaWebhookLimit,
-} from "../src/middleware/rateLimit.js";
 const admin = "d1000000-0000-4000-8000-000000000001",
   agent = "d1000000-0000-4000-8000-000000000002",
   other = "d1000000-0000-4000-8000-000000000003";
@@ -188,9 +184,6 @@ beforeAll(async () => {
 afterAll(async () => pg?.close());
 afterEach(() => vi.unstubAllEnvs());
 beforeEach(async () => {
-  // General API limiters are created per app, so each test's app starts fresh.
-  for (const limiter of [sensitiveLimit, metaWebhookLimit])
-    for (const ip of ["127.0.0.1", "::ffff:127.0.0.1"]) limiter.resetKey(ip);
   await pg.exec("truncate auth.users,public.integration_events cascade;");
   await pg.query(
     "insert into auth.users(id,email,email_confirmed_at) values($1,'admin@example.test',now()),($2,'agent@example.test',now()),($3,'other@example.test',now())",

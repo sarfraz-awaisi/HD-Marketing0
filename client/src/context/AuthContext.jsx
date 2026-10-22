@@ -111,10 +111,25 @@ export function AuthProvider({ children }) {
       if (_event === "PASSWORD_RECOVERY") setRecovering(true);
       setTimeout(() => refresh(session, request), 0);
     });
-    const interval = setInterval(restore, 60000);
+    // Recheck the account every minute while this tab is visible. A hidden
+    // tab skips the check, as React Query pauses its polling there too, and
+    // checks as soon as it is shown again, so open background tabs do not
+    // keep calling the API. Every API request still verifies the account.
+    let checked = Date.now();
+    const check = () => {
+      if (document.visibilityState === "hidden") return;
+      checked = Date.now();
+      restore();
+    };
+    const shown = () => {
+      if (Date.now() - checked >= 60000) check();
+    };
+    const interval = setInterval(check, 60000);
+    document.addEventListener("visibilitychange", shown);
     return () => {
       live = false;
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", shown);
       data.subscription.unsubscribe();
       window.removeEventListener("hd:mfa-required", requireMfa);
     };

@@ -535,7 +535,9 @@ describe("P1 API and production capabilities", () => {
         }),
       );
       expect(response.headers["cache-control"]).toBe("no-store");
-      expect(response.headers.ratelimit).toContain("30");
+      expect(response.headers["ratelimit-policy"]).toContain(
+        '"sensitive"; q=30; w=60',
+      );
     },
   );
   it("accepts unanswered calls in production and leaves the lead New", async () => {

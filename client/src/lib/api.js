@@ -31,9 +31,13 @@ export async function api(path, options = {}) {
     throw error;
   }
   if (!response.ok) {
-    const err = await response
-      .json()
-      .catch(() => ({ error: "API unreachable" }));
+    // Nginx refuses with a plain page when its own per-address limit is hit.
+    const err = await response.json().catch(() => ({
+      error:
+        response.status === 429
+          ? "Too many requests. Please wait a moment and try again."
+          : "API unreachable",
+    }));
     const error = new Error(err.error || "Request failed");
     error.status = response.status;
     if (
@@ -65,6 +69,10 @@ export async function api(path, options = {}) {
   if (options.download) return response.blob();
   return response.json();
 }
+// React Query retry rule: one retry after a network or server error. A
+// refusal (4xx, including 429 Too many requests) would only be refused again.
+export const retryQuery = (failures, error) =>
+  failures < 1 && !(error?.status >= 400 && error.status < 500);
 export function download(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

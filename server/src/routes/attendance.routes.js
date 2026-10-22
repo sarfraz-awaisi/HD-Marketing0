@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { utils, write } from "xlsx";
 import { z } from "zod";
-import { sensitiveLimit } from "../middleware/rateLimit.js";
+import {
+  exportLimit,
+  reportLimit,
+  sensitiveLimit,
+} from "../middleware/rateLimit.js";
 import {
   uuid,
   attendanceRange,
@@ -334,25 +338,25 @@ export function attendanceAdminRouter(db) {
     });
   const period = (req, q, from, to) =>
     admin(req, "attendance_period", { p_from: from, p_to: to, ...filters(q) });
-  router.get("/overview", async (req, res) =>
+  router.get("/overview", reportLimit, async (req, res) =>
     res.json(await admin(req, "attendance_overview")),
   );
-  router.get("/daily", async (req, res) =>
+  router.get("/daily", reportLimit, async (req, res) =>
     res.json(await daily(req, attendanceDailyQuery.parse(req.query))),
   );
-  router.get("/weekly", async (req, res) => {
+  router.get("/weekly", reportLimit, async (req, res) => {
     const q = attendanceWeekQuery.parse(req.query);
     res.json(await period(req, q, q.week_start, addDays(q.week_start, 6)));
   });
-  router.get("/monthly", async (req, res) => {
+  router.get("/monthly", reportLimit, async (req, res) => {
     const q = attendanceMonthQuery.parse(req.query);
     const range = monthRange(q.month);
     res.json(await period(req, q, range.from, range.to));
   });
-  router.get("/employees", async (req, res) =>
+  router.get("/employees", reportLimit, async (req, res) =>
     res.json(await admin(req, "attendance_employees")),
   );
-  router.get("/employees/:id", async (req, res) => {
+  router.get("/employees/:id", reportLimit, async (req, res) => {
     const q = attendanceRange.parse(req.query);
     res.json(
       await admin(req, "attendance_employee", {
@@ -437,7 +441,7 @@ export function attendanceAdminRouter(db) {
       }),
     );
   });
-  router.get("/export", sensitiveLimit, async (req, res) => {
+  router.get("/export", sensitiveLimit, exportLimit, async (req, res) => {
     const q = attendanceExportQuery.parse(req.query);
     if (q.type === "daily") {
       const result = await daily(req, q, 1000, 1);

@@ -32,8 +32,27 @@ async function scheduledTick() {
     console.error("Deleted lead purge/cleanup pending; jobs will retry");
   }
 }
-await scheduledTick();
-setInterval(
-  scheduledTick,
-  Math.max(10, Number(process.env.JOB_INTERVAL_SECONDS || 60)) * 1000,
-);
+// A single timer includes purge work, and shutdown waits for the whole tick.
+let stopping = false;
+let timer;
+let pending;
+function stop() {
+  stopping = true;
+  clearTimeout(timer);
+  // Do not force-exit while an external write may still be committing.
+  pending?.finally(() => process.exit(0));
+  if (!pending) process.exit(0);
+}
+process.once("SIGTERM", stop);
+process.once("SIGINT", stop);
+async function loop() {
+  pending = scheduledTick();
+  await pending;
+  pending = null;
+  if (!stopping)
+    timer = setTimeout(
+      loop,
+      Math.max(10, Number(process.env.JOB_INTERVAL_SECONDS || 60)) * 1000,
+    );
+}
+await loop();

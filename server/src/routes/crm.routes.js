@@ -3,7 +3,12 @@ import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
 import { adminOnly } from "../middleware/role.js";
-import { sensitiveLimit } from "../middleware/rateLimit.js";
+import {
+  exportLimit,
+  importLimit,
+  reportLimit,
+  sensitiveLimit,
+} from "../middleware/rateLimit.js";
 import { audit } from "../middleware/auditLogger.js";
 import {
   uuid,
@@ -161,6 +166,7 @@ export function crmRouter(db, options = {}) {
     "/leads/import",
     adminOnly,
     sensitiveLimit,
+    importLimit,
     upload.single("file"),
     async (req, res) => res.json(await importLeadFile(db, req)),
   );
@@ -365,41 +371,38 @@ export function crmRouter(db, options = {}) {
       res.status(204).end();
     },
   );
-  router.get(
-    "/leads/selection",
-    adminOnly,
-    sensitiveLimit,
-    async (req, res) => {
-      const q = listQuery.parse(req.query);
-      let query = db
-        .from("leads")
-        .select("id", { count: "exact" })
-        .is("deleted_at", null);
-      if (q.search) {
-        const number = q.search.replace(/^HD-/i, "");
-        query =
-          /^\d+$/.test(number) && BigInt(number) <= 9223372036854775807n
-            ? query.or(`name.ilike.%${q.search}%,lead_no.eq.${BigInt(number)}`)
-            : query.ilike("name", "%" + q.search + "%");
-      }
-      for (const [field, value] of [
-        ["status", q.status],
-        ["lost_reason", q.lost_reason],
-        ["source", q.source],
-        ["assigned_agent", q.agent],
-        ["import_id", q.import_id],
-      ])
-        if (value) query = query.eq(field, value);
-      const result = await query.order("id").limit(501);
-      const rows = unwrap(result);
-      if (result.count > 500 || rows.length > 500)
-        throw Object.assign(
-          new Error("Narrow your filter to 500 matching leads or fewer."),
-          { status: 400 },
-        );
-      res.json({ ids: rows.map((row) => row.id) });
-    },
-  );
+  // Returns lead IDs only: an expensive count-and-filter search, limited like
+  // reports so distributing a batch to many agents leaves room for changes.
+  router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
+    const q = listQuery.parse(req.query);
+    let query = db
+      .from("leads")
+      .select("id", { count: "exact" })
+      .is("deleted_at", null);
+    if (q.search) {
+      const number = q.search.replace(/^HD-/i, "");
+      query =
+        /^\d+$/.test(number) && BigInt(number) <= 9223372036854775807n
+          ? query.or(`name.ilike.%${q.search}%,lead_no.eq.${BigInt(number)}`)
+          : query.ilike("name", "%" + q.search + "%");
+    }
+    for (const [field, value] of [
+      ["status", q.status],
+      ["lost_reason", q.lost_reason],
+      ["source", q.source],
+      ["assigned_agent", q.agent],
+      ["import_id", q.import_id],
+    ])
+      if (value) query = query.eq(field, value);
+    const result = await query.order("id").limit(501);
+    const rows = unwrap(result);
+    if (result.count > 500 || rows.length > 500)
+      throw Object.assign(
+        new Error("Narrow your filter to 500 matching leads or fewer."),
+        { status: 400 },
+      );
+    res.json({ ids: rows.map((row) => row.id) });
+  });
   router.get("/leads/:id/phone", sensitiveLimit, async (req, res) => {
     phoneRevealQuery.parse(req.query);
     const [result] = await leadContacts(db, req, [
@@ -672,7 +675,7 @@ export function crmRouter(db, options = {}) {
     })
     .strict()
     .refine((v) => v.from < v.to, { message: "Date range must be increasing" });
-  router.get("/dashboard", async (req, res) => {
+  router.get("/dashboard", reportLimit, async (req, res) => {
     const range = z
       .object({
         from: z.iso.datetime({ offset: true }),
@@ -683,7 +686,7 @@ export function crmRouter(db, options = {}) {
       .parse(req.query);
     res.json(await dashboardSnapshot(db, req.user, range));
   });
-  router.get("/reports", async (req, res) => {
+  router.get("/reports", reportLimit, async (req, res) => {
     const q = reportQuery.parse(req.query);
     res.json(
       unwrap(
@@ -697,7 +700,7 @@ export function crmRouter(db, options = {}) {
       ),
     );
   });
-  router.get("/reports/export", adminOnly, async (req, res) => {
+  router.get("/reports/export", adminOnly, exportLimit, async (req, res) => {
     const q = reportQuery.parse(req.query);
     const data = unwrap(
       await db.rpc("crm_metrics", {
@@ -719,7 +722,7 @@ export function crmRouter(db, options = {}) {
             .join("\r\n"),
       );
   });
-  router.get("/leaderboard", async (req, res) => {
+  router.get("/leaderboard", reportLimit, async (req, res) => {
     const q = reportQuery.parse(req.query);
     res.json(
       unwrap(

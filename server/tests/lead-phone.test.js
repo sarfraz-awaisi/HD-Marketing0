@@ -738,7 +738,9 @@ describe("Contact APIs and response privacy", () => {
       expect(response.body.phone).toBe(leads[0].phone);
 
       expect(response.headers["cache-control"]).toBe("no-store");
-      expect(response.headers.ratelimit).toContain("30");
+      expect(response.headers["ratelimit-policy"]).toContain(
+        '"sensitive"; q=30; w=60',
+      );
       expect(client.rpc).toHaveBeenCalledWith(
         "lead_contact_phones",
         expect.objectContaining({ p_leads: [leads[0].id], p_actor: actor }),

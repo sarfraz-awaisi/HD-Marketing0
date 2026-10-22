@@ -1,5 +1,7 @@
 # HD Marketing CRM
 
+For the non-Docker Hostinger production setup, use [the Nginx/PM2 blue-green deployment guide](HD_MARKETING_PRODUCTION_DEPLOYMENT.md), [audit](docs/PRODUCTION_AUDIT.md), and [verification results](docs/PRODUCTION_VERIFICATION.md). No live deployment has been performed.
+
 A locally run React/Express CRM for a real estate sales team. Navy, white and gold responsive workspace with separate admin and agent navigation. Supabase provides actual Auth, PostgreSQL and private Storage. No external resources have been created or deployed.
 
 The [complete Word manual](docs/HD_Marketing_CRM_Complete_Documentation.docx) explains both portals, permissions, daily workflows, all implemented modules, account security, setup, API routes and named functions. Its [editable source](docs/CRM_COMPLETE_DOCUMENTATION.md) can be updated and rebuilt with `python3 scripts/build-project-doc.py` using Python's standard library.
@@ -200,7 +202,7 @@ Admin dashboard metrics use the current Pakistan month. Agent overview also show
 
 ## API routes
 
-All `/api` routes require a verified Bearer token except the signature-verified webhook boundary. Limits: JSON 256 KB, uploads 5 MB for photos/lead imports and 10 MB for documentation files, page size 1–100, general API rate limit 300 requests/15 minutes per IP; sensitive routes 30/minute (development single-instance limiter).
+All `/api` routes require a verified Bearer token except the signature-verified webhook boundary. Limits: JSON 256 KB, uploads 5 MB for photos/lead imports and 10 MB for documentation files, page size 1–100, API rate limits per verified user once signed in and per IP before sign-in, configurable with `RATE_LIMIT_*` (see [docs/RATE_LIMITS.md](docs/RATE_LIMITS.md)).
 
 | Routes                                                                      | Behavior                                                                                           |
 | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -314,7 +316,7 @@ To verify against real Supabase after setup:
 - **Real call 503**: expected until a real provider adapter is implemented and configured.
 - **Tests listen EPERM**: grant local port access; Supertest opens temporary listeners.
 
-The API is bound to localhost. For future multi-instance deployment, replace the in-memory IP rate limiter with a shared store, configure trusted proxy boundaries, review provider adapters and run the real-service checks above. No deployment is included.
+The API is bound to localhost. Rate-limit counts are kept per API process (see [docs/RATE_LIMITS.md](docs/RATE_LIMITS.md)); before running several active API processes for one environment, add a shared rate-limit store, configure trusted proxy boundaries, review provider adapters and run the real-service checks above. No deployment is included.
 
 ## Production deployment and system monitoring (P6)
 

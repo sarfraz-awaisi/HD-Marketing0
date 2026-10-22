@@ -1,0 +1,23 @@
+# Replace crm.example.com and production; staging uses a different hostname/include.
+server {
+    listen 80;
+    server_name crm.example.com;
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+    location / { return 301 https://$host$request_uri; }
+}
+server {
+    listen 443 ssl;
+    server_name crm.example.com;
+    ssl_certificate /etc/letsencrypt/live/crm.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/crm.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    client_max_body_size 25m;
+    client_body_timeout 60s;
+    access_log /var/log/nginx/crm-production-access.log crm_safe;
+    error_log /var/log/nginx/crm-production-error.log warn;
+    include /etc/nginx/hd-crm/production.conf;
+}

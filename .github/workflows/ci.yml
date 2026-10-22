@@ -1,0 +1,38 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://ci-fixture.supabase.co
+          VITE_SUPABASE_ANON_KEY: public-ci-fixture
+          VITE_API_URL: /api
+      - run: python3 deploy/production/check.py
+      - run: python3 -m unittest discover -s deploy/production/tests -v
+      - name: Validate Nginx templates on Ubuntu
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y nginx-core
+          python3 deploy/production/check-nginx.py
+      - name: Parse workflow YAML
+        run: ruby -ryaml -e 'Dir[".github/workflows/*.yml"].each { |f| YAML.load_file(f) }'
+      - run: npm audit --audit-level=high
