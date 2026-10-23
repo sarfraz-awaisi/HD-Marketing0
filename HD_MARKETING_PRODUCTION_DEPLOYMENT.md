@@ -1,6 +1,6 @@
 # HD Marketing CRM: production deployment and recovery
 
-Prepared locally on 21 October 2026; updated 22 October 2026 for a **production-only** setup: there is no staging environment (owner decision). No VPS, DNS, GitHub settings, Supabase records or live environment was changed. No commit, push or deployment was performed. This guide replaces the older Caddy deployment path for new installations; do not run Caddy and Nginx on the same public ports.
+Prepared locally on 21 October 2026; updated 22 October 2026 for a **production-only** setup: there is no staging environment (owner decision). Updated again on 23 October 2026 with the current launch status below. This guide replaces the older Caddy deployment path for new installations; do not run Caddy and Nginx on the same public ports.
 
 The complete [file-by-file change inventory](docs/PRODUCTION_FILES.md) describes every addition and edit.
 
@@ -20,6 +20,19 @@ flowchart LR
   Switch --> TLS
 ```
 
+## Launch status (24 October 2026)
+
+| Item | Status |
+|---|---|
+| Code: tests, build, deployment checks | Done. Pull request #1 merged into `main`; CI passes there. |
+| Database: updates 001–041 | Done. The owner applied 041 on 23 October 2026 and the read-only preflight confirmed it. |
+| GitHub: `main` ruleset | Done: pull request and the `validate` check required, no force push or deletion. |
+| GitHub: `production` environment | Exists, `main` only, owner as required reviewer, no administrator bypass. **Open:** turn off *Prevent self-review* (a single maintainer must approve their own runs), then add the secrets and variables (section 8). |
+| **Verified encrypted backup** | **Open.** Owner decision (24 October 2026): take and verify it right after go-live; the first release changes no data. Mandatory before any release that changes the database (section 13 and [the inventory runbook](docs/PROPERTY_INVENTORY_RELEASE.md), section 2). |
+| VPS | Inspected read-only on 24 October: Ubuntu 26.04, Node 24 (NodeSource), PM2 6 service for `crm-prod`, release folders, Nginx, certificate for `hdmarketing.tech` and `www`. **Open:** run `bootstrap-vps.sh` (section 3). |
+| Supabase Auth Site URL and redirect URLs | **Open** (section 5). |
+| First release, worker, smoke checks | **Open** (sections 9 and 16). |
+
 ## 1. Safety and command scope
 
 **Safe locally now**, from `hd-marketing-crm`:
@@ -38,11 +51,47 @@ Tests use local fixtures; do not run `setup:dev`, `verify:live`, benchmarks, mig
 
 ## 2. Location and capacity
 
-Purchase Ubuntu 24.04 LTS KVM 2 only after checking the currently available **VPS** locations. For Pakistan users and Sydney database traffic, start by measuring the available Malaysia/India routes; choose the best measured API-to-Sydney plus user-to-API latency. Singapore may be offered for other hosting products without being a VPS choice. Do not move the existing database to improve latency. Hostinger says VPS location is fixed at initial setup: [official locations](https://www.hostinger.com/support/1583267-where-are-hostinger-servers-located/).
+Use Ubuntu 24.04 LTS on the Hostinger KVM 2 VPS. For Pakistan users and Sydney database traffic, prefer the location with the best measured API-to-Sydney plus user-to-API latency (start with the available Malaysia/India routes). Do not move the existing database to improve latency. Hostinger says VPS location is fixed at initial setup: [official locations](https://www.hostinger.com/support/1583267-where-are-hostinger-servers-located/).
 
 Build and run tests on GitHub-hosted Ubuntu runners, not on the 2-vCPU server. Budget roughly two 750-MB API processes during rollout, one worker, Nginx/OS and transient npm/upload memory; actual RSS can exceed the PM2 restart threshold. Keep at least 2 GB free and 20% disk free, measure large spreadsheet imports and concurrent exports. Stagger backups and releases. One KVM 2 is a single host, not high availability.
 
 ## 3. Ubuntu, SSH, firewall and packages
+
+### Bootstrap script (recommended)
+
+`deploy/production/bootstrap-vps.sh` performs the server parts of sections 3–7 for this architecture and is safe to rerun. Without `--apply` it only reads and reports (`OK`, `TODO`, `MANUAL`); with `--apply` it changes only what the report lists:
+
+- packages, Node 24 (kept as installed; `install-node.sh` only if Node is missing) and PM2 with its `pm2-crm-prod` service;
+- `crm-prod` lingering, release folders, `/etc/hd-crm/production` and the `origin` file;
+- the deploy public key in `crm-prod`'s `authorized_keys` with `restrict` (added once; no other line is changed or removed);
+- the switch helper, its single `sudo` rule (checked with `visudo`), the 503 holding include (never overwritten once a release exists), the rate-limit file and the CRM site, with `www` redirecting to the main address when `--redirect-www` is given;
+- competing enabled sites (Ubuntu's default, a placeholder for the domain) are moved to `/etc/nginx/hd-crm-disabled-sites/`; if `nginx -t` fails, everything is put back;
+- certificate renewal through the webroot plus the Nginx reload hook;
+- `server.env` from `make-server-env.mjs` (section 5), installed `root:crm-prod 640`; the uploaded copy is deleted. It refuses to change an installed `ACCOUNTS_PIN_PEPPER`, `ACCOUNT_OTP_SECRET` or `META_TOKEN_ENCRYPTION_KEY`.
+
+It never changes SSH settings, the firewall, Docker containers or volumes, Supabase or live traffic, and never prints a secret. It checks that `sshd` lets `crm-prod` log in with a key, starts a PAM session (needed by `systemd-run --user`) and offers sftp (used by `scp`). It ends by printing the verified `DEPLOY_KNOWN_HOSTS` lines.
+
+From the Mac (public key only; the settings file is private and deleted after installation):
+
+```sh
+node deploy/production/make-server-env.mjs --domain hdmarketing.tech
+scp ~/.ssh/hd-crm-github-deploy.pub ~/hd-crm-server.env deploy@187.127.206.178:
+```
+
+On the VPS as `deploy` (sudo asks for your password):
+
+```sh
+git clone https://github.com/sarfraz-awaisi/HD-Marketing0.git ~/hd-crm-setup
+cd ~/hd-crm-setup
+args="--domain hdmarketing.tech --redirect-www --deploy-host 187.127.206.178 --deploy-key $HOME/hd-crm-github-deploy.pub --server-env $HOME/hd-crm-server.env"
+sudo bash deploy/production/bootstrap-vps.sh $args            # read-only report
+sudo bash deploy/production/bootstrap-vps.sh $args --apply    # make the listed changes
+sudo bash deploy/production/bootstrap-vps.sh --domain hdmarketing.tech --redirect-www --deploy-host 187.127.206.178   # confirm: all OK
+```
+
+After `--apply`, `https://hdmarketing.tech` shows the 503 holding page until the first release. The rest of this section and sections 4–7 describe the same steps by hand.
+
+### Manual steps
 
 On the new VPS as its owner/admin (keep the provider console and current SSH session open):
 
@@ -83,7 +132,14 @@ If SSH uses a custom port, allow it before enabling UFW. Mirror the policy in th
 
 ## 4. Install Node and PM2
 
-Copy/review the repository on the new server as the owner. The following command assumes the current directory is the repository root. It installs the latest patched official Node 24 archive for the machine and verifies its published checksum; review this privileged installer before running it. CI also uses Node 24. The local preparation used Node 24.12.0; future patches must pass CI. [Node release schedule](https://github.com/nodejs/Release).
+Once the release branch is merged into `main`, get the reviewed code on the server as the owner (the repository is public; this copy is only for setup, releases arrive through GitHub Actions):
+
+```sh
+git clone https://github.com/sarfraz-awaisi/HD-Marketing0.git ~/hd-crm-setup
+cd ~/hd-crm-setup
+```
+
+If Node 24 is already installed (the VPS has it from NodeSource's apt repository), keep it and skip `install-node.sh`: a second Node in `/usr/local/bin` would shadow it. Otherwise, the following command assumes the current directory is the repository root. It installs the latest patched official Node 24 archive for the machine and verifies its published checksum; review this privileged installer before running it. CI also uses Node 24. The local preparation used Node 24.12.0; future patches must pass CI. [Node release schedule](https://github.com/nodejs/Release).
 
 ```sh
 sudo bash deploy/production/install-node.sh
@@ -93,11 +149,24 @@ pm2 --version
 sudo env PATH=/usr/local/bin:/usr/bin:/bin pm2 startup systemd -u crm-prod --hp /home/crm-prod
 ```
 
-Record exact Node/PM2 versions in the operations log. PM2 runs as the application user, not root. The slot-specific ecosystem starts **only the API**; one jobs process is managed separately. API crashes restart with backoff and memory limits. A PM2 memory restart can interrupt work once the drain deadline expires, so investigate memory pressure instead of treating restart as a fix.
+Start the generated service with `sudo systemctl enable --now pm2-crm-prod`. `release.sh` refuses to run while it is stopped: a PM2 daemon started inside a release job would stop with that job and take the API down. Record exact Node/PM2 versions in the operations log. PM2 runs as the application user, not root. The slot-specific ecosystem starts **only the API**; one jobs process is managed separately. API crashes restart with backoff and memory limits. A PM2 memory restart can interrupt work once the drain deadline expires, so investigate memory pressure instead of treating restart as a fix.
 
 ## 5. Private environment and session continuity
 
-Create `/etc/hd-crm/production/server.env` from `deploy/production/production.env.example` using `sudoedit`. It uses `NODE_ENV=production`. Set the matching HTTPS frontend origin, service-role key and Supabase URL. Preserve the existing production `ACCOUNTS_PIN_PEPPER`, OTP secret and Meta token encryption key, as applicable. Copy optional SMTP/Resend, login, Meta and retention settings from root `.env.example`. Use `CALL_PROVIDER=manual`.
+Create `/etc/hd-crm/production/server.env` with `node deploy/production/make-server-env.mjs --domain hdmarketing.tech` on the Mac. It takes only an allowlist of the local `.env` (Supabase URL and service-role key, PIN pepper, OTP secret, SMTP, login, rate-limit, Meta and retention settings), sets the production values below, generates `WEBHOOK_SECRET` when needed, drops `DEV_*`, `VITE_*` and `PORT`, runs the API's own production validator and writes a mode-600 file without printing any value. The bootstrap installs it. Alternatively create it from `deploy/production/production.env.example` using `sudoedit`. It uses `NODE_ENV=production`. Copy optional SMTP/Resend, login, Meta and retention settings from root `.env.example`. The API refuses to start in production unless:
+
+| Setting | Rule |
+|---|---|
+| `SUPABASE_URL` | The existing project's `https://…supabase.co` address, without a trailing slash. Must equal the GitHub variable `VITE_SUPABASE_URL` exactly. |
+| `SUPABASE_SERVICE_ROLE_KEY` | The existing service-role key. Server only; never in GitHub or the browser. |
+| `FRONTEND_URL` | The live HTTPS address, for example `https://crm.example.com`, without a trailing slash. Must equal the GitHub variable `FRONTEND_ORIGIN` exactly. Your local `.env` uses a localhost address; don't copy it. |
+| `ACCOUNTS_PIN_PEPPER` | At least 32 characters. **Copy the current value unchanged**, or existing account PINs stop working. Do the same for `ACCOUNT_OTP_SECRET` and any Meta token encryption key. |
+| `WEBHOOK_SECRET` | At least 32 characters. Your local `.env` has none; generate one with `openssl rand -hex 32`. |
+| `CALL_PROVIDER` | `manual` (the local `.env` uses a different value). |
+| `REQUIRE_AGENT_MFA` | `true` or `false`. |
+| `TRUST_PROXY` | Keep the template's value; never `true` or a hop count. |
+
+The release stops before switching traffic if the frontend build and these server settings name a different Supabase project or address.
 
 ```sh
 sudo chown root:crm-prod /etc/hd-crm/production/server.env
@@ -135,10 +204,11 @@ Create root-owned `/etc/nginx/hd-crm/production.conf`, initially containing:
 location / { return 503; }
 ```
 
-Copy `deploy/production/site.conf.example` into `/etc/nginx/sites-available/hd-crm`; replace the hostname. Keep the certificate path. Link into sites-enabled:
+Copy `deploy/production/site.conf.example` into `/etc/nginx/sites-available/hd-crm`; replace every `crm.example.com` with your hostname, including in the certificate paths. Link it into sites-enabled and remove Ubuntu's default welcome site so only the CRM is served:
 
 ```sh
 sudo ln -s /etc/nginx/sites-available/hd-crm /etc/nginx/sites-enabled/hd-crm
+sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl start nginx
 sudo systemctl enable nginx
@@ -166,11 +236,12 @@ sudo -u crm-prod sh -c 'printf "%s\n" "https://crm.example.com" > /srv/hd-crm/pr
 
 ## 8. GitHub configuration and release flow
 
-The repository root containing package.json must be the GitHub checkout root (not its parent backup directory). Workflows use main as the integration branch because that is the existing branch. Protect main with pull-request review and the `CI / validate` status check. Every push and pull request (including pushes to main) runs CI: tests, build, syntax/secret-pattern checks, the release-workflow policy, rollback tests and dependency audit. **Nothing deploys automatically.** `deploy/production/workflow_policy.py` fails CI if any workflow could deploy on a push, schedule or other automatic trigger, skip the CI evidence, or refer to staging.
+The repository root containing package.json must be the GitHub checkout root (not its parent backup directory). Workflows use main as the integration branch because that is the existing branch. The "Protect Main Branch" ruleset requires a pull request (0 approvals, so a single maintainer can merge) and blocks force pushes and deletion. Also add **Require status checks to pass** with the check `validate`, so nothing merges without green CI. Every push and pull request (including pushes to main) runs CI: tests, build, syntax/secret-pattern checks, the release-workflow policy, rollback tests and dependency audit. **Nothing deploys automatically.** `deploy/production/workflow_policy.py` fails CI if any workflow could deploy on a push, schedule or other automatic trigger, skip the CI evidence, or refer to staging.
 
 Create the GitHub environment **production** before the first release (no staging environment). A workflow file cannot create these settings; configure them in the repository settings:
 
-- **Required reviewers:** add yourself. With a single maintainer, do not block self-review or no release can be approved. The release job checks that GitHub recorded an approval for `production` on that run and stops before any secret is used if it did not, so an environment without reviewers, one GitHub created automatically because it was missing, or an administrator bypass cannot deploy.
+- **Name:** exactly `production`, in lower case. GitHub matches the job to `Production` too, but the approval check compares the recorded name exactly, so an environment named `Production` stops every release. Rename it by deleting and recreating it (re-enter its secrets and variables).
+- **Required reviewers:** add yourself. With a single maintainer, do not block self-review or no release can be approved. The release job checks that GitHub recorded an approval for `production` on that run and stops before any secret is used if it did not, so an environment without reviewers, one GitHub created automatically because it was missing, or an administrator bypass cannot deploy. If GitHub does not offer your account, type the full username `sarfraz-awaisi`. If it still cannot be added, the Production workflow cannot deploy; decide on an alternative approval with the maintainer rather than removing the check.
 - **Deployment branches and tags:** selected branches, `main` only.
 - **Secrets and variables** below as *environment* secrets and variables, never repository secrets, so a workflow on any other branch cannot read them.
 
@@ -182,9 +253,9 @@ In the production environment configure:
 
 | Kind | Name | Value |
 |---|---|---|
-| Secret | DEPLOY_SSH_KEY | Deploy private key for `crm-prod` |
-| Secret | DEPLOY_KNOWN_HOSTS | Verified server host-key lines |
-| Variable | DEPLOY_HOST | VPS DNS name or IPv4 address, no URL/port |
+| Secret | DEPLOY_SSH_KEY | Deploy private key for `crm-prod`: `pbcopy < ~/.ssh/hd-crm-github-deploy`, paste, then `pbcopy < /dev/null` |
+| Secret | DEPLOY_KNOWN_HOSTS | The lines printed at the end of `bootstrap-vps.sh`, after comparing their fingerprints with your trusted record |
+| Variable | DEPLOY_HOST | VPS DNS name or IPv4 address, no URL/port; exactly the host named in `DEPLOY_KNOWN_HOSTS` (`187.127.206.178`) |
 | Variable | DEPLOY_USER | crm-prod |
 | Variable | FRONTEND_ORIGIN | Exact HTTPS frontend origin without trailing slash |
 | Variable | VITE_SUPABASE_URL | Matching public project URL without trailing slash |
@@ -192,11 +263,11 @@ In the production environment configure:
 
 Do not store service-role or DB credentials in GitHub for this workflow. The remote deployment user inherently has application-level access to its own server secrets: protect its SSH key as a production credential. SSH defaults to port 22; adjust the reviewed script if your server uses another port.
 
-The owner must explicitly authorize any future commit/push; none occurred during preparation. Thereafter:
+The owner explicitly authorizes each commit, push and release. Release flow:
 
 1. Work on a feature branch; push; inspect CI. Open a PR and review schema/API compatibility.
 2. Merge to main. CI runs again on that exact commit; nothing is deployed.
-3. Apply any approved database update by hand first (read-only preflight, verified backup, SQL Editor), following that release's runbook. Release scripts never run SQL.
+3. **Mandatory: take and verify an encrypted backup** (section 13; [runbook](docs/PROPERTY_INVENTORY_RELEASE.md) section 2) before every release with a database update. The first release changes no data; by owner decision its backup follows right after go-live. Apply any approved database update by hand first (read-only preflight, SQL Editor), following that release's runbook. Release scripts never run SQL.
 4. Open Actions → **Production** → Run workflow on main. Enter the full 40-character SHA of that main commit. The workflow refuses to continue unless the commit is part of main and CI succeeded for that exact commit on main.
 5. Approve the release job when GitHub asks (production environment). Without a recorded approval it stops. It checks out the same commit, confirms the checkout is that commit, re-tests it and builds with the production public values.
 6. Release jobs upload an archive containing tracked source and built frontend, excluding local .env files. The server installs runtime dependencies from the lockfile with install scripts disabled. Failed checks leave current traffic untouched. An Actions concurrency group and server flock serialize deployments; cancellation is disabled. systemd-run keeps the remote release alive if SSH drops.
@@ -254,9 +325,9 @@ For uncertain lead edits, refresh/read the lead and audit history before resubmi
 
 ## 12. Database migration safety
 
-No release script invokes Supabase CLI, psql, pg_restore, setup or seeds. Keep 001–040 history intact; never re-run the bundle on an existing production project. Inventory actual schema/functions/grants with a qualified owner, compare to the source, and maintain a reviewed ledger of applied migration filenames/checksums. The legacy schema version value 26 is not sufficient evidence.
+No release script invokes Supabase CLI, psql, pg_restore, setup or seeds. Keep 001–041 history intact; never re-run the bundle on an existing production project. Inventory actual schema/functions/grants with a qualified owner, compare to the source, and maintain a reviewed ledger of applied migration filenames/checksums. The legacy schema version value 26 is not sufficient evidence. Applied so far: 001–040, and 041 on 23 October 2026 (preflight `supabase/check-property-inventory.sql` confirmed it).
 
-For a proposed 041+ migration: write a versioned SQL file and review table/function/trigger/view/RLS/Storage dependencies, locks, duration and existing rows. Rehearse on a synthetic schema matching production, record query-plan/lock behavior and a count-only backup verification. Apply only after explicit owner approval. Prefer expand → compatible dual-version code → backfill in bounded batches → verify → contract in a later maintenance release. New columns should initially permit old clients; do not rename/drop functions while old APIs or workers call them.
+For a future 042+ migration: write a versioned SQL file and review table/function/trigger/view/RLS/Storage dependencies, locks, duration and existing rows. Rehearse on a synthetic schema matching production, record query-plan/lock behavior and a count-only backup verification. Apply only after explicit owner approval. Prefer expand → compatible dual-version code → backfill in bounded batches → verify → contract in a later maintenance release. New columns should initially permit old clients; do not rename/drop functions while old APIs or workers call them.
 
 Destructive DDL/data rewrites need a **separate** approved change window, tested encrypted database and object backups, restoration plan and a declared rollback boundary. Do not enable automatic application rollback unless the previous API/worker/browser still works with the resulting schema. These scripts only support backward-compatible releases. Do not use them for incompatible migrations; arrange a separately approved maintenance/forward-fix procedure. Application rollback never undoes schema or data writes. Do not copy personal customer data into test environments for migration rehearsals; private recovery rehearsal environments need restricted access and outbound integrations disabled.
 
@@ -292,7 +363,7 @@ pm2 set pm2-logrotate:compress true
 pm2 save
 ```
 
-Keep PM2 logs and home private (700); logs may include old job messages. API request logs contain event, request ID, method, status, duration and release only, without bodies, URLs, IPs or credentials. Existing background/audit logging remains. Nginx access format excludes sensitive query strings; error logs can contain paths, so restrict access and review retention. Ubuntu Nginx package logrotate should cover the new `/var/log/nginx/*.log` files; confirm with `sudo logrotate --debug /etc/logrotate.d/nginx`.
+Keep PM2 logs and home private (700); logs may include old job messages. API request logs contain event, request ID, method, status, duration and release only, without bodies, URLs, IPs or credentials. Existing background/audit logging remains. The HTTPS site logs in the `crm_safe` format, which excludes URLs and query strings. The port-80 redirect server has no log setting of its own, so it uses Ubuntu's default access log, which records the requested URL. That is acceptable for plain-HTTP redirects, but restrict access to `/var/log/nginx`. Error logs can contain paths, so review their retention too. Ubuntu Nginx package logrotate should cover the new `/var/log/nginx/*.log` files; confirm with `sudo logrotate --debug /etc/logrotate.d/nginx`.
 
 Register external HTTPS `/health` and frontend checks every minute; alert to an owner-controlled channel after consecutive failures. This endpoint is liveness only. Add an authenticated monitoring check for `/api/health/ready` with a protected admin session and renewal procedure, or inspect it daily in the CRM until such monitoring is deployed. Alert for stale/failed job heartbeats, 5xx rates, PM2 restarts, p95 latency, backup age >26 hours, missing object backups, disk >80%, memory >80%, sustained CPU >85%, certificate expiry <21 days and host uptime loss. Configure thresholds from measured traffic; these starting values are not capacity guarantees.
 
@@ -324,4 +395,4 @@ For failed preparation/readiness, live traffic remains on the original app; insp
 
 Before inviting real users: protected production environment configured and tested; frontend and server confirmed to use the existing Supabase project; backup + objects + offline keys restored successfully; domain/TLS renewal and firewall checked; verified private environment; all tests and production build passing; one worker; production smoke checks with clearly named test records, deleted afterwards; genuine slow request and upload during switch; old browser tab loading old chunks; concurrent edit conflict expectations agreed; intentional failed candidate/reload/monitoring rollback; PM2 restart/reboot rehearsal; monitoring failure alert received; measured CPU/RAM/database latency; documented operator and recovery window.
 
-No local test can prove all of this for an unpurchased VPS. Treat unresolved idempotency, stale-edit detection, per-user counter continuity and external-operation timeouts explicitly in the launch decision.
+No local test can prove all of this for a VPS that has not been verified. Treat unresolved idempotency, stale-edit detection, per-user counter continuity and external-operation timeouts explicitly in the launch decision.

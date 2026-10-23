@@ -7,6 +7,9 @@ mode=${1:?deploy or rollback}; environment=${2:?production or staging}
 base="${HD_CRM_ROOT:-/srv/hd-crm}/$environment"
 exec 9>"$base/release.lock"
 flock -n 9 || { echo 'Another release is running'; exit 1; }
+# PM2 must run as its systemd service. A daemon started from this script would
+# live inside the release job and stop with it, taking the API down.
+systemctl is-active --quiet "pm2-$(id -un)" || { echo "PM2 service pm2-$(id -un) is not running; start it before releasing" >&2; exit 1; }
 cd "$base"
 old_slot=; old_sha=
 if [[ -f active ]]; then read -r old_slot old_sha < active; fi
