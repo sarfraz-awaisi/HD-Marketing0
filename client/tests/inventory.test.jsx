@@ -172,6 +172,26 @@ describe("inventory tabs and statistics", () => {
       expect.anything(),
     );
   });
+  it("reports a missing database update once, without the empty-inventory text", async () => {
+    mocks.auth.user = { id: "agent-1", name: "Ali", role: "agent" };
+    mocks.api.mockRejectedValue(
+      Object.assign(
+        new Error("Inventory needs CRM database update 041 after 040."),
+        { status: 503 },
+      ),
+    );
+    workspace();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "database update 041",
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "Inventory summary" }),
+      ).toBeNull(),
+    );
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.queryByText(/not added any properties/)).toBeNull();
+  });
   it("moves between tabs with the arrow keys", async () => {
     const user = userEvent.setup();
     workspace();
