@@ -19,7 +19,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import Properties from "../src/pages/admin/Properties";
+import Inventory from "../src/pages/shared/Inventory";
 import { ToastProvider } from "../src/components/common/UI";
 const mocks = vi.hoisted(() => ({
   api: vi.fn(),
@@ -35,6 +35,8 @@ const property = {
   id: "50000000-0000-4000-8000-000000000001",
   title: "Picture residence",
   location: "Lahore",
+  city: "Lahore",
+  purpose: "sale",
   price: 100,
   type: "House",
   area: 5,
@@ -96,6 +98,22 @@ beforeEach(() => {
       }
       return uploaded;
     }
+    if (path === "/inventory/summary")
+      return {
+        role: mocks.auth.user.role,
+        mine: { total: 0 },
+        company: { total: records.length },
+        agents: { total: 0 },
+        all: { total: records.length, sold: 0, rented: 0 },
+      };
+    const detail = /^\/properties\/([0-9a-f-]{36})$/.exec(path);
+    if (detail && !options?.method)
+      return {
+        ...records.find((r) => r.id === detail[1]),
+        ownership: "company",
+        created_at: "2026-10-01T10:00:00Z",
+        can_edit: mocks.auth.user.role === "admin",
+      };
     if (["POST", "PATCH"].includes(options?.method)) {
       if (failProperty) throw new Error("Could not save property");
       const saved = { ...property, ...options.body };
@@ -106,15 +124,15 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.unstubAllGlobals());
-function workspace() {
+function workspace(entry = "/inventory") {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <MemoryRouter>
-          <Properties />
+        <MemoryRouter initialEntries={[entry]}>
+          <Inventory />
         </MemoryRouter>
       </ToastProvider>
     </QueryClientProvider>,
@@ -135,9 +153,9 @@ async function openNew(user) {
     await screen.findByRole("button", { name: "+ Add property" }),
   );
   await user.type(screen.getByLabelText("Property title"), property.title);
-  await user.type(screen.getByLabelText("Location"), property.location);
+  await user.type(screen.getByLabelText("City"), property.city);
   await user.type(screen.getByLabelText("Price (PKR)"), "100");
-  await user.type(screen.getByLabelText("Area"), "5");
+  await user.type(screen.getByLabelText("Size"), "5");
   await user.selectOptions(screen.getByLabelText("Property type"), "House");
 }
 const select = (files) =>
@@ -323,7 +341,9 @@ describe("pictures in the property form", () => {
     await user.click(
       await screen.findByRole("button", { name: /View property/ }),
     );
-    await user.click(screen.getByRole("button", { name: "Edit property" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Edit property" }),
+    );
     select([picture("updated.webp", "image/webp")]);
     await user.click(screen.getByRole("button", { name: "Save record" }));
     await screen.findByText("Property and pictures saved");
@@ -338,11 +358,12 @@ describe("pictures in the property form", () => {
     records = [property];
     mocks.auth.user.role = "agent";
     const user = userEvent.setup();
-    workspace();
+    workspace("/inventory?tab=company");
     await user.click(
       await screen.findByRole("button", { name: /View property/ }),
     );
     const dialog = screen.getByRole("dialog");
+    await within(dialog).findByText("Company inventory");
     expect(within(dialog).queryByText("Add pictures")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "+ Add property" }),

@@ -1,8 +1,14 @@
 import { useRef, useState } from "react";
 import { Building2, Images } from "lucide-react";
 import { pkr } from "../../lib/api";
+import {
+  propertyRef,
+  purposeLabel,
+  sizeLabel,
+  statusLabel,
+} from "../../lib/inventory";
 import { usePropertyPhotos } from "../../lib/usePropertyPhotos";
-import { Badge, Button } from "../common/UI";
+import { Button } from "../common/UI";
 export default function PropertyCard({ property, onView }) {
   const batched = Object.hasOwn(property, "cover_photo");
   const photos = usePropertyPhotos(property.id, {
@@ -55,7 +61,9 @@ export default function PropertyCard({ property, onView }) {
             </small>
           </span>
         )}
-        <Badge value={property.availability} />
+        <span className={`badge fx-badge ${property.availability}`}>
+          {statusLabel(property.availability)}
+        </span>
         <small>{property.type}</small>
         {hasPicture && photoCount > 1 && (
           <span className="property-photo-count">
@@ -67,10 +75,17 @@ export default function PropertyCard({ property, onView }) {
       <div className="property-card-body">
         <small>{property.location}</small>
         <h2>{property.title}</h2>
-        <strong>{pkr(property.price)}</strong>
+        <strong>
+          {pkr(property.price)}
+          {property.purpose === "rent" && <small> / month</small>}
+        </strong>
         <p>
-          {property.area} {property.area_unit} · {property.type}
+          {sizeLabel(property)} · {property.type}
+          {property.purpose && <> · {purposeLabel(property.purpose)}</>}
         </p>
+        {property.property_no && (
+          <p className="property-ref">{propertyRef(property.property_no)}</p>
+        )}
         <Button variant="secondary" onClick={onView}>
           View property ↗
         </Button>

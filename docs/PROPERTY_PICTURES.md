@@ -1,5 +1,7 @@
 # Pictures while adding or editing a property
 
+> **Update 041:** pictures follow property ownership. Administrators manage pictures of company properties; agents manage pictures of their own properties; everyone else can only view them. Pictures can be reordered and the first is the cover. See [PROPERTY_INVENTORY.md](PROPERTY_INVENTORY.md).
+
 In the administrator portal, open **Properties → Add property**. Fill in the property details, then use **Add pictures** to choose one or several JPG, PNG or WebP files. Each picture must be nonempty and no larger than 5 MB. Pictures are optional.
 
 Selected pictures appear as previews with their filenames. Use **Remove picture** to omit a picture before saving, or **Add pictures** again to select more. Re-selecting the same filename, size and modification time does not add another copy to the selection. Unsupported, empty or oversized files are skipped with a message; valid selections remain available.

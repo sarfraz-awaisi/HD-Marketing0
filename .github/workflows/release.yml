@@ -1,0 +1,88 @@
+name: Reusable release
+# Called only by production.yml. Production is the only environment; there is
+# no staging deployment.
+on:
+  workflow_call:
+    inputs:
+      sha:
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    # The protected GitHub environment: its reviewers approve this job and its
+    # deployment secrets exist only here.
+    environment: production
+    env:
+      DEPLOY_ENV: production
+    steps:
+      - name: Validate target
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+      # GitHub records an approval only when the environment has required
+      # reviewers. Without one (or for an environment GitHub created because it
+      # was missing) the release stops here, before any secret is used.
+      - name: Require a recorded production approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" \
+            --jq 'any(.[]; .state == "approved" and any(.environments[]; .name == "production"))' | grep -qx true \
+            || { echo "::error::No production approval recorded for this run; add required reviewers to the production environment"; exit 1; }
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.sha }}
+          persist-credentials: false
+      - name: Confirm the checkout is the release commit
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: '[[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: python3 deploy/production/check.py
+      - run: python3 -m unittest discover -s deploy/production/tests -v
+      - run: npm audit --audit-level=high
+      - name: Build public frontend for this environment
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_API_URL: /api
+          FRONTEND_ORIGIN: ${{ vars.FRONTEND_ORIGIN }}
+        run: |
+          node deploy/production/check-public-env.mjs
+          npm run build
+          node -e 'require("fs").writeFileSync("deployment-target.json", JSON.stringify({environment:process.env.DEPLOY_ENV,supabase:process.env.VITE_SUPABASE_URL,origin:process.env.FRONTEND_ORIGIN}))'
+      - name: Package exact tested source and frontend
+        env:
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: |
+          mkdir -p /tmp/crm-package
+          git archive "$RELEASE_SHA" | tar -x -C /tmp/crm-package
+          cp -R client/dist /tmp/crm-package/client/dist
+          cp deployment-target.json /tmp/crm-package/deployment-target.json
+          printf '%s\n' "$RELEASE_SHA" > /tmp/crm-package/RELEASE_SHA
+          tar -czf /tmp/release.tar.gz -C /tmp/crm-package .
+      - name: Upload and deploy
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: bash deploy/production/remote.sh
+      - name: Record outcome
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: printf 'Release %s — %s. Inspect the deployment log; database migrations never run here.\n' "$RELEASE_SHA" "$RESULT" >> "$GITHUB_STEP_SUMMARY"

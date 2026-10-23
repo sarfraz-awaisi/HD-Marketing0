@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizePhone } from "./phoneMask.js";
 export const uuid = z.string().uuid();
 export const mfaVerification = z
   .object({ factor_id: uuid, code: z.string().regex(/^\d{6}$/) })
@@ -138,20 +139,6 @@ export const schemas = {
       outcome: z.enum(outcomes),
       notes: text.default(""),
       deal_tags: z.array(z.enum(tags)).max(7).default([]),
-    })
-    .strict(),
-  properties: z
-    .object({
-      title: text.min(1).max(200),
-      description: text.default(""),
-      location: text.min(1).max(200),
-      price: amount,
-      type: text.min(1).max(100),
-      area: z.coerce.number().positive(),
-      area_unit: z.enum(["sq ft", "marla", "kanal"]),
-      availability: z
-        .enum(["available", "reserved", "sold", "archived"])
-        .default("available"),
     })
     .strict(),
   followups: z
@@ -604,3 +591,228 @@ export const attendancePolicy = z
       path: ["grace_minutes"],
     },
   );
+// Property inventory (update 041). Bodies never carry an owner: the signed-in
+// account decides whether a property is company or private agent inventory.
+export const propertyTypes = [
+  "House",
+  "Apartment",
+  "Residential Plot",
+  "Portion",
+  "Farmhouse",
+  "Shop",
+  "Office",
+  "Commercial Plot",
+  "Warehouse",
+  "Building",
+  "Land",
+  "Other",
+];
+export const propertyStatuses = [
+  "available",
+  "reserved",
+  "sold",
+  "rented",
+  "archived",
+];
+export const areaUnits = ["sq ft", "sq yd", "marla", "kanal", "acre"];
+export const provinces = [
+  "Punjab",
+  "Sindh",
+  "Khyber Pakhtunkhwa",
+  "Balochistan",
+  "Islamabad Capital Territory",
+  "Gilgit-Baltistan",
+  "Azad Jammu and Kashmir",
+];
+export const amenities = [
+  "electricity",
+  "gas",
+  "water",
+  "sewerage",
+  "internet",
+  "boundary_wall",
+  "security",
+  "corner",
+  "park_facing",
+  "main_road",
+  "lift",
+  "backup_power",
+  "solar",
+  "servant_quarter",
+  "basement",
+  "lawn",
+  "drawing_room",
+  "store_room",
+];
+const optionalText = (max) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .nullable()
+    .transform((v) => v || null);
+const roomCount = (max) => z.number().int().min(0).max(max).nullable();
+const ownerPhone = z
+  .string()
+  .trim()
+  .max(30)
+  .nullable()
+  .transform((v, ctx) => {
+    if (!v) return null;
+    try {
+      return normalizePhone(v);
+    } catch {
+      ctx.addIssue({ code: "custom", message: "Use a valid phone number" });
+      return z.NEVER;
+    }
+  });
+const propertyFields = {
+  title: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(4000),
+  type: z.enum(propertyTypes),
+  purpose: z.enum(["sale", "rent"]),
+  availability: z.enum(propertyStatuses),
+  price: z.coerce.number().min(0).max(1e13),
+  price_negotiable: z.boolean(),
+  price_notes: optionalText(300),
+  area: z.coerce.number().positive().max(1e9),
+  area_unit: z.enum(areaUnits),
+  province: z.enum(provinces).nullable(),
+  city: z.string().trim().min(1).max(80),
+  area_society: optionalText(120),
+  block_sector: optionalText(60),
+  street: optionalText(120),
+  plot_number: optionalText(40),
+  address: optionalText(300),
+  map_url: optionalText(500).refine((v) => !v || /^https:\/\/\S+$/.test(v), {
+    message: "Use a map link that starts with https://",
+  }),
+  bedrooms: roomCount(50),
+  bathrooms: roomCount(50),
+  kitchens: roomCount(20),
+  floors: roomCount(200),
+  parking_spaces: roomCount(100),
+  property_age: roomCount(200),
+  furnishing: z.enum(["unfurnished", "semi_furnished", "furnished"]).nullable(),
+  construction_status: z
+    .enum([
+      "new",
+      "ready",
+      "needs_renovation",
+      "under_construction",
+      "grey_structure",
+    ])
+    .nullable(),
+  amenities: z
+    .array(z.enum(amenities))
+    .max(20)
+    .refine((list) => new Set(list).size === list.length, {
+      message: "Choose each amenity once",
+    }),
+  owner_contact: z
+    .object({
+      owner_name: optionalText(120),
+      owner_phone: ownerPhone,
+      owner_alt_phone: ownerPhone,
+      owner_notes: optionalText(1000),
+      share_with_agents: z.boolean(),
+    })
+    .partial()
+    .strict()
+    .nullable(),
+};
+const statusMatchesPurpose = {
+  check: (v) =>
+    !(v.availability === "sold" && v.purpose === "rent") &&
+    !(v.availability === "rented" && v.purpose === "sale"),
+  error: {
+    message: "Use Sold for sale listings and Rented for rent listings",
+    path: ["availability"],
+  },
+};
+export const propertyCreate = z
+  .object(propertyFields)
+  .partial()
+  .required({
+    title: true,
+    type: true,
+    purpose: true,
+    price: true,
+    area: true,
+    area_unit: true,
+    city: true,
+  })
+  .strict()
+  .refine(statusMatchesPurpose.check, statusMatchesPurpose.error);
+// Only the fields sent change. expected_updated_at is the updated_at the
+// editor loaded; a newer save by someone else is then refused (HTTP 409).
+export const propertyUpdate = z
+  .object({
+    ...propertyFields,
+    expected_updated_at: z.iso.datetime({ offset: true }),
+  })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).some((k) => k !== "expected_updated_at"), {
+    message: "Change at least one detail",
+  })
+  .refine(statusMatchesPurpose.check, statusMatchesPurpose.error);
+const blankAsMissing = (schema) =>
+  z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
+const filterText = z
+  .string()
+  .trim()
+  .max(100)
+  .regex(/^[\p{L}\p{N} @.,#/'_-]*$/u);
+const priceFilter = z.coerce.number().min(0).max(1e13);
+export const inventoryQuery = z
+  .object({
+    scope: z.enum(["company", "mine", "agent"]).default("company"),
+    agent: blankAsMissing(uuid),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    search: blankAsMissing(filterText),
+    type: blankAsMissing(z.enum(propertyTypes)),
+    purpose: blankAsMissing(z.enum(["sale", "rent"])),
+    status: blankAsMissing(z.enum(propertyStatuses)),
+    city: blankAsMissing(filterText.max(80)),
+    min_price: blankAsMissing(priceFilter),
+    max_price: blankAsMissing(priceFilter),
+    sort: z
+      .enum(["newest", "oldest", "price_low", "price_high", "updated", "title"])
+      .default("newest"),
+    covers: z.enum(["true", "false"]).optional(),
+  })
+  .strict()
+  .refine((v) => (v.scope === "agent") === Boolean(v.agent), {
+    message: "Choose an agent only for an agent's inventory",
+    path: ["agent"],
+  })
+  .refine(
+    (v) =>
+      v.min_price === undefined ||
+      v.max_price === undefined ||
+      v.min_price <= v.max_price,
+    {
+      message: "The minimum price must not exceed the maximum",
+      path: ["max_price"],
+    },
+  );
+export const inventoryAgentsQuery = z
+  .object({
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    search: blankAsMissing(filterText),
+  })
+  .strict();
+export const photoOrder = z
+  .object({
+    photo_ids: z
+      .array(uuid)
+      .min(1)
+      .max(20)
+      .refine((ids) => new Set(ids).size === ids.length, {
+        message: "List each picture once",
+      }),
+  })
+  .strict();

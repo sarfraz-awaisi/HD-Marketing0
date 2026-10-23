@@ -15,7 +15,6 @@ import request from "supertest";
 import { createApp } from "../src/app.js";
 import { digest } from "../src/services/accountsSecurity.js";
 import { trustedMfaFixture } from "./trusted-mfa-fixture.js";
-import { sensitiveLimit } from "../src/middleware/rateLimit.js";
 const admin = "d2800000-0000-4000-8000-000000000001",
   agent = "d2800000-0000-4000-8000-000000000002",
   other = "d2800000-0000-4000-8000-000000000003",
@@ -91,8 +90,6 @@ beforeAll(async () => {
 }, 30000);
 afterAll(() => pg?.close());
 beforeEach(async () => {
-  sensitiveLimit.resetKey("127.0.0.1");
-  sensitiveLimit.resetKey("::ffff:127.0.0.1");
   await pg.exec("truncate auth.users cascade;");
   await pg.query(
     "insert into auth.users(id,email,email_confirmed_at) values($1,'admin@example.test',now()),($2,$4,now()),($3,'other@example.test',now())",

@@ -24,8 +24,6 @@ import {
   UID_FORMAT_MESSAGE,
   UID_TAKEN_MESSAGE,
 } from "../src/services/accountProvisioning.js";
-import { sensitiveLimit } from "../src/middleware/rateLimit.js";
-import { accountsSecurityLimit } from "../src/routes/accounts.routes.js";
 const admin = "c1000000-0000-4000-8000-000000000001",
   agent = "c1000000-0000-4000-8000-000000000002",
   grant = "fixture-invitation-grant",
@@ -227,9 +225,6 @@ afterAll(async () => {
   await pg?.close();
 });
 beforeEach(async () => {
-  accountsSecurityLimit.resetKey(admin);
-  sensitiveLimit.resetKey("127.0.0.1");
-  sensitiveLimit.resetKey("::ffff:127.0.0.1");
   await pg.exec("truncate auth.users cascade;");
   await pg.query(
     "insert into auth.users(id,email,email_confirmed_at) values($1,'admin@example.test',now()),($2,'agent@example.test',now())",

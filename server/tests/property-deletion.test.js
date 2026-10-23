@@ -270,7 +270,7 @@ describe("property delete API and file cleanup", () => {
     expect(response.status).toBe(409);
     expect(response.body.error).toMatch(/Archive/);
   });
-  it("denies unauthenticated, agent, disabled and invalid-ID requests before RPC", async () => {
+  it("denies unauthenticated, disabled and invalid-ID requests before RPC", async () => {
     const unauth = client();
     expect(
       (
@@ -279,16 +279,26 @@ describe("property delete API and file cleanup", () => {
         )
       ).status,
     ).toBe(401);
-    for (const database of [client("agent"), client("admin", false)]) {
-      expect(
-        (
-          await request(createApp(trustedMfaFixture(database)))
-            .delete("/api/properties/" + property)
-            .set("Authorization", "Bearer valid")
-        ).status,
-      ).toBe(403);
-      expect(database.rpc).not.toHaveBeenCalled();
-    }
+    const disabled = client("admin", false);
+    expect(
+      (
+        await request(createApp(trustedMfaFixture(disabled)))
+          .delete("/api/properties/" + property)
+          .set("Authorization", "Bearer valid")
+      ).status,
+    ).toBe(403);
+    expect(disabled.rpc).not.toHaveBeenCalled();
+    // Agents may delete their own inventory (update 041), so the database
+    // decides: this company property is read-only for them.
+    const agentClient = client("agent");
+    const refused = await request(createApp(trustedMfaFixture(agentClient)))
+      .delete("/api/properties/" + property)
+      .set("Authorization", "Bearer valid");
+    expect(refused.status).toBe(403);
+    expect(agentClient.rpc).toHaveBeenCalledOnce();
+    expect(
+      await one("select id from properties where id=$1", [property]),
+    ).toBeTruthy();
     const invalid = client();
     expect(
       (

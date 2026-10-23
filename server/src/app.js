@@ -4,11 +4,7 @@ import helmet from "helmet";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { auth } from "./middleware/auth.js";
-import {
-  sensitiveLimit,
-  metaWebhookLimit,
-  createApiLimiters,
-} from "./middleware/rateLimit.js";
+import { createApiLimiters } from "./middleware/rateLimit.js";
 import { crmRouter } from "./routes/crm.routes.js";
 import { webhooksRouter } from "./routes/webhooks.routes.js";
 import { protectAgentPhones } from "./middleware/phoneProtection.js";
@@ -21,10 +17,11 @@ import { trustProxy } from "./config/runtime.js";
 import { healthRouter } from "./routes/health.routes.js";
 export function createApp(db, options = {}) {
   const app = express();
-  // options.rateLimits lets tests use small limits; production uses defaults.
-  const { publicLimit, unauthenticatedLimit, userLimit } = createApiLimiters(
-    options.rateLimits,
-  );
+  // Production reads the RATE_LIMIT_* settings (docs/RATE_LIMITS.md);
+  // options.rateLimits lets tests use small limits. Route modules reach these
+  // limiters through the policy middleware in rateLimit.js.
+  const limits = createApiLimiters(options.rateLimits);
+  app.locals.rateLimiters = limits;
   app.disable("x-powered-by");
   app.set("trust proxy", trustProxy(process.env.TRUST_PROXY || "loopback"));
   app.use(helmet());
@@ -33,53 +30,88 @@ export function createApp(db, options = {}) {
   );
   app.use((req, res, next) => {
     req.id = randomUUID();
+    if (process.env.NODE_ENV === "production") {
+      const started = performance.now();
+      res.once("finish", () =>
+        console.log(
+          JSON.stringify({
+            event: "request",
+            request_id: req.id,
+            method: req.method,
+            status: res.statusCode,
+            duration_ms: Math.round(performance.now() - started),
+            release: process.env.RELEASE_SHA || "unknown",
+          }),
+        ),
+      );
+    }
     res.set("X-Request-ID", req.id);
+    if (/^[a-f0-9]{40}$/.test(process.env.RELEASE_SHA || ""))
+      res.set("X-Release-SHA", process.env.RELEASE_SHA);
     res.set("Cache-Control", "no-store");
     next();
+  });
+  app.get("/ready", async (_req, res) => {
+    if (options.lifecycle?.draining)
+      return res.status(503).json({ status: "draining" });
+    try {
+      const { error } = await db
+        .from("profiles")
+        .select("id")
+        .limit(1)
+        .abortSignal(AbortSignal.timeout(5000));
+      if (error) throw new Error("Database unavailable");
+      res.json({
+        status: "ready",
+        release: process.env.RELEASE_SHA || "development",
+      });
+    } catch {
+      res.status(503).json({ status: "unavailable" });
+    }
   });
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
   app.use(
     "/api/integrations/meta/webhook",
-    metaWebhookLimit,
+    limits.metaWebhook,
     express.raw({ type: "application/json", limit: "256kb" }),
     metaWebhookRouter(db),
   );
   app.use("/api/integrations/meta/callback", metaCallbackRouter(db, options));
   app.use(
     "/api/webhooks",
-    sensitiveLimit,
+    limits.callbacks,
     express.raw({ type: "application/json", limit: "256kb" }),
     webhooksRouter(db),
   );
   app.use(express.json({ limit: "256kb" }));
-  app.use("/api/auth", publicLimit, authRouter(db, options));
-  app.use("/api/onboarding", publicLimit, onboardingRouter(db));
+  app.use("/api/auth", limits.public, authRouter(db, options));
+  app.use("/api/onboarding", limits.public, onboardingRouter(db));
   app.use(
     "/api/health",
-    unauthenticatedLimit,
+    limits.unauthenticated,
     auth(db),
-    userLimit,
+    limits.perUser,
     healthRouter(db),
   );
   app.use(
     "/api/mfa",
-    unauthenticatedLimit,
+    limits.unauthenticated,
     auth(db, { allowMfaSetup: true }),
-    userLimit,
+    limits.perUser,
     mfaRouter(db, options),
   );
   app.use(
     "/api/integrations/meta",
-    unauthenticatedLimit,
+    limits.unauthenticated,
     auth(db),
-    userLimit,
+    limits.perUser,
     metaRouter(db, options),
   );
   app.use(
     "/api",
-    unauthenticatedLimit,
+    limits.unauthenticated,
     auth(db),
-    userLimit,
+    limits.perUser,
     protectAgentPhones,
     crmRouter(db, options),
   );

@@ -1,5 +1,7 @@
 # Property deletion and responsive controls
 
+> **Update 041:** `delete_property` is now ownership-aware. Administrators delete company properties and agents delete their own; administrators cannot delete an agent's property. Linked records, the photo cleanup queue and the audit entry work as described below. See [PROPERTY_INVENTORY.md](PROPERTY_INVENTORY.md).
+
 This change adds **Delete property** beside **Edit property** when an administrator opens a property. Agents can view properties without these management controls. Opening the confirmation or choosing Cancel does not delete anything. The destructive action displays a pending state, prevents duplicate submissions and keeps the dialog open on failure.
 
 ## Existing hosted project

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { sensitiveLimit } from "../middleware/rateLimit.js";
+import { onboardingLimit } from "../middleware/rateLimit.js";
 import { digest } from "../services/accountsSecurity.js";
 const ticket = z.string().regex(/^[a-f0-9]{64}$/);
 function result({ data, error }) {
@@ -20,7 +20,6 @@ function result({ data, error }) {
 }
 export function onboardingRouter(db) {
   const router = Router();
-  router.use(sensitiveLimit);
   router.use(async (req, res, next) => {
     const token = req.headers.authorization?.match(/^Bearer (\S+)$/)?.[1];
     if (!token)
@@ -36,6 +35,10 @@ export function onboardingRouter(db) {
     req.invitedUser = data.user;
     next();
   });
+  // Counted per invited user Supabase verified, so several new employees
+  // can accept their invitations from one office at the same time. The
+  // public per-IP limit in app.js still caps unverified attempts.
+  router.use(onboardingLimit);
   router.post("/context", async (req, res) => {
     const data = z.object({ ticket }).strict().parse(req.body);
     res.json(

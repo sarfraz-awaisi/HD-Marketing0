@@ -23,7 +23,8 @@ import {
   UsersRound,
 } from "lucide-react";
 // Sidebar sections per role. Paths, labels and role access are unchanged from
-// the previous flat menu; only the grouping and icons are new.
+// the previous flat menu; only the grouping and icons are new. Properties
+// became Inventory in update 041 (/properties redirects there).
 export const adminNavigation = [
   { label: "", links: [["/", "Overview", LayoutDashboard]] },
   {
@@ -42,7 +43,7 @@ export const adminNavigation = [
   {
     label: "Resources",
     links: [
-      ["/properties", "Properties", Building2],
+      ["/inventory", "Inventory", Building2],
       ["/documents", "Documentation & policies", BookOpen],
     ],
   },
@@ -82,7 +83,7 @@ export const agentNavigation = [
   {
     label: "Resources",
     links: [
-      ["/properties", "Properties", Building2],
+      ["/inventory", "Inventory", Building2],
       ["/documents", "Documentation & policies", BookOpen],
     ],
   },

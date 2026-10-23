@@ -1,0 +1,41 @@
+name: Production
+# Manual only: a person starts each release from main with the exact commit.
+# There is no staging environment. The commit must be part of main and have
+# passed CI there; the release job then needs an approval recorded by the
+# protected "production" GitHub environment.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character commit on main that passed CI
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-production
+  cancel-in-progress: false
+jobs:
+  ci-evidence:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require a successful CI run of this exact main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Enter the full 40-character commit SHA"; exit 1; }
+          # Part of main: the commit is main's head or one of its ancestors.
+          gh api "repos/$GH_REPO/compare/$RELEASE_SHA...$GITHUB_SHA?per_page=1" --jq .status | grep -Eqx 'ahead|identical' \
+            || { echo "::error::$RELEASE_SHA is not part of main"; exit 1; }
+          gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&status=success&event=push&per_page=100" \
+            --jq '.workflow_runs | any(.head_branch == "main" and .conclusion == "success")' | grep -qx true \
+            || { echo "::error::No successful CI run of $RELEASE_SHA on main"; exit 1; }
+  deploy:
+    needs: ci-evidence
+    uses: ./.github/workflows/release.yml
+    with:
+      sha: ${{ inputs.sha }}

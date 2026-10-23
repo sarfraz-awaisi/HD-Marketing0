@@ -51,9 +51,10 @@ Every user needs a valid Supabase login with a confirmed email and an active CRM
 | Follow-ups, site visits and deals                                | Create/edit across the workspace                        | Create/edit for own currently assigned leads                               |
 | Call review page                                                 | Yes                                                     | Use the call timeline within an assigned lead                              |
 | Recording playback endpoint                                      | Admin only, when a valid recording exists               | No                                                                         |
-| View property cards, details and pictures                        | Yes                                                     | Yes                                                                        |
-| Create/edit/archive/delete a property                            | Yes; deletion requires no linked leads, visits or deals | No                                                                         |
-| Upload/delete property pictures                                  | Yes                                                     | No                                                                         |
+| View company properties, details and pictures                    | Yes                                                     | Yes                                                                        |
+| Create/edit/archive/delete a company property                    | Yes; deletion requires no linked leads, visits or deals | No                                                                         |
+| Keep a private property inventory                                | No; reads every agent's inventory                       | Yes; own properties only                                                   |
+| Upload/order/delete property pictures                            | Company properties                                      | Own properties                                                             |
 | Read/filter/download documents and policies                      | Yes                                                     | Shared categories and own clients' KYC                                     |
 | Create/edit/delete documents or attachments                      | Yes                                                     | No                                                                         |
 | Set or edit monthly targets                                      | Yes, for active agents                                  | No; view own targets and progress                                          |
@@ -107,11 +108,11 @@ Sign out clears the workspace's query cache. Disabled accounts are rejected by s
 
 ### Administrator sidebar
 
-Overview, Leads, Deleted leads, Task assign, Properties, Documentation & policies, Call review, Follow-ups, Site visits, Deals, Team targets, Team, Accounts, Admin settings, Reports, Audit history and Security alerts.
+Overview, Leads, Deleted leads, Task assign, Inventory, Documentation & policies, Call review, Follow-ups, Site visits, Deals, Team targets, Team, Accounts, Admin settings, Reports, Audit history and Security alerts.
 
 ### Agent sidebar
 
-My overview, My leads, Follow-ups, Site visits, My deals, Properties, My targets and Documentation & policies.
+My overview, My leads, Follow-ups, Site visits, My deals, Inventory, My targets and Documentation & policies.
 
 ### Dashboard information
 
@@ -310,6 +311,8 @@ Administrators can see and edit workspace deals. Agents see deals connected to c
 Closed revenue is the sum of the recorded values of won deals in the selected reporting period. It is a sales-performance measure, not a payment ledger, collected cash, commission calculation, invoice or accounting statement. Payments, commission splits, installment schedules and invoicing are not implemented.
 
 ## 12. Properties, uploaded pictures and full details
+
+> **Update 041 (22 October 2026):** Properties is now **Inventory**. Agents keep a private inventory they fully manage, administrators manage the company inventory agents can only read, and administrators read every agent's inventory without changing it. The form has Pakistan-specific location, size, rent/sale, building, amenity and private owner-contact fields. Where this section differs, [PROPERTY_INVENTORY.md](PROPERTY_INVENTORY.md) is current.
 
 ### Viewing properties in both portals
 
@@ -1159,7 +1162,7 @@ The current inventory covers 194 JavaScript/JSX modules, 558 explicitly named Ja
 | `server/src/middleware/auditLogger.js`        | `audit`                                                                                                                                                                                                            | Persist request-linked, bounded audit records.                                                                                                             |
 | `server/src/middleware/auth.js`               | `tokenSubject`, `auth`, `reads`, `readProfile`                                                                                                                                                                     | Verify native identity, confirmation, current active role (with UID when update 036 is installed), signed assurance and reset state before CRM access.     |
 | `server/src/middleware/phoneProtection.js`    | `maskAgentResponse`, `protectAgentPhones`, `restore`                                                                                                                                                               | Mask agent free text while preserving SQL-authorized structured contact fields.                                                                            |
-| `server/src/middleware/rateLimit.js`          | `createApiLimiters`                                                                                                                                                                                                | Sensitive-route IP limits; general limits per verified user after sign-in, per IP for public and unauthenticated requests.                                 |
+| `server/src/middleware/rateLimit.js`          | `createApiLimiters`                                                                                                                                                                                                | Rate-limit policies (docs/RATE_LIMITS.md): per verified user after sign-in, per IP for public and unauthenticated requests.                                 |
 | `server/src/middleware/role.js`               | `adminOnly`                                                                                                                                                                                                        | Reject requests lacking the required administrator role.                                                                                                   |
 | `server/src/routes/accounts.routes.js`        | `fail`, `checked`, `authResult`, `accountsRouter`, `session`, `grant`, `rpc`, `gate`, `action`, `update`, `confirmation`, `unban`, `invite`, `sendAccountCode`                                                     | Personal PIN/grant endpoints and protected account operations.                                                                                             |
 | `server/src/routes/attendance.routes.js`      | `attendanceRpc`, `addDays`, `monthRange`, `filters`, `page`, `attendanceRouter`, `self`, `time`, `hours`, `dayCell`, `dailySheet`, `periodSheet`, `sendSheet`, `attendanceAdminRouter`, `admin`, `daily`, `period` | Self-service attendance and admin attendance routes, reports and CSV/XLSX exports (update 040).                                                            |

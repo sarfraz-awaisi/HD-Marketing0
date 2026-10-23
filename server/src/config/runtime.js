@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { rateLimitSettings } from "../middleware/rateLimit.js";
 export function trustProxy(value = "loopback") {
   if (value === "false") return false;
   const entries = value.split(",").map((item) => item.trim());
@@ -23,6 +24,8 @@ export function trustProxy(value = "loopback") {
 }
 export function validateRuntime(env = process.env) {
   trustProxy(env.TRUST_PROXY || "loopback");
+  // Throws for a RATE_LIMIT_* value that is not a whole number >= 1.
+  rateLimitSettings(env);
   const port = Number(env.PORT || 3001),
     interval = Number(env.JOB_INTERVAL_SECONDS || 60);
   if (!Number.isInteger(port) || port < 1 || port > 65535)

@@ -187,7 +187,7 @@ describe("call button and call dialog", () => {
     expect(screen.getByLabelText("Duration minutes")).toHaveValue(2);
     expect(screen.getByLabelText("Duration seconds")).toHaveValue(7);
     expect(screen.getByText(/Call ended after 2:07/)).toBeInTheDocument();
-    vi.useRealTimers();
+    // Keep validation on the same clock as the call; wall time may be days later.
     fireEvent.change(screen.getByLabelText("Call outcome"), {
       target: { value: "Interested" },
     });
@@ -199,6 +199,7 @@ describe("call button and call dialog", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
+    vi.useRealTimers();
     expect(manualPosts()).toHaveLength(1);
     expect(manualPosts()[0][0]).toBe(`/leads/${baseLead.id}/calls/manual`);
     expect(manualPosts()[0][1].body).toEqual({

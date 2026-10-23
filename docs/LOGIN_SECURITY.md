@@ -48,9 +48,9 @@ Several employees usually share one public office IP, so the general API limit n
 
 - **Signed-in requests:** 1,000 per 15 minutes **per user**, counted after the server has verified the session with Supabase and found the account active. The user is never taken from a request header, the body or an unverified token claim. An idle admin Overview polls roughly 80–90 times in 15 minutes, so normal use stays far below the limit.
 - **Requests that fail sign-in checks** (no token, invalid or expired token, disabled account, two-factor not completed): 300 per 15 minutes **per IP**, as before. Verified requests are released from this count when they finish.
-- **Unchanged:** the sign-in route's 30 attempts per 15 minutes per network, the account lockout above, the 300-per-15-minutes limit on public sign-in and onboarding routes, the 30-per-minute limit on sensitive actions (accounts, PIN, phone numbers, call logging, webhooks) and the two-factor limit.
+- **Updated 22 October 2026:** sensitive actions (30 a minute), authenticator codes and invitation set-up are now also counted per user, the sign-in route counts only refused attempts (30 per 15 minutes per network) and password reset has its own limit (5 per 15 minutes per network). The account lockout above is unchanged. All limits and their settings: [RATE_LIMITS.md](RATE_LIMITS.md).
 - A blocked request still receives HTTP 429 with the same message and `RateLimit` headers.
 - Counts are kept in the API process's memory. That suits the single PM2 API process; running several API processes would need a shared store.
 
-Code: `server/src/middleware/rateLimit.js` (`createApiLimiters`) and `server/src/app.js`. Tests: `server/tests/api-rate-limits.test.js`.
+Code: `server/src/middleware/rateLimit.js` and `server/src/app.js`. Tests: `server/tests/api-rate-limits.test.js` and `server/tests/rate-limit-deployment.test.js`.
 

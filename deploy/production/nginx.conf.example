@@ -1,0 +1,5 @@
+# Install as /etc/nginx/conf.d/hd-crm-limits.conf (http context).
+# Shared memory survives graceful reloads. Existing per-user Express limits remain.
+limit_req_zone $binary_remote_addr zone=crm_api:10m rate=50r/s;
+# Logs intentionally omit URLs, queries, cookies, bodies and authorization.
+log_format crm_safe '$time_iso8601 $status $request_time $upstream_response_time';

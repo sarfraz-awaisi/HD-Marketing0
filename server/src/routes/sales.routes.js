@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { adminOnly } from "../middleware/role.js";
-import { sensitiveLimit } from "../middleware/rateLimit.js";
+import {
+  exportLimit,
+  reportLimit,
+  sensitiveLimit,
+} from "../middleware/rateLimit.js";
 import {
   leadReviewQuery,
   leadReviewKeep,
@@ -350,19 +354,27 @@ export function salesRouter(db) {
       ),
     );
   });
-  router.get("/reports/:type", async (req, res, next) => {
-    if (!Object.hasOwn(reports, req.params.type)) return next();
+  // Other paths (such as /reports/export) continue to the next router before
+  // any report limit is counted.
+  const known = (req, _res, next) =>
+    next(Object.hasOwn(reports, req.params.type) ? undefined : "route");
+  router.get("/reports/:type", known, reportLimit, async (req, res) => {
     res.json(await runReport(db, req, req.params.type));
   });
-  router.get("/reports/:type/export", adminOnly, async (req, res, next) => {
-    if (!Object.hasOwn(reports, req.params.type)) return next();
-    const rows = reports[req.params.type].csv(
-      await runReport(db, req, req.params.type),
-    );
-    res
-      .type("text/csv")
-      .attachment(`hd-marketing-${req.params.type}-report.csv`)
-      .send(rows.map((row) => row.map(csvCell).join(",")).join("\r\n"));
-  });
+  router.get(
+    "/reports/:type/export",
+    adminOnly,
+    known,
+    exportLimit,
+    async (req, res) => {
+      const rows = reports[req.params.type].csv(
+        await runReport(db, req, req.params.type),
+      );
+      res
+        .type("text/csv")
+        .attachment(`hd-marketing-${req.params.type}-report.csv`)
+        .send(rows.map((row) => row.map(csvCell).join(",")).join("\r\n"));
+    },
+  );
   return router;
 }

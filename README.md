@@ -1,5 +1,7 @@
 # HD Marketing CRM
 
+For the non-Docker Hostinger production setup, use [the Nginx/PM2 blue-green deployment guide](HD_MARKETING_PRODUCTION_DEPLOYMENT.md), [audit](docs/PRODUCTION_AUDIT.md), and [verification results](docs/PRODUCTION_VERIFICATION.md). No live deployment has been performed.
+
 A locally run React/Express CRM for a real estate sales team. Navy, white and gold responsive workspace with separate admin and agent navigation. Supabase provides actual Auth, PostgreSQL and private Storage. No external resources have been created or deployed.
 
 The [complete Word manual](docs/HD_Marketing_CRM_Complete_Documentation.docx) explains both portals, permissions, daily workflows, all implemented modules, account security, setup, API routes and named functions. Its [editable source](docs/CRM_COMPLETE_DOCUMENTATION.md) can be updated and rebuilt with `python3 scripts/build-project-doc.py` using Python's standard library.
@@ -114,6 +116,8 @@ Admins and Agents check in and out under **My attendance**, using the database c
 
 Absences are worked out from the schedule, never stored, and attendance never changes lead ownership. Apply **040_attendance.sql after 039**. [Full guide](docs/ATTENDANCE_MANAGEMENT.md).
 
+**Inventory** (formerly Properties) gives every agent a private property inventory and keeps the administrators' company inventory, which agents can browse but not change. Administrators can open any agent's inventory read-only from **Inventory → Agent inventories**. Apply **041_property_inventory.sql after 040** before deploying this code. [Full guide](docs/PROPERTY_INVENTORY.md).
+
 This Mac can keep **daily encrypted backups** of the database and all uploaded files (30 days, in `~/HD-CRM-Backups`). Set it up once with `brew install libpq age` and `node scripts/install-mac-backup.mjs`, then add the database address. [Setup, checking and restore](docs/BACKUPS.md).
 
 ## Administrator sign-in and optional agent MFA
@@ -131,7 +135,7 @@ Agents remain optional by default (`REQUIRE_AGENT_MFA=false`); unenrolled agents
 | Documentation & policies                | Create/edit/delete all entries and files                          | Shared guidance; own clients' KYC  |
 | Full phone                              | Automatic; all leads, audited                                     | Automatic; assigned leads, audited |
 | Calls, notes, follow-ups, visits, deals | All records                                                       | Current assigned lead only         |
-| Properties                              | Create/edit/archive/delete; private photos                        | Read and authorized photo links    |
+| Inventory (properties)                  | Manage company inventory; read every agent's inventory            | Manage own; read company inventory |
 | Targets                                 | Set per agent/month                                               | Personal targets/progress          |
 | Team, reports CSV, audit, recordings    | Allowed                                                           | Denied                             |
 | Accounts and admin security settings    | Active admin; account operations also require personal PIN unlock | Denied                             |
@@ -200,7 +204,7 @@ Admin dashboard metrics use the current Pakistan month. Agent overview also show
 
 ## API routes
 
-All `/api` routes require a verified Bearer token except the signature-verified webhook boundary. Limits: JSON 256 KB, uploads 5 MB for photos/lead imports and 10 MB for documentation files, page size 1–100, general API rate limit 300 requests/15 minutes per IP; sensitive routes 30/minute (development single-instance limiter).
+All `/api` routes require a verified Bearer token except the signature-verified webhook boundary. Limits: JSON 256 KB, uploads 5 MB for photos/lead imports and 10 MB for documentation files, page size 1–100, API rate limits per verified user once signed in and per IP before sign-in, configurable with `RATE_LIMIT_*` (see [docs/RATE_LIMITS.md](docs/RATE_LIMITS.md)).
 
 | Routes                                                                      | Behavior                                                                                           |
 | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
@@ -314,7 +318,7 @@ To verify against real Supabase after setup:
 - **Real call 503**: expected until a real provider adapter is implemented and configured.
 - **Tests listen EPERM**: grant local port access; Supertest opens temporary listeners.
 
-The API is bound to localhost. For future multi-instance deployment, replace the in-memory IP rate limiter with a shared store, configure trusted proxy boundaries, review provider adapters and run the real-service checks above. No deployment is included.
+The API is bound to localhost. Rate-limit counts are kept per API process (see [docs/RATE_LIMITS.md](docs/RATE_LIMITS.md)); before running several active API processes for one environment, add a shared rate-limit store, configure trusted proxy boundaries, review provider adapters and run the real-service checks above. No deployment is included.
 
 ## Production deployment and system monitoring (P6)
 

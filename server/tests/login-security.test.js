@@ -13,7 +13,7 @@ import { readFile, readdir } from "node:fs/promises";
 import request from "supertest";
 import { createApp } from "../src/app.js";
 import { trustedMfaFixture } from "./trusted-mfa-fixture.js";
-import { SIGN_IN_REFUSED, loginLimit } from "../src/routes/auth.routes.js";
+import { SIGN_IN_REFUSED } from "../src/routes/auth.routes.js";
 const admin = "a7000000-0000-4000-8000-000000000001",
   agent = "a7000000-0000-4000-8000-000000000002";
 const passwords = {
@@ -54,8 +54,6 @@ const hoursIncludingNow = () =>
 const hoursExcludingNow = () =>
   `${String((pakistanHour() + 1) % 24).padStart(2, "0")}-${String((pakistanHour() + 2) % 24).padStart(2, "0")}`;
 beforeEach(async () => {
-  loginLimit.resetKey("::ffff:127.0.0.1");
-  loginLimit.resetKey("127.0.0.1");
   await pg.exec(
     "truncate auth.users cascade;truncate crm_private.login_attempts;",
   );

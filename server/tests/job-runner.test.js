@@ -40,7 +40,8 @@ beforeEach(() => {
   vi.resetModules();
   fixture.db.rpc.mockReset().mockResolvedValue({ data: null });
   for (const job of fixture.jobs) job.mockReset().mockResolvedValue({});
-  vi.spyOn(globalThis, "setInterval").mockReturnValue(0);
+  vi.spyOn(process, "once").mockReturnValue(process);
+  vi.spyOn(globalThis, "setTimeout").mockReturnValue(0);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -56,7 +57,7 @@ describe("durable Meta work alongside existing maintenance jobs", () => {
     expect(JSON.stringify(console.error.mock.calls)).not.toContain(
       "private-token",
     );
-    expect(setInterval).toHaveBeenCalledOnce();
+    expect(setTimeout).toHaveBeenCalledOnce();
   });
   it("continues retention and ingestion after an earlier database job reports failure", async () => {
     fixture.jobs[5].mockResolvedValue({

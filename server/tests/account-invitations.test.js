@@ -20,8 +20,6 @@ import {
   checkEmailProvider,
   invitationRedirect,
 } from "../src/services/accountInvitations.js";
-import { sensitiveLimit } from "../src/middleware/rateLimit.js";
-import { accountsSecurityLimit } from "../src/routes/accounts.routes.js";
 const admin = "c1000000-0000-4000-8000-000000000001",
   agent = "c1000000-0000-4000-8000-000000000002",
   grant = "fixture-invitation-grant";
@@ -194,9 +192,6 @@ afterAll(async () => {
   await pg?.close();
 });
 beforeEach(async () => {
-  accountsSecurityLimit.resetKey(admin);
-  sensitiveLimit.resetKey("127.0.0.1");
-  sensitiveLimit.resetKey("::ffff:127.0.0.1");
   await pg.exec("truncate auth.users cascade;");
   await pg.query(
     "insert into auth.users(id,email,email_confirmed_at) values($1,'admin@example.test',now()),($2,'agent@example.test',now())",
@@ -702,7 +697,8 @@ describe("account codes verified inside Accounts", () => {
   });
   it("rejects forged verification fields, malformed codes and weak passwords before native verification", async () => {
     const id = await createdCode("agent");
-    accountsSecurityLimit.resetKey(admin);
+    // This test sends more PIN-protected requests than one allowance holds.
+    app.locals.rateLimiters.accountSecurity.resetKey("user:" + admin);
     for (const body of [
       { code: "12" },
       { code: "1234" },

@@ -830,9 +830,6 @@ describe("lead management HTTP authorization and visibility", () => {
     const request = (await import("supertest")).default,
       { createApp } = await import("../src/app.js"),
       { trustedMfaFixture } = await import("./trusted-mfa-fixture.js");
-    const { sensitiveLimit } = await import("../src/middleware/rateLimit.js");
-    sensitiveLimit.resetKey("127.0.0.1");
-    sensitiveLimit.resetKey("::ffff:127.0.0.1");
     const app = createApp(trustedMfaFixture(database())),
       id = await customer(21),
       number = (await one("select lead_no from leads where id=$1", [id]))
