@@ -32,9 +32,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" \
-            --jq 'any(.[]; .state == "approved" and any(.environments[]; .name == "production"))' | grep -qx true \
-            || { echo "::error::No production approval recorded for this run; add required reviewers to the production environment"; exit 1; }
+          approvers=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/approvals" \
+            --jq '[.[] | select(.state == "approved" and any(.environments[]; .name == "production")) | .user.login] | unique | join(", ")') \
+            || { echo "::error::Could not read this run's approvals from GitHub"; exit 1; }
+          [[ -n "$approvers" ]] || { echo "::error::No production approval recorded for this run; add required reviewers to the production environment"; exit 1; }
+          echo "Production approval recorded by: $approvers"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ inputs.sha }}
