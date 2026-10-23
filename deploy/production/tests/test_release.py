@@ -18,6 +18,7 @@ root=Path(os.environ['FIXTURE'])
 mode=os.environ.get('FAIL_MODE','')
 with (root/'commands').open('a') as out: out.write(name+' '+ ' '.join(args)+'\\n')
 if name=='flock' and mode=='locked': sys.exit(1)
+if name=='systemctl' and mode=='pm2down': sys.exit(3)
 if name=='pm2' and args[0]=='describe': sys.exit(0 if mode=='occupied' else 1)
 if name=='npm' and mode=='install': sys.exit(1)
 if name=='node' and args[0].endswith('health.mjs'):
@@ -47,7 +48,7 @@ class ReleaseTests(unittest.TestCase):
         (base/'origin').write_text('https://fixture.invalid')
         if rollback: (base/'previous').write_text(f'green {NEW}\n')
         bindir=root/'bin'; bindir.mkdir()
-        for command in ['flock','npm','pm2','node','sudo','curl','sleep']:
+        for command in ['flock','npm','pm2','node','sudo','curl','sleep','systemctl']:
             file=bindir/command; file.write_text(DISPATCH); file.chmod(0o755)
         env={**os.environ,'PATH':str(bindir)+os.pathsep+os.environ['PATH'],
              'HD_CRM_ROOT':str(root),'FIXTURE':str(root),'FAIL_MODE':mode,'TARGET_SHA':NEW}
@@ -63,11 +64,18 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual((base/'previous').read_text(),f'blue {OLD}\n')
         self.assertEqual(switches,f'production {NEW} green\n')
     def test_failures_before_switch_leave_active(self):
-        for mode in ['health','install','occupied','locked']:
+        for mode in ['health','install','occupied','locked','pm2down']:
             result,base,switches=self.scenario(mode)
             self.assertNotEqual(result.returncode,0,mode)
             self.assertEqual((base/'active').read_text(),f'blue {OLD}\n')
             self.assertEqual(switches,'')
+    def test_refuses_without_the_pm2_service(self):
+        result,base,switches=self.scenario('pm2down')
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('is not running',result.stderr)
+        commands=(base.parent/'commands').read_text()
+        self.assertNotIn('pm2 start',commands)
+        self.assertNotIn('npm ci',commands)
     def test_monitor_failure_rolls_back(self):
         result,base,switches=self.scenario('monitor')
         self.assertNotEqual(result.returncode,0)

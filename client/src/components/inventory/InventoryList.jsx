@@ -303,7 +303,7 @@ export default function InventoryList({
             />
           ))}
         </div>
-      ) : (
+      ) : q.error ? null : (
         <div className="panel empty">
           {filtered ? "No properties match these filters." : emptyText}
         </div>

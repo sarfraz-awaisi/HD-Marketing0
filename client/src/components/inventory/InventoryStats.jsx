@@ -17,7 +17,9 @@ export default function InventoryStats() {
     queryKey: ["inventory-summary"],
     queryFn: ({ signal }) => api("/inventory/summary", { signal }),
   });
-  if (q.error) return <ErrorBox error={q.error} />;
+  // An unavailable database (503) is reported once, by the list below.
+  if (q.error)
+    return q.error.status === 503 ? null : <ErrorBox error={q.error} />;
   const s = q.data;
   const closed = (c) => (c ? (c.sold || 0) + (c.rented || 0) : undefined);
   const tiles =
