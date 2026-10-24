@@ -25,7 +25,7 @@ else error "The DEPLOY_USER variable must be crm-prod."; fi
 [[ "$trusted" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || error "TRUSTED_HOST_KEY in release.yml is missing or not a SHA256 fingerprint."
 
 if [[ -z "${SSH_KNOWN_HOSTS:-}" ]]; then
-  error "The DEPLOY_KNOWN_HOSTS secret reached this job empty. Save it under Settings > Environments > production > Environment secrets. A repository secret or a variable is not passed to the release job."
+  error "The DEPLOY_KNOWN_HOSTS secret reached this job empty. It must be a production environment secret, and production.yml must pass it to release.yml by name (secrets: DEPLOY_KNOWN_HOSTS)."
 else
   # Exactly what remote.sh writes.
   printf '%s\n' "${SSH_KNOWN_HOSTS//$'\r'/}" > "$known"
@@ -53,7 +53,7 @@ else
 fi
 
 if [[ -z "${SSH_KEY:-}" ]]; then
-  error "The DEPLOY_SSH_KEY secret reached this job empty. Save it under Settings > Environments > production > Environment secrets."
+  error "The DEPLOY_SSH_KEY secret reached this job empty. It must be a production environment secret, and production.yml must pass it to release.yml by name (secrets: DEPLOY_SSH_KEY)."
 else
   (umask 077; printf '%s\n' "${SSH_KEY//$'\r'/}" > "$key")
   if public=$(ssh-keygen -y -P "" -f "$key" 2>/dev/null); then

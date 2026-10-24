@@ -51,7 +51,16 @@ def errors(workflows):
     if not ("actions/workflows/ci.yml/runs" in production and "status=success" in production
             and re.search(r"needs: ci-evidence", production)):
         found.append("production.yml: must require a successful CI run of the release commit")
+    # A reusable workflow gets only the secrets its caller passes, environment
+    # secrets included; pass the two deployment secrets by name and nothing else.
+    names = ("DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS")
+    passed = set(re.findall(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}", production))
+    by_name = all(re.search(r"^\s+" + n + r": \$\{\{ secrets\." + n + r" \}\}\s*$", production, re.M) for n in names)
+    if passed != set(names) or not by_name or re.search(r"secrets:\s*inherit", production):
+        found.append("production.yml: must pass exactly DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS to release.yml by name, never secrets: inherit")
     release = code(workflows.get("release.yml", ""))
+    if not all(re.search(r"^\s+" + n + r":\s*\n\s+required: true\s*$", release, re.M) for n in names):
+        found.append("release.yml: must declare DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS as required secrets")
     if triggers(release) != {"workflow_call"}:
         found.append("release.yml: must only be called by production.yml")
     if not re.search(r"^[ \t]+environment: production[ \t]*$", release, re.M):

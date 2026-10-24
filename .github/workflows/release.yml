@@ -7,6 +7,12 @@ on:
       sha:
         required: true
         type: string
+    # Production environment secrets, passed by name from production.yml.
+    secrets:
+      DEPLOY_SSH_KEY:
+        required: true
+      DEPLOY_KNOWN_HOSTS:
+        required: true
 permissions:
   contents: read
   actions: read

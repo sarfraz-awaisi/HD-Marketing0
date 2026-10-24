@@ -39,3 +39,10 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       sha: ${{ inputs.sha }}
+    # A reusable workflow receives only the secrets its caller passes, even
+    # those of the environment its job runs in; unpassed ones arrive empty.
+    # Pass exactly these two by name: release.yml resolves them from the
+    # protected production environment. Never use `secrets: inherit` here.
+    secrets:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
