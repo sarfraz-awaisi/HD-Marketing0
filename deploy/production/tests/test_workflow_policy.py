@@ -67,6 +67,22 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("release.yml: must deploy through the protected production environment",
                       policy.errors(dict(workflows, **{"release.yml": release})))
 
+    def test_passes_exactly_the_two_deployment_secrets_by_name(self):
+        workflows = repository()
+        production, release = workflows["production.yml"], workflows["release.yml"]
+        passing = "    secrets:\n      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}\n      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}\n"
+        self.assertIn(passing, production)
+        message = "production.yml: must pass exactly DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS to release.yml by name, never secrets: inherit"
+        for changed in (production.replace(passing, ""),  # the original bug: nothing passed, secrets arrive empty
+                        production.replace(passing, "    secrets: inherit\n"),
+                        production.replace(passing, passing + "      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}\n"),
+                        production.replace("DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}", "DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KEY }}")):
+            self.assertIn(message, policy.errors(dict(workflows, **{"production.yml": changed})))
+        required = "      DEPLOY_KNOWN_HOSTS:\n        required: true\n"
+        self.assertIn(required, release)
+        self.assertIn("release.yml: must declare DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS as required secrets",
+                      policy.errors(dict(workflows, **{"release.yml": release.replace(required, "")})))
+
     def test_rejects_any_staging_deployment(self):
         workflows = dict(repository(), **{"staging.yml": "on:\n  workflow_dispatch:\njobs:\n  deploy:\n    uses: ./.github/workflows/release.yml\n    with:\n      environment: staging\n"})
         self.assertIn("staging.yml: refers to staging; production is the only environment", policy.errors(workflows))
