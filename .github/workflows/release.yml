@@ -74,6 +74,18 @@ jobs:
           cp deployment-target.json /tmp/crm-package/deployment-target.json
           printf '%s\n' "$RELEASE_SHA" > /tmp/crm-package/RELEASE_SHA
           tar -czf /tmp/release.tar.gz -C /tmp/crm-package .
+      # Names the exact cause (empty secret, wrong host line, unexpected key,
+      # refused deploy key) before anything is uploaded. Prints no secrets.
+      - name: Check deployment SSH settings
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          # The server's ED25519 host key, verified out-of-band. Change it only
+          # after verifying a rebuilt server's key the same way.
+          TRUSTED_HOST_KEY: SHA256:II1JuzWrzGudXn2V1KFEHCskdH36A///Dr1ZD/ChRr8
+        run: bash deploy/production/check-ssh.sh
       - name: Upload and deploy
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
