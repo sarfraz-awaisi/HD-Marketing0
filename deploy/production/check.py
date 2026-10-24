@@ -34,6 +34,12 @@ for name in ("release.sh", "remote.sh"):
     text = (root / "deploy/production" / name).read_text()
     if re.search(r"supabase\s+db|psql|pg_restore|setup:dev|supabase/setup|supabase/seed", text):
         errors.append(name + ": forbidden database deployment command")
+# The deployment SSH connection always verifies the server against the
+# reviewed host keys (comments, which explain the rule, are not checked).
+for name in ("remote.sh", "check-ssh.sh"):
+    code = "\n".join(line for line in (root / "deploy/production" / name).read_text().splitlines() if not line.lstrip().startswith("#"))
+    if re.search(r"StrictHostKeyChecking=(no|off|accept-new)|UserKnownHostsFile=/dev/null|ssh-keyscan", code, re.I):
+        errors.append(name + ": weakens SSH host key verification")
 # Deployments are manual, production-only and gated on CI (workflow_policy.py).
 from workflow_policy import errors as workflow_errors
 errors += workflow_errors({file.name: file.read_text() for file in (root / ".github/workflows").glob("*.y*ml")})

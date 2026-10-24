@@ -60,4 +60,7 @@ def errors(workflows):
         found.append("release.yml: must stop unless GitHub recorded a production approval")
     if not ("ref: ${{ inputs.sha }}" in release and '[[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]' in release):
         found.append("release.yml: must check out and confirm the exact release commit")
+    check, upload = release.find("deploy/production/check-ssh.sh"), release.find("deploy/production/remote.sh")
+    if check < 0 or upload < 0 or check > upload or not re.search(r"TRUSTED_HOST_KEY: SHA256:[A-Za-z0-9+/]{43}\b", release):
+        found.append("release.yml: must check the SSH host key against TRUSTED_HOST_KEY before uploading")
     return found

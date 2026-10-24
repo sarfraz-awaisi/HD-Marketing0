@@ -52,6 +52,16 @@ class WorkflowPolicyTests(unittest.TestCase):
         ]:
             changed = dict(workflows, **{file: workflows[file].replace(removed, "removed")})
             self.assertTrue(any(message in e for e in policy.errors(changed)), removed)
+        # The SSH settings are checked against the pinned host key before any upload.
+        release = workflows["release.yml"]
+        check, upload = "run: bash deploy/production/check-ssh.sh", "run: bash deploy/production/remote.sh"
+        swapped = release.replace(check, "@check@").replace(upload, check).replace("@check@", upload)
+        self.assertGreater(swapped.find("check-ssh.sh"), swapped.find("remote.sh"))
+        for changed in (release.replace("bash deploy/production/check-ssh.sh", "true"),
+                        release.replace("TRUSTED_HOST_KEY: SHA256:", "TRUSTED_HOST_KEY: "),
+                        swapped):
+            self.assertIn("release.yml: must check the SSH host key against TRUSTED_HOST_KEY before uploading",
+                          policy.errors(dict(workflows, **{"release.yml": changed})))
         # The environment must be named literally, not chosen by the caller.
         release = workflows["release.yml"].replace("    environment: production", "    environment: ${{ inputs.environment }}")
         self.assertIn("release.yml: must deploy through the protected production environment",
