@@ -2,6 +2,7 @@
 // a description, who acted, who or what was affected and what changed, using
 // only what the entry recorded: nothing is guessed. The original values stay
 // available as technical details, with anything secret or personal removed.
+import { buildingCategories } from "../utils/validators.js";
 
 export const auditModules = [
   ["leads", "Leads"],
@@ -98,6 +99,7 @@ const fieldLabels = {
   work_start: "start of the working day",
   due_on: "due date",
   target_quantity: "target",
+  building_categories: "building categories",
 };
 // ["price","availability"] as "price and availability status".
 export function fieldsText(fields) {
@@ -236,6 +238,41 @@ const fileText = (c) =>
 const changed = (c, prefix) => {
   const fields = fieldsText(c.m.fields);
   return fields ? `${prefix}: ${fields}.` : `${prefix}.`;
+};
+// Building categories (update 046), labelled and in the standard order.
+const categoryLabels = new Map(
+  buildingCategories.map((c) => [c.value, c.label]),
+);
+const categoriesOf = (list) => {
+  const chosen = new Set(Array.isArray(list) ? list : []);
+  return buildingCategories
+    .filter((c) => chosen.has(c.value))
+    .map((c) => categoryLabels.get(c.value));
+};
+function categoryChange(m) {
+  const before = new Set(categoriesOf(m.building_categories?.before)),
+    after = new Set(categoriesOf(m.building_categories?.after));
+  const added = [...after].filter((l) => !before.has(l)),
+    removed = [...before].filter((l) => !after.has(l));
+  return [
+    added.length && `Added ${listText(added)}.`,
+    removed.length && `Removed ${listText(removed)}.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+// Property saves from update 046 record the fields that actually changed;
+// older entries name the fields that were sent.
+const propertyUpdated = (c) => {
+  if (!Array.isArray(c.m.changed))
+    return changed(c, `Updated ${propertyText(c)}`);
+  if (!c.m.changed.length) return `Saved ${propertyText(c)} without changes.`;
+  const text = changed(
+    { m: { fields: c.m.changed } },
+    `Updated ${propertyText(c)}`,
+  );
+  const categories = categoryChange(c.m);
+  return categories ? `${text} ${categories}` : text;
 };
 const counts = (c, keys) =>
   keys
@@ -755,8 +792,15 @@ add(
   "properties",
   "create",
   "Created a property listing",
-  (c) =>
-    `Created ${propertyText(c)}${c.m.ownership === "company" ? " in the company inventory" : c.m.ownership === "agent" ? " in an agent's inventory" : ""}.`,
+  (c) => {
+    const categories = categoriesOf(c.m.building_categories?.after);
+    return (
+      `Created ${propertyText(c)}${c.m.ownership === "company" ? " in the company inventory" : c.m.ownership === "agent" ? " in an agent's inventory" : ""}.` +
+      (categories.length
+        ? ` Building categories: ${listText(categories)}.`
+        : "")
+    );
+  },
 );
 add(
   "update",
@@ -764,7 +808,15 @@ add(
   "properties",
   "update",
   "Updated a property listing",
-  (c) => changed(c, `Updated ${propertyText(c)}`),
+  propertyUpdated,
+  {
+    titled: (c) =>
+      Array.isArray(c.m.changed) &&
+      c.m.changed.length === 1 &&
+      c.m.changed[0] === "building_categories"
+        ? "Updated property building categories"
+        : "Updated a property listing",
+  },
 );
 add(
   "delete",
@@ -1618,6 +1670,16 @@ export function presentAuditEntry(row) {
           after: show(m.after[key]),
         });
   }
+  if (
+    c.entity === "properties" &&
+    (c.action === "create" || c.action === "update") &&
+    m.building_categories
+  )
+    changes.push({
+      label: "Building categories",
+      before: categoriesOf(m.building_categories.before).join(", ") || "None",
+      after: categoriesOf(m.building_categories.after).join(", ") || "None",
+    });
   if (c.action === "task.report_amend" && m.before && m.after)
     changes.push({
       label: "Completion",

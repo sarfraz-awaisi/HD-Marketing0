@@ -45,7 +45,7 @@ Both portals show summary tiles. Agents see their own counts and the company tot
 - **Status**: Available, Reserved, Sold (sale only), Rented (rent only), Inactive. Inactive is stored as the existing `archived` value.
 - **Location**: country (Pakistan), province, city (required), area or society, block, sector or phase, street, plot or house number, full address and a map link (`https://` only). The card's location line is built from block, area and city.
 - **Size and price**: size with Marla, Kanal, square feet, square yards or acres, stored as entered and never converted. Price in PKR (monthly rent for rentals), negotiable, price notes.
-- **Building details** (hidden and cleared for plots and land): bedrooms, bathrooms, kitchens, floors, parking, age, furnishing, construction condition.
+- **Building details** (hidden and cleared for plots and land): bedrooms, bathrooms, kitchens, floors, parking, age, furnishing, construction condition, and the [building categories](#building-categories-update-046) on offer.
 - **Utilities and features**: electricity, gas, water, sewerage, internet, boundary wall, security, corner, park facing, main road, lift, backup power, solar, servant quarter, basement, lawn, drawing room, store room.
 - **Owner contact (private)**: name, phone, alternate phone, notes. Phone numbers are normalized to `+92…`.
 - **Pictures**: optional, up to 20 per property, JPEG, PNG or WebP up to 5 MB. The first picture is the cover; **Make cover** moves another to the front.
@@ -54,6 +54,74 @@ Both portals show summary tiles. Agents see their own counts and the company tot
 Older properties keep their data. Their type may be an old free-text value such as "Plot"; the edit form shows it and asks for a type from the new list. If an older property has no city, the form shows the previously recorded location as a hint.
 
 If two administrators edit the same company property at once, the second save is refused with "Someone else changed this property…" instead of overwriting the first.
+
+## Building categories (update 046)
+
+Added 29 October 2026. One property or building often offers several kinds of units or spaces at once, for example residential and hotel apartments of different sizes, shops and offices. Building categories record all of them on a single listing, so a mixed-use building needs one listing, not one per kind of unit.
+
+| Group            | Options                           | Stored as                                                                 |
+| ---------------- | --------------------------------- | ------------------------------------------------------------------------- |
+| Residential      | 1 Bedroom, 2 Bedrooms, 3 Bedrooms | `residential_1_bed`, `residential_2_bed`, `residential_3_bed`             |
+| Hotel Apartments | 1 Bedroom, 2 Bedrooms, 3 Bedrooms | `hotel_apartment_1_bed`, `hotel_apartment_2_bed`, `hotel_apartment_3_bed` |
+| Commercial       | Commercial Outlets / Retail Shops | `commercial_outlet`                                                       |
+| Workspaces       | Office Spaces / Workspaces        | `workspace`                                                               |
+
+### Choosing and editing
+
+- **Add property** and **Edit property** show a **Building categories** part inside **Building details**, with one box per option, grouped as above. Tick any combination, from one category to all eight. Every box is independent: Residential 1 Bedroom and Hotel Apartments 1 Bedroom are separate choices. Untick a box to remove that category.
+- Categories are optional. Properties added before update 046 have none until someone edits them.
+- They describe what the building offers. **Bedrooms** still describes the listed unit, so a building can offer 1-, 2- and 3-bedroom apartments while the listing itself has 2 bedrooms.
+- Like the other building details, they are hidden for Residential Plot, Commercial Plot and Land. Changing a property to one of those types clears its categories.
+- **Edit property** opens with the saved categories ticked. Saving changes only what was changed: saving other details keeps the categories. Closing the form without saving, or a save that is refused (someone else changed the property meanwhile, or an invalid value), leaves them as they were.
+- Who can change them is the same as for every other detail (see [Who can do what](#who-can-do-what)): the owning agent for their own listings and administrators for Admin Properties. Agents cannot change another agent's listing (404) or an Admin Property (403), and administrators cannot change an agent's listing (403).
+
+### Where they appear
+
+- **Property details** shows a **Building categories** section: each group with its chosen options, in words. It is left out when a property has none.
+- **Property cards** show one short line, for example "Residential 1, 2, 3 bed · Hotel apartments 1, 2 bed · Retail shops · Workspaces".
+- The inventory lists cannot be filtered or searched by category yet.
+
+### Admin Property Promotion copies
+
+An administrator can add an agent's available or reserved listing to Admin Properties with **Add to Admin List** (update 044). This creates an independent copy with its own reference number and its own pictures; the original stays the agent's.
+
+- The copy starts with the original's building categories, along with its other details.
+- After that the two records are independent. When the agent changes the original's categories, the admin copy keeps its own; when an administrator changes the copy's categories, the agent's original is not changed. Nothing is synchronized either way.
+- When the agent changes the categories of a listing that has a copy, every active administrator receives the existing in-CRM notice **Original property updated**, saying what was added and removed, for example "Ali Agent (UID 123456) updated PR-000015. Building categories: added Office Spaces / Workspaces. Admin copy PR-000016 has not been changed." A save that changes nothing sends no notice; the same categories in another order are not a change. A very long change is summarized as counts ("added 3, removed 2") so the notice stays within its 500 characters.
+- Promotion keeps counting the pair once in the overall unique total, keeps showing who originally listed the copy, and keeps separate pictures, exactly as before.
+
+### Audit History
+
+- Creating a property with categories adds "Building categories: …" to the entry.
+- An update that changes categories says what was added and removed, and **What changed** shows the categories before and after. When the categories are the only change, the entry is titled **Updated property building categories**.
+- From update 046, property updates record the names of the fields that actually changed (never their values, except the categories, which are not private). A save that changed nothing reads "Saved … without changes." Entries recorded before 046 still name the fields that were sent.
+
+### API and validation
+
+- `POST` and `PATCH /api/properties` accept `building_categories`, an array of the identifiers above. Unknown values, anything other than an array, and repeated values are refused with 400. The order sent does not matter: categories are always stored and returned in the order of the table above.
+- A `PATCH` without `building_categories` leaves them unchanged. Every property response, including the lists, returns them; older properties return `[]`.
+- The identifiers, their order and their labels are defined in three places that must agree: the database (046), `server/src/utils/validators.js` and `client/src/lib/inventory.js`. A server test fails if they ever differ.
+
+### Database changes (`supabase/migrations/046_building_property_categories.sql`)
+
+The update is additive and can be applied again safely. Existing properties, owners, pictures, owner contacts, promotions and permissions are unchanged; existing properties get an empty list.
+
+- **`properties.building_categories`**: not null, empty by default. Its type, `property_building_categories`, accepts only the listed identifiers, each once, in the standard order, so even a direct database write cannot store anything else. The check sits on the type rather than on the table, so 041's preflight and rerun still work.
+- **Helpers** `property_category_list`, `property_categories_sorted` and `property_category_label`: available to the API's service role (the column's type uses them on every write), not to browser roles.
+- **Restated functions**, each as in 044 plus categories: `inventory_save` (checks, orders and clears categories; records the fields that actually changed), `promotion_change_text` (describes added and removed categories) and `inventory_promote` (copies them).
+- Runs as one transaction in a few seconds. `properties` is rewritten once to add the column (it is small) and is locked meanwhile; if a lock is not available within 5 seconds, nothing changes and it can be run again.
+
+### Applying update 046
+
+- **Existing database (the supported process):** take and verify a backup, then apply each missing numbered migration once, in order. 046 follows 045. Production migrations are applied in the SQL Editor as part of an approved release; the GitHub workflows never run migrations. Locally, `npx supabase@2.122.0 migration up --local` applies only migrations it has not recorded, so it never reapplies an older one.
+- **Never reapply older migrations.** 041 and 044 restate the inventory functions. If either were run again after 046, saved categories would stay in the table, but saves that include categories would be refused with "Unsupported property details" until 046 was applied again. After a rerun of 044, **Add to Admin List** would also stop copying categories, without any error. Running 046 again restores both (tested).
+- **Brand-new project:** `supabase/setup.sql` combines migrations 001–041 and has not been regenerated since. After running it, apply 042 to 046 in order (tested in PGlite). Never run `setup.sql` against an existing project.
+
+### Tests
+
+- `server/tests/building-categories.test.js`: one, several and all categories, the standard order, residential versus hotel, older and new properties without categories, invalid and repeated values through the API and directly in the database, adding and removing, unrelated and refused edits, plots and land, promotion copies and their independence, the unique count, notices for category changes and none for unchanged form saves, Audit History wording, permissions, browser-role privileges, the three category lists agreeing, and rerunning 046 and 041.
+- `server/tests/building-categories-migration.test.js`: 046 on a database at 045 holding agent and company listings, pictures, owner contacts and an admin copy made by the 041 and 044 functions. Everything stays unchanged, a rerun changes nothing, and it documents what rerunning 044 would do.
+- `client/tests/building-categories.test.jsx`: the boxes inside Building details, several and all categories, plots and land, the details section, editing with saved categories ticked, closing an edit without saving, and the card summary.
 
 ## Database changes (`supabase/migrations/041_property_inventory.sql`)
 
@@ -121,5 +189,6 @@ Apply 041 **before** the new application goes live: the current release keeps wo
 - Agent-owned properties cannot be linked to leads, visits or deals.
 - Supporting documents per property (the Documentation & policies module's Property Deeds category remains the place for deeds).
 - No exports of inventory yet.
+- Filtering or searching the inventory by building category (update 046).
 - Currencies other than PKR and countries other than Pakistan.
 - `server/src/services/propertyCovers.js` and SQL `property_cover_photos` (027) are no longer used by the API (list covers come from `inventory_page`). They are kept with their existing tests and can be removed later.

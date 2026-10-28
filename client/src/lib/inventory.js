@@ -81,6 +81,70 @@ export const amenities = [
   { value: "drawing_room", label: "Drawing room" },
   { value: "store_room", label: "Store room" },
 ];
+// Update 046: the kinds of units or spaces a property or building offers,
+// several at once. Identifiers, order and labels match the server validators
+// and the database; a server test keeps the three equal.
+export const buildingCategoryGroups = [
+  {
+    label: "Residential",
+    summary: "Residential",
+    options: [
+      { value: "residential_1_bed", label: "1 Bedroom", beds: 1 },
+      { value: "residential_2_bed", label: "2 Bedrooms", beds: 2 },
+      { value: "residential_3_bed", label: "3 Bedrooms", beds: 3 },
+    ],
+  },
+  {
+    label: "Hotel Apartments",
+    summary: "Hotel apartments",
+    options: [
+      { value: "hotel_apartment_1_bed", label: "1 Bedroom", beds: 1 },
+      { value: "hotel_apartment_2_bed", label: "2 Bedrooms", beds: 2 },
+      { value: "hotel_apartment_3_bed", label: "3 Bedrooms", beds: 3 },
+    ],
+  },
+  {
+    label: "Commercial",
+    summary: "Retail shops",
+    options: [
+      {
+        value: "commercial_outlet",
+        label: "Commercial Outlets / Retail Shops",
+      },
+    ],
+  },
+  {
+    label: "Workspaces",
+    summary: "Workspaces",
+    options: [{ value: "workspace", label: "Office Spaces / Workspaces" }],
+  },
+];
+// Full names such as "Residential — 1 Bedroom"; a group with one option is
+// named by the option alone.
+export const buildingCategories = buildingCategoryGroups.flatMap((g) =>
+  g.options.map((o) => ({
+    value: o.value,
+    label: g.options.length > 1 ? `${g.label} — ${o.label}` : o.label,
+  })),
+);
+// The groups with at least one chosen category, in the standard order.
+export const chosenCategoryGroups = (values) =>
+  buildingCategoryGroups
+    .map((g) => ({
+      ...g,
+      options: g.options.filter((o) => values?.includes(o.value)),
+    }))
+    .filter((g) => g.options.length);
+// One short line for property cards, for example
+// "Residential 1, 2, 3 bed · Retail shops · Workspaces".
+export const categorySummary = (values) =>
+  chosenCategoryGroups(values)
+    .map((g) =>
+      g.options[0].beds
+        ? `${g.summary} ${g.options.map((o) => o.beds).join(", ")} bed`
+        : g.summary,
+    )
+    .join(" · ");
 export const sorts = [
   { value: "newest", label: "Newest first" },
   { value: "updated", label: "Recently updated" },

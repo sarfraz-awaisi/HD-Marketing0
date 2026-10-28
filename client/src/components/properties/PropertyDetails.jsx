@@ -2,6 +2,7 @@ import { date, pkr } from "../../lib/api";
 import { PromotedFrom } from "../inventory/PromotionPanel";
 import {
   amenityLabel,
+  chosenCategoryGroups,
   constructionLabel,
   furnishingLabel,
   isPlot,
@@ -33,6 +34,9 @@ export default function PropertyDetails({ property: p }) {
       p.construction_status && constructionLabel(p.construction_status),
     ],
   ];
+  const categories = isPlot(p.type)
+    ? []
+    : chosenCategoryGroups(p.building_categories);
   return (
     <section className="property-details" aria-label="Property details">
       <div className="property-detail-summary">
@@ -74,6 +78,25 @@ export default function PropertyDetails({ property: p }) {
             Open map location ↗
           </a>
         </p>
+      )}
+      {categories.length > 0 && (
+        <>
+          <h3>Building categories</h3>
+          <dl className="category-list">
+            {categories.map((g) => (
+              <div key={g.label}>
+                <dt>{g.label}</dt>
+                <dd>
+                  <ul className="amenity-list">
+                    {g.options.map((o) => (
+                      <li key={o.value}>{o.label}</li>
+                    ))}
+                  </ul>
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </>
       )}
       {!!p.amenities?.length && (
         <>

@@ -710,6 +710,19 @@ export const amenities = [
   "drawing_room",
   "store_room",
 ];
+// Update 046: the kinds of units or spaces a property or building offers.
+// The same identifiers, order and labels as the database (046) and
+// client/src/lib/inventory.js; a test keeps the three equal.
+export const buildingCategories = [
+  { value: "residential_1_bed", label: "Residential — 1 Bedroom" },
+  { value: "residential_2_bed", label: "Residential — 2 Bedrooms" },
+  { value: "residential_3_bed", label: "Residential — 3 Bedrooms" },
+  { value: "hotel_apartment_1_bed", label: "Hotel Apartments — 1 Bedroom" },
+  { value: "hotel_apartment_2_bed", label: "Hotel Apartments — 2 Bedrooms" },
+  { value: "hotel_apartment_3_bed", label: "Hotel Apartments — 3 Bedrooms" },
+  { value: "commercial_outlet", label: "Commercial Outlets / Retail Shops" },
+  { value: "workspace", label: "Office Spaces / Workspaces" },
+];
 const optionalText = (max) =>
   z
     .string()
@@ -774,6 +787,12 @@ const propertyFields = {
     .max(20)
     .refine((list) => new Set(list).size === list.length, {
       message: "Choose each amenity once",
+    }),
+  building_categories: z
+    .array(z.enum(buildingCategories.map((c) => c.value)))
+    .max(20)
+    .refine((list) => new Set(list).size === list.length, {
+      message: "Choose each building category once",
     }),
   owner_contact: z
     .object({
