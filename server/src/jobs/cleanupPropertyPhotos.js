@@ -1,9 +1,12 @@
 // Queue rows remain until Storage confirms removal. Repeating removal is safe
 // if another worker or a previous interrupted attempt already removed a file.
+// Rows not yet due are pictures reserved for a promotion still in progress
+// (update 044).
 export async function cleanupPropertyPhotos(db, propertyId) {
   let query = db
     .from("property_photo_cleanup")
     .select("id,storage_path")
+    .lte("not_before", new Date().toISOString())
     .order("created_at")
     .limit(100);
   if (propertyId) query = query.eq("property_id", propertyId);

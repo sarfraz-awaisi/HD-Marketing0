@@ -86,6 +86,17 @@ export default function PropertyCard({ property, onView }) {
         {property.property_no && (
           <p className="property-ref">{propertyRef(property.property_no)}</p>
         )}
+        {/* Update 044: promoted copies name the original listing agent. */}
+        {property.promoted_from && (
+          <p className="property-origin">
+            Originally listed by {property.promoted_from.agent_name}
+            {property.promoted_from.agent_uid != null &&
+              ` · UID ${property.promoted_from.agent_uid}`}
+          </p>
+        )}
+        {property.admin_copy && (
+          <span className="badge info property-promoted">In Admin List</span>
+        )}
         <Button variant="secondary" onClick={onView}>
           View property ↗
         </Button>

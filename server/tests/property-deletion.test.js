@@ -211,6 +211,7 @@ function client(role = "admin", active = true) {
         deleting = false;
       const query = {
         select: () => query,
+        lte: () => query,
         order: () => query,
         limit: () => query,
         eq: (field, value) => {
@@ -229,7 +230,7 @@ function client(role = "admin", active = true) {
         then: (resolve, reject) => {
           const sql = deleting
             ? "delete from property_photo_cleanup where id=any($1::uuid[])"
-            : "select id,storage_path from property_photo_cleanup where ($1::uuid is null or property_id=$1) order by created_at limit 100";
+            : "select id,storage_path from property_photo_cleanup where ($1::uuid is null or property_id=$1) and not_before<=now() order by created_at limit 100";
           return db
             .query(sql, [deleting ? ids : propertyId || null])
             .then((r) => ({ data: r.rows }))

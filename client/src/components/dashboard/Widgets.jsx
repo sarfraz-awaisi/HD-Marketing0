@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
+  Building2,
   CalendarCheck,
   CalendarDays,
   Clock,
@@ -113,8 +114,10 @@ export function MonthHighlight({ metrics, admin }) {
     </section>
   );
 }
-// One icon per notification type (updates 038 and 040).
+// One icon per notification type (updates 038, 040 and 044).
 const noticeIcons = {
+  property_source_updated: Building2,
+  property_source_removed: Building2,
   lead_assigned: UserPlus,
   lead_moved_away: Repeat,
   lead_kept: UserPlus,

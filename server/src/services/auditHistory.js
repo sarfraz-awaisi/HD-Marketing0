@@ -574,9 +574,37 @@ add(
   "delete",
   "Deleted a property listing",
   (c) =>
-    number(c.m.photo_count)
+    (number(c.m.photo_count)
       ? `Deleted a property listing and its ${count(c.m.photo_count, "photo")}.`
-      : "Deleted a property listing.",
+      : "Deleted a property listing.") +
+    (propertyRef(c.m.admin_copy_property_no)
+      ? ` Its copy in Admin Properties (${propertyRef(c.m.admin_copy_property_no)}) was kept.`
+      : ""),
+);
+// Update 044: an agent's listing copied into Admin Properties.
+add(
+  "promote",
+  "properties",
+  "properties",
+  "create",
+  "Added an agent property to Admin Properties",
+  (c) => {
+    const copy = c.property
+      ? propertyText(c)
+      : propertyRef(c.m.copy_property_no) || "a copy";
+    const from = propertyRef(c.m.source_property_no);
+    const notes = c.agent
+      ? [
+          number(c.agent.uid) != null ? `UID ${c.agent.uid}` : null,
+          c.agent.deleted ? "deleted account" : null,
+        ].filter(Boolean)
+      : [];
+    const agent = c.agent
+      ? `${c.agent.name}${notes.length ? ` (${notes.join(", ")})` : ""}`
+      : "an agent";
+    const missing = number(c.m.photos_missing);
+    return `Added ${copy} to Admin Properties as an independent copy of ${from ? `${from}, ` : "the listing "}originally listed by ${agent}${number(c.m.photo_count) ? `, with ${count(c.m.photo_count, "photo")}` : ""}.${missing ? ` ${count(missing, "photo")} could not be copied.` : ""}`;
+  },
 );
 add(
   "upload_photo",

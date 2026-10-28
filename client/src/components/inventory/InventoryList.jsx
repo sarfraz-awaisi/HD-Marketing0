@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import {
+  propertyRef,
   propertyTypes,
   purposes,
   sorts,
@@ -21,6 +23,7 @@ import PropertyCard from "../properties/PropertyCard";
 import PropertyDetails from "../properties/PropertyDetails";
 import PropertyForm from "../properties/PropertyForm";
 import PhotoGallery from "../properties/PhotoGallery";
+import { PromoteConfirm, PromotionStatus } from "./PromotionPanel";
 
 const blankFilters = {
   search: "",
@@ -35,23 +38,40 @@ const blankFilters = {
 // scope: company (administrators' listings), mine (the signed-in agent's own)
 // or agent (one agent, opened by an administrator). canAdd shows "+ Add
 // property"; whether a property can be changed comes from the server (can_edit).
+// canPromote offers "Add to Admin List" on an agent's listings (update 044).
+// openId opens that property's details (a notification link); onOpened then
+// clears it from the address.
 export default function InventoryList({
   scope,
   agentId,
   canAdd = false,
+  canPromote = false,
   ownership,
   emptyText = "No properties found.",
   notice,
+  openId,
+  onOpened,
 }) {
   const qc = useQueryClient(),
-    toast = useToast();
+    toast = useToast(),
+    navigate = useNavigate();
   const [page, setPage] = useState(1),
     [filters, setFilters] = useState(blankFilters),
     [modal, setModal] = useState(null),
     [editing, setEditing] = useState(false),
     [confirmDelete, setConfirmDelete] = useState(false),
+    [promoting, setPromoting] = useState(false),
     [busy, setBusy] = useState(false),
     [actionError, setActionError] = useState("");
+  useEffect(() => {
+    if (!openId) return;
+    setModal({ id: openId });
+    setEditing(false);
+    setConfirmDelete(false);
+    setPromoting(false);
+    // onOpened only clears the address; opening once per id is enough.
+    onOpened?.();
+  }, [openId]);
   const debounced = useDebouncedValue(filters);
   const params = new URLSearchParams({ scope, page, covers: "true" });
   if (agentId) params.set("agent", agentId);
@@ -97,8 +117,45 @@ export default function InventoryList({
     setModal(null);
     setEditing(false);
     setConfirmDelete(false);
+    setPromoting(false);
     setActionError("");
   };
+  // One request; the server refuses a second copy of the same listing.
+  async function promote() {
+    if (busy) return;
+    setBusy(true);
+    setActionError("");
+    try {
+      const copy = await api(`/properties/${current.id}/promote`, {
+        method: "POST",
+        body: {},
+      });
+      // Show "Added" at once, before the details reload.
+      qc.setQueryData(
+        ["property", current.id],
+        (old) =>
+          old && {
+            ...old,
+            can_promote: false,
+            admin_copy: { id: copy.id, property_no: copy.property_no },
+          },
+      );
+      refresh(current.id);
+      setPromoting(false);
+      toast(
+        `Added to Admin List as ${propertyRef(copy.property_no)}` +
+          (copy.photos_missing
+            ? `. ${copy.photos_missing} missing picture${copy.photos_missing === 1 ? " was" : "s were"} not copied.`
+            : ""),
+      );
+    } catch (e) {
+      setActionError(e.message);
+      // Someone else may have added it meanwhile; show the current state.
+      refresh(current.id);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function change(body, message) {
     setBusy(true);
     setActionError("");
@@ -315,15 +372,36 @@ export default function InventoryList({
           title={
             confirmDelete
               ? "Delete property?"
-              : editing
-                ? modal.id
-                  ? "Edit property"
-                  : "Add property"
-                : current.title
+              : promoting
+                ? "Add property to Admin List?"
+                : editing
+                  ? modal.id
+                    ? "Edit property"
+                    : "Add property"
+                  : current.title || "Property"
           }
           onClose={closeModal}
         >
-          {confirmDelete ? (
+          {promoting ? (
+            <PromoteConfirm
+              property={current}
+              agent={agent}
+              busy={busy}
+              error={actionError}
+              onCancel={() => {
+                setPromoting(false);
+                setActionError("");
+              }}
+              onConfirm={promote}
+            />
+          ) : !editing && !current.title ? (
+            // Opened from a link: wait for the property itself.
+            detail.error ? (
+              <ErrorBox error={detail.error} />
+            ) : (
+              <Loader />
+            )
+          ) : confirmDelete ? (
             <>
               <p>
                 Permanently delete <strong>{current.title}</strong> and its
@@ -362,6 +440,24 @@ export default function InventoryList({
             <>
               <ErrorBox error={detail.error} />
               <PropertyDetails property={current} />
+              {canPromote && loaded && (
+                <>
+                  <PromotionStatus
+                    property={current}
+                    busy={busy}
+                    onAdd={() => {
+                      setActionError("");
+                      setPromoting(true);
+                    }}
+                    onOpenCopy={() =>
+                      navigate(
+                        `/inventory?tab=company&property=${current.admin_copy.id}`,
+                      )
+                    }
+                  />
+                  <ErrorBox error={actionError} />
+                </>
+              )}
               <PhotoGallery propertyId={current.id} canManage={canEdit} />
               {canEdit && (
                 <>

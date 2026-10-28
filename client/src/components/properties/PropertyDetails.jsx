@@ -1,4 +1,5 @@
 import { date, pkr } from "../../lib/api";
+import { PromotedFrom } from "../inventory/PromotionPanel";
 import {
   amenityLabel,
   constructionLabel,
@@ -49,6 +50,9 @@ export default function PropertyDetails({ property: p }) {
             .filter(Boolean)
             .join(" · ")}
         </p>
+      )}
+      {p.promoted_from && (
+        <PromotedFrom promoted={p.promoted_from} dateText={date} />
       )}
       <dl className="property-specs">
         <Spec label="Reference" value={propertyRef(p.property_no)} />
