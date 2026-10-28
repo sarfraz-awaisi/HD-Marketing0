@@ -1,6 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
+import { validateRuntime } from "../server/src/config/runtime.js";
 if (process.env.NODE_ENV === "production")
   throw new Error("Development setup forbidden in production");
+// Applies the LOCAL_DEV_ONLY checks before any account is created.
+validateRuntime();
 const db = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,

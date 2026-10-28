@@ -72,3 +72,39 @@ describe("durable Meta work alongside existing maintenance jobs", () => {
     );
   });
 });
+describe("background jobs in LOCAL_DEV_ONLY development", () => {
+  beforeEach(() => {
+    vi.stubEnv("LOCAL_DEV_ONLY", "true");
+    vi.stubEnv("SUPABASE_URL", "http://127.0.0.1:54321");
+    vi.spyOn(globalThis, "setInterval").mockReturnValue(0);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+  it("stays idle and runs no job unless RUN_LOCAL_JOBS is set", async () => {
+    // The idle runner never finishes importing, so it is not awaited.
+    import("../src/jobs/runner.js");
+    await vi.waitFor(() =>
+      expect(console.log).toHaveBeenCalledWith(
+        expect.stringContaining("RUN_LOCAL_JOBS=true"),
+      ),
+    );
+    expect(fixture.jobs.every((job) => job.mock.calls.length === 0)).toBe(
+      true,
+    );
+    expect(fixture.db.rpc).not.toHaveBeenCalled();
+  });
+  it("runs the jobs against local Supabase when RUN_LOCAL_JOBS=true", async () => {
+    vi.stubEnv("RUN_LOCAL_JOBS", "true");
+    await import("../src/jobs/runner.js");
+    expect(fixture.jobs.every((job) => job.mock.calls.length === 1)).toBe(true);
+  });
+  it("refuses to start when the settings point at hosted Supabase", async () => {
+    vi.stubEnv("RUN_LOCAL_JOBS", "true");
+    vi.stubEnv("SUPABASE_URL", "https://project.supabase.co");
+    await expect(import("../src/jobs/runner.js")).rejects.toThrow(
+      "LOCAL_DEV_ONLY",
+    );
+    expect(fixture.jobs.every((job) => job.mock.calls.length === 0)).toBe(
+      true,
+    );
+  });
+});
