@@ -9,13 +9,15 @@ import {
   pkTime,
 } from "../../lib/attendance";
 import { dayLabel, startOfMonth, todayPk } from "../../lib/calendar";
-import { ErrorBox, Loader, Table } from "../common/UI";
+import { Button, ErrorBox, Loader, Table } from "../common/UI";
 import { PunctualityBadge, RequestBadge, StateBadge } from "./Badges";
+import { ManageDayDialog } from "./AttendanceManage";
 // One employee's attendance over a date range, including disabled accounts.
 export default function AdminEmployee({ userId, onSelect }) {
   const today = todayPk();
   const [from, setFrom] = useState(startOfMonth(today)),
-    [to, setTo] = useState(today);
+    [to, setTo] = useState(today),
+    [managing, setManaging] = useState(null);
   const people = useQuery({
     queryKey: ["attendance-admin", "employees"],
     queryFn: ({ signal }) => api("/admin/attendance/employees", { signal }),
@@ -166,8 +168,32 @@ export default function AdminEmployee({ userId, onSelect }) {
                       .filter(Boolean)
                       .join(" · ") || "—",
                 },
+                {
+                  key: "manage",
+                  label: "Actions",
+                  render: (x) =>
+                    x.day < today ? (
+                      <Button
+                        variant="secondary"
+                        aria-label={`Manage ${dayLabel(x.day)}`}
+                        onClick={() => setManaging(x.day)}
+                      >
+                        Manage
+                      </Button>
+                    ) : (
+                      "—"
+                    ),
+                },
               ]}
             />
+            {managing && (
+              <ManageDayDialog
+                userId={userId}
+                day={managing}
+                name={d.employee.name}
+                onClose={() => setManaging(null)}
+              />
+            )}
           </section>
           <div className="dashboard-grid">
             <section className="panel">

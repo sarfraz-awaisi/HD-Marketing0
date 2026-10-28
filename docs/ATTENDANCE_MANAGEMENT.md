@@ -36,7 +36,7 @@ Open **Attendance management**, the _Attendance Command Center_. The header show
 **Navigation:**
 
 - Main views: **Overview, Daily, Weekly, Monthly, Employees**.
-- Under _Manage_: **Leave requests**, **Corrections** (each with a count of waiting requests), **Holidays** and **Settings**.
+- Management group: **Manage** (enter or correct earlier days, section 8a), **Leave requests**, **Corrections** (each with a count of waiting requests), **Holidays** and **Settings**.
 - Arrow keys, Home and End move between sections.
 - Links such as `?tab=weekly` keep working.
 
@@ -153,6 +153,43 @@ Punctuality is shown separately: **On time**, **Within grace** or **Late**.
 - **Two admins at once:** only the first review counts.
 - Self-review is refused.
 
+## 8a. Entering and correcting earlier days (update 042)
+
+An administrator can enter or correct another employee's attendance for days before today, for example the days before the CRM started tracking.
+
+**Where:**
+
+- **Manage** tab: choose the employee, then **One day** or **Several days** (up to 31).
+- **Manage** next to an earlier day in the **Daily** register or an employee's daily record.
+
+**What each choice stores** (no new statuses):
+
+| Choice                  | Stored as                                                                                                                                                                                                                   |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Present, Late, Half day | A check-in and check-out. Punctuality, worked time and early departure are calculated with that day's rules, as for a normal day. **Late** must arrive after the grace period. **Half day** must end before the shift ends. |
+| Absent                  | Nothing is stored, as before. The day counts as absent because it has no attendance.                                                                                                                                        |
+| Leave                   | Approved one-day leave, marked as recorded by the administrator. The employee sees it in their leave list as _Recorded by an administrator_; your reason stays in the audit log.                                            |
+
+**Rules** (checked by the database):
+
+- Only days before today, within the last year.
+- Only working days that are not holidays.
+- Never your own attendance; another administrator must do it.
+- Not while a correction request for the day is waiting.
+- Existing attendance is kept unless you confirm replacing it.
+- An employee's own approved leave request, and a record with correction history, can't be removed here.
+
+**Days before an employee's own attendance:** a day counts only once you enter it. It gets an attendance period of its own, marked with the administrator who entered it, so days nobody entered stay uncounted (_Not active_ or _Not tracked_) and never become absences. Weekends between entered days count as days off. Entering a day before tracking began also moves the first rules' start back, under the same rules; other employees are not affected. **Remove entry** takes an entered day out again, without leaving an absence. Days inside the employee's own attendance can't be removed, only changed or marked absent.
+
+**Every save is previewed** (one day: before and after; several days: each date's result, with days off and holidays left out) and then saved together. Results are reported as added, changed, unchanged, kept as is or not saved.
+
+**Audit and notifications:**
+
+- Each change is written to `audit_log`: `attendance.manual_create` or `attendance.manual_update`, with the employee, date, administrator, values before and after, the reason, and whether the day became counted. Moving the start of tracking is logged as `attendance.tracking_start_moved`.
+- The day's history appears under the form.
+- Edited days show **Corrected**.
+- Nothing notifies anyone; these are earlier days.
+
 ## 9. Working hours
 
 - **Settings → Schedule a change** sets:
@@ -189,14 +226,14 @@ Punctuality is shown separately: **On time**, **Within grace** or **Late**.
 
 ## 12. Database tables
 
-| Table                       | Purpose                                                                                                                                                            |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `attendance_policies`       | Versioned rules (shift, days, grace, effective dates). Periods cannot overlap. Seeded on install: 10:00–18:00, Mon–Sat, 15 min.                                    |
-| `attendance_periods`        | When each account counts for attendance; opened and closed automatically when an account is enabled or disabled.                                                   |
-| `attendance_records`        | One row per person per day: snapshot of the rules, times and calculated values. Unique per person and date; one open session per person; check-out after check-in. |
-| `attendance_holidays`       | Company holidays, unique by date.                                                                                                                                  |
-| `attendance_leave_requests` | Leave requests and reviews; reviewer can never be the requester.                                                                                                   |
-| `attendance_corrections`    | Correction requests with the original and requested times; one pending request per person and date.                                                                |
+| Table                       | Purpose                                                                                                                                                                                                               |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `attendance_policies`       | Versioned rules (shift, days, grace, effective dates). Periods cannot overlap. Seeded on install: 10:00–18:00, Mon–Sat, 15 min.                                                                                       |
+| `attendance_periods`        | When each account counts for attendance; opened and closed automatically when an account is enabled or disabled. Earlier days an administrator entered have their own closed periods with `recorded_by` (update 042). |
+| `attendance_records`        | One row per person per day: snapshot of the rules, times and calculated values. Unique per person and date; one open session per person; check-out after check-in.                                                    |
+| `attendance_holidays`       | Company holidays, unique by date.                                                                                                                                                                                     |
+| `attendance_leave_requests` | Leave requests and reviews; reviewer can never be the requester. `recorded_by` (update 042) names the administrator who recorded the leave directly.                                                                  |
+| `attendance_corrections`    | Correction requests with the original and requested times; one pending request per person and date.                                                                                                                   |
 
 Row-level security is on for every table, and browsers have no access to any of them. Events go into the existing append-only `audit_log` (`attendance.*` actions), so there is no separate audit table.
 
@@ -214,12 +251,13 @@ Row-level security is on for every table, and browsers have no access to any of 
   - `attendance_leave_review` and `attendance_correction_review`
   - `attendance_holiday_save` and `attendance_holiday_delete`
   - `attendance_policies_list` and `attendance_policy_save`
+  - `attendance_admin_day` and `attendance_admin_set` (update 042): an earlier day as an administrator sees it, and entering or correcting earlier days (with a dry run)
 - **Shared calculation:**
   - `attendance_days`: each person's state for each day
   - `attendance_totals`: the totals above
   - `attendance_compute`: punctuality and durations
 - **Job:** `attendance_reconcile`, reached through `run_crm_job('attendance')`.
-- **Test-only:** `attendance_check_in_at` and `attendance_check_out_at` take an explicit time and are callable only by the database owner, never the API.
+- **Test-only:** `attendance_check_in_at`, `attendance_check_out_at`, `attendance_admin_day_at` and `attendance_admin_set_at` take an explicit time and are callable only by the database owner, never the API.
 
 Errors use SQLSTATE `HA400`, `HA403`, `HA404` and `HA409`, with messages that are safe to show to the user.
 
@@ -239,20 +277,22 @@ All routes need a signed-in, active account.
   - `GET /leave`, `POST /leave/:id/review`, `GET /corrections`, `POST /corrections/:id/review`
   - `GET /settings`, `PATCH /settings`
   - `GET /holidays`, `POST /holidays`, `DELETE /holidays/:id`
+  - `GET /manage?user&date` and `POST /manage` (update 042). The body is `user_id`, `entries` (1–31 of `date`, `status`, `check_in`, `check_out`, `leave_type`), `reason`, `replace` and `dry_run`. A dry run returns the same per-date plan without saving.
   - `GET /export?type=daily|weekly|monthly&format=csv|xlsx` plus the report's filters
 
 Responses are never cached. Exports protect against spreadsheet formulas and contain only attendance data: no customers, phone numbers, passwords or tokens.
 
 ## 15. Permissions
 
-| Action                                           | Agent | Admin                                    |
-| ------------------------------------------------ | ----- | ---------------------------------------- |
-| Check in or out, view own attendance and summary | Yes   | Yes                                      |
-| Request leave or a correction; view decisions    | Yes   | Yes                                      |
-| View others' attendance, reports, exports        | No    | Yes                                      |
-| Review leave or corrections                      | No    | Yes, except their own                    |
-| Holidays and attendance settings                 | No    | Yes                                      |
-| Change official times directly                   | No    | No (only through an approved correction) |
+| Action                                           | Agent | Admin                                        |
+| ------------------------------------------------ | ----- | -------------------------------------------- |
+| Check in or out, view own attendance and summary | Yes   | Yes                                          |
+| Request leave or a correction; view decisions    | Yes   | Yes                                          |
+| View others' attendance, reports, exports        | No    | Yes                                          |
+| Review leave or corrections                      | No    | Yes, except their own                        |
+| Holidays and attendance settings                 | No    | Yes                                          |
+| Change today's times directly                    | No    | No (only through an approved correction)     |
+| Enter or correct earlier days (update 042)       | No    | Yes, except their own; previewed and audited |
 
 ## 16. Background reconciliation
 
@@ -265,7 +305,7 @@ Responses are never cached. Exports protect against spreadsheet formulas and con
 
 ## 17. Testing
 
-- **Server (Vitest + PGlite + Supertest):** `server/tests/attendance.test.js`.
+- **Server (Vitest + PGlite + Supertest):** `server/tests/attendance.test.js`; earlier-day entries in `server/tests/attendance-admin.test.js`.
 - **Screens:** `client/tests/attendance.test.jsx`.
 - **Run everything:** `npm test` from the project folder.
 - Results are recorded in [VERIFICATION.md](../VERIFICATION.md).

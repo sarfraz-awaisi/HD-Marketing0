@@ -12,6 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "../src/App";
 import { ToastProvider } from "../src/components/common/UI";
 import { clockLabel, minutesLabel, pkMoment } from "../src/lib/attendance";
+import { dayLabel } from "../src/lib/calendar";
 import {
   monthGrid,
   monthTotals,
@@ -847,5 +848,397 @@ describe("Attendance management", () => {
       work_days: [1, 2, 3, 4, 5, 6],
     });
     expect(body.effective_from > today).toBe(true);
+  });
+});
+
+// Update 042: the Manage tab and per-row Manage actions enter or correct
+// attendance for earlier days. The server decides each date; these checks
+// cover what the screens send and show.
+describe("Manage attendance", () => {
+  const addDay = (d, n) =>
+    new Date(Date.parse(d + "T00:00:00Z") + n * 864e5)
+      .toISOString()
+      .slice(0, 10);
+  const isSunday = (d) => new Date(d + "T00:00:00Z").getUTCDay() === 0;
+  let pastDay = addDay(today, -1);
+  while (isSunday(pastDay)) pastDay = addDay(pastDay, -1);
+  const info = (date, extra = {}) => ({
+    date,
+    today,
+    self: false,
+    employee: { id: ali.id, name: "Ali Agent", uid: 775610, role: "agent" },
+    state: "absent",
+    record: null,
+    leave: null,
+    rules: {
+      shift_start: "10:00",
+      shift_end: "18:00",
+      grace_minutes: 15,
+      work_days: [1, 2, 3, 4, 5, 6, 7],
+    },
+    holiday: null,
+    pending_correction: false,
+    attendance_start: today,
+    counted: true,
+    entered: false,
+    tracking_started: today,
+    history: [],
+    ...extra,
+  });
+  const plan = (body, extra = {}) => ({
+    dry_run: body.dry_run,
+    employee: { id: ali.id, name: "Ali Agent" },
+    results: body.entries.map((e) => ({
+      date: e.date,
+      status: e.status,
+      result: "create",
+      message: null,
+      before: { state: "not_counted" },
+      after: {
+        state: "checked_out",
+        check_in_at: `${e.date}T${e.check_in}:00+05:00`,
+        check_out_at: `${e.date}T${e.check_out}:00+05:00`,
+        punctuality: "on_time",
+      },
+    })),
+    summary: {
+      created: body.entries.length,
+      updated: 0,
+      unchanged: 0,
+      skipped: 0,
+      failed: 0,
+    },
+    counted_days: [],
+    tracking_start: null,
+    ...extra,
+  });
+  let dayInfo, respond;
+  beforeEach(() => {
+    mocks.user = { ...admin };
+    dayInfo = (date) => info(date);
+    respond = (body) => plan(body);
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) => {
+      if (path.startsWith("/admin/attendance/manage?"))
+        return dayInfo(new URLSearchParams(path.split("?")[1]).get("date"));
+      if (path === "/admin/attendance/manage") return respond(options.body);
+      return base(path, options);
+    });
+  });
+  const manageCalls = () =>
+    mocks.api.mock.calls
+      .filter(
+        ([p, o]) => p === "/admin/attendance/manage" && o?.method === "POST",
+      )
+      .map(([, o]) => o.body);
+
+  it("opens the Manage tab, which used to be only a label", async () => {
+    open("/attendance-management");
+    fireEvent.click(await screen.findByRole("tab", { name: "Manage" }));
+    expect(
+      await screen.findByRole("heading", { name: "Manage attendance" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Choose an employee to begin."),
+    ).toBeInTheDocument();
+    fireEvent.change(
+      await screen.findByRole("combobox", { name: "Employee" }),
+      {
+        target: { value: ali.id },
+      },
+    );
+    expect(
+      await screen.findByRole("button", { name: "Review entry" }),
+    ).toBeInTheDocument();
+    expect(calls("/admin/attendance/manage?")[0]).toContain(`user=${ali.id}`);
+    expect(screen.getByRole("radio", { name: "Present" })).toBeChecked();
+  });
+
+  it("adds an earlier day after a preview and a confirmation", async () => {
+    respond = (body) =>
+      plan(body, {
+        counted_days: [pastDay],
+      });
+    open(`/attendance-management?tab=manage&user=${ali.id}&date=${pastDay}`);
+    const checkIn = await screen.findByLabelText("Check-in (Pakistan time)");
+    expect(checkIn).toHaveValue("10:00");
+    fireEvent.change(checkIn, { target: { value: "10:30" } });
+    expect(
+      screen.getByText(/Arrival: Late \(30 min after the shift starts\)/),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Reason or note (optional)"), {
+      target: { value: "Paper register" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review entry" }));
+    expect(
+      await screen.findByRole("heading", { name: "Add this day?" }),
+    ).toBeInTheDocument();
+    expect(manageCalls()).toEqual([
+      {
+        user_id: ali.id,
+        entries: [
+          {
+            date: pastDay,
+            status: "present",
+            check_in: "10:30",
+            check_out: "18:00",
+          },
+        ],
+        reason: "Paper register",
+        replace: false,
+        dry_run: true,
+      },
+    ]);
+    expect(
+      screen.getByText(
+        /before Ali Agent's own attendance and will now be counted/,
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
+    expect(
+      await screen.findByText(
+        `Attendance added for Ali Agent on ${dayLabel(pastDay)}`,
+      ),
+    ).toBeInTheDocument();
+    expect(manageCalls().map((b) => b.dry_run)).toEqual([true, false]);
+  });
+
+  it("loads an existing day into the form and changes it only after confirming", async () => {
+    dayInfo = (date) =>
+      info(date, {
+        state: "checked_out",
+        record: {
+          id: "r1",
+          check_in_at: `${date}T05:20:00.000Z`,
+          check_out_at: `${date}T12:00:00.000Z`,
+          state: "checked_out",
+          punctuality: "late",
+          corrected: false,
+        },
+        history: [
+          {
+            at: `${date}T05:20:00.000Z`,
+            action: "attendance.check_in",
+            by: "Ali Agent",
+          },
+        ],
+      });
+    respond = (body) => {
+      const p = plan(body);
+      p.results[0] = {
+        ...p.results[0],
+        result: "update",
+        before: {
+          state: "checked_out",
+          check_in_at: `${pastDay}T05:20:00.000Z`,
+          check_out_at: `${pastDay}T12:00:00.000Z`,
+          punctuality: "late",
+        },
+      };
+      return p;
+    };
+    open(`/attendance-management?tab=manage&user=${ali.id}&date=${pastDay}`);
+    expect(
+      await screen.findByLabelText("Check-in (Pakistan time)"),
+    ).toHaveValue("10:20");
+    expect(screen.getByLabelText("Check-out (Pakistan time)")).toHaveValue(
+      "17:00",
+    );
+    expect(screen.getByText("Change history")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Check-in (Pakistan time)"), {
+      target: { value: "10:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review change" }));
+    const confirm = await screen.findByRole("group", {
+      name: "Confirm change",
+    });
+    expect(within(confirm).getByText(/Late$/)).toBeInTheDocument();
+    expect(manageCalls()[0]).toMatchObject({ replace: true, dry_run: true });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
+    expect(
+      await screen.findByText(
+        `Attendance updated for Ali Agent on ${dayLabel(pastDay)}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("removes an entered day so it is no longer counted", async () => {
+    dayInfo = (date) =>
+      info(date, {
+        state: "checked_out",
+        entered: true,
+        record: {
+          id: "r1",
+          check_in_at: `${date}T05:00:00.000Z`,
+          check_out_at: `${date}T13:00:00.000Z`,
+          state: "checked_out",
+          punctuality: "on_time",
+          corrected: true,
+        },
+      });
+    respond = (body) => {
+      const p = plan(body);
+      p.results[0] = {
+        ...p.results[0],
+        result: "update",
+        before: { state: "checked_out" },
+        after: { state: "not_counted" },
+      };
+      return p;
+    };
+    open(`/attendance-management?tab=manage&user=${ali.id}&date=${pastDay}`);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Remove entry" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Remove this entry?" }),
+    ).toBeInTheDocument();
+    expect(manageCalls()[0]).toEqual({
+      user_id: ali.id,
+      entries: [{ date: pastDay, status: "clear" }],
+      replace: true,
+      dry_run: true,
+    });
+    const confirm = screen.getByRole("group", { name: "Confirm change" });
+    expect(within(confirm).getByText("Not counted")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and save" }));
+    expect(
+      await screen.findByText(
+        `Attendance entry removed for Ali Agent on ${dayLabel(pastDay)}`,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("explains why a day cannot be changed and shows the server's reasons", async () => {
+    dayInfo = (date) => info(date, { self: true });
+    open(`/attendance-management?tab=manage&user=${ali.id}&date=${pastDay}`);
+    expect(
+      await screen.findByText(
+        "You can't change your own attendance. Another administrator must do it.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review entry" })).toBeNull();
+  });
+
+  it("refuses a late day inside the grace period with the server's message", async () => {
+    respond = (body) => {
+      const p = plan(body);
+      p.results[0] = {
+        ...p.results[0],
+        result: "error",
+        message:
+          "A 10:10 check-in is within the 15-minute grace period, so the day is not late",
+        after: null,
+      };
+      return p;
+    };
+    open(`/attendance-management?tab=manage&user=${ali.id}&date=${pastDay}`);
+    fireEvent.click(await screen.findByRole("radio", { name: "Late" }));
+    expect(screen.getByLabelText("Check-in (Pakistan time)")).toHaveValue(
+      "10:30",
+    );
+    fireEvent.change(screen.getByLabelText("Check-in (Pakistan time)"), {
+      target: { value: "10:10" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Review entry" }));
+    expect(
+      await screen.findByText(/within the 15-minute grace period/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Confirm and save" }),
+    ).toBeNull();
+  });
+
+  it("previews several days, leaves out Sundays and saves only the ticked days", async () => {
+    const from = addDay(today, -8),
+      to = addDay(today, -2);
+    respond = (body) => {
+      const p = plan(body);
+      p.results = p.results.map((r, i) =>
+        isSunday(r.date)
+          ? { ...r, result: "error", message: "Scheduled day off", after: null }
+          : i === 1
+            ? {
+                ...r,
+                result: "skip",
+                message: "Already recorded.",
+                after: null,
+              }
+            : r,
+      );
+      if (!body.dry_run)
+        p.summary = {
+          created: body.entries.length,
+          updated: 0,
+          unchanged: 0,
+          skipped: 0,
+          failed: 0,
+        };
+      return p;
+    };
+    open(`/attendance-management?tab=manage&user=${ali.id}`);
+    fireEvent.click(await screen.findByRole("radio", { name: "Several days" }));
+    fireEvent.change(await screen.findByLabelText("First day"), {
+      target: { value: from },
+    });
+    fireEvent.change(screen.getByLabelText("Last day"), {
+      target: { value: to },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = await screen.findByRole("region", { name: "Preview" });
+    expect(manageCalls()[0].entries).toHaveLength(7);
+    expect(manageCalls()[0]).toMatchObject({ replace: false, dry_run: true });
+    const sunday = [0, 1, 2, 3, 4, 5, 6]
+      .map((n) => addDay(from, n))
+      .find(isSunday);
+    expect(
+      within(preview).getByRole("checkbox", {
+        name: `Save ${dayLabel(sunday)}`,
+      }),
+    ).toBeDisabled();
+    const creatable = manageCalls()[0]
+      .entries.map((e) => e.date)
+      .filter((d, i) => !isSunday(d) && i !== 1);
+    fireEvent.click(
+      within(preview).getByRole("checkbox", {
+        name: `Save ${dayLabel(creatable[0])}`,
+      }),
+    );
+    fireEvent.click(
+      within(preview).getByRole("button", {
+        name: `Save ${creatable.length - 1} days`,
+      }),
+    );
+    expect(
+      await screen.findByRole("region", { name: "Saved" }),
+    ).toBeInTheDocument();
+    expect(manageCalls()[1].dry_run).toBe(false);
+    expect(manageCalls()[1].entries.map((e) => e.date)).toEqual(
+      creatable.slice(1),
+    );
+  });
+
+  it("opens the same editor from an earlier day in the daily register", async () => {
+    open("/attendance-management?tab=daily");
+    await screen.findByText("Sara Agent");
+    expect(
+      screen.queryByRole("button", { name: "Manage Ali Agent's attendance" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Previous day" }));
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Manage Ali Agent's attendance",
+      }),
+    );
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Manage attendance · Ali Agent",
+      }),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(calls("/admin/attendance/manage?").at(-1)).toContain(
+        `date=${addDay(today, -1)}`,
+      ),
+    );
   });
 });

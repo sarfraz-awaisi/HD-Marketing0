@@ -8,7 +8,10 @@ export const primaryTabs = [
   ["monthly", "Monthly"],
   ["employee", "Employees"],
 ];
+// "Manage" used to be only a label over this group, which looked clickable
+// but did nothing. It is now the tab for entering and correcting attendance.
 export const managementTabs = [
+  ["manage", "Manage"],
   ["leave", "Leave requests"],
   ["corrections", "Corrections"],
   ["holidays", "Holidays"],
@@ -69,9 +72,6 @@ export default function AttendanceNavigation({ tab, onChange, counts = {} }) {
         </span>
         <span className="cc-tab-divider" role="presentation" />
         <span className="cc-tab-group manage" role="presentation">
-          <span className="cc-tab-label" aria-hidden="true">
-            Manage
-          </span>
           {managementTabs.map(button)}
         </span>
       </div>

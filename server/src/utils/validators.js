@@ -591,6 +591,47 @@ export const attendancePolicy = z
       path: ["grace_minutes"],
     },
   );
+// Administrator entries for earlier days (update 042). The SQL function
+// decides each date (day off, existing attendance, grace) and reports it.
+export const attendanceManageDay = z
+  .object({ user: uuid, date: isoDay })
+  .strict();
+export const attendanceManage = z
+  .object({
+    user_id: uuid,
+    entries: z
+      .array(
+        z
+          .object({
+            date: isoDay,
+            // clear removes an entered day so it is no longer counted.
+            status: z.enum([
+              "present",
+              "late",
+              "half_day",
+              "absent",
+              "leave",
+              "clear",
+            ]),
+            check_in: hhmm.optional(),
+            check_out: hhmm.optional(),
+            leave_type: z
+              .enum(["casual", "sick", "emergency", "unpaid", "other"])
+              .optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(31),
+    reason: z.string().trim().max(300).optional(),
+    replace: z.boolean().default(false),
+    dry_run: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (v) => new Set(v.entries.map((e) => e.date)).size === v.entries.length,
+    { message: "Enter each date once", path: ["entries"] },
+  );
 // Property inventory (update 041). Bodies never carry an owner: the signed-in
 // account decides whether a property is company or private agent inventory.
 export const propertyTypes = [

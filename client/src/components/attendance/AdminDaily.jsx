@@ -14,6 +14,7 @@ import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { Button, ErrorBox, Loader, Pagination, Table } from "../common/UI";
 import { PunctualityBadge, StateBadge } from "./Badges";
 import ExportButtons from "./ExportButtons";
+import { ManageDayDialog } from "./AttendanceManage";
 // Everyone expected on a date, including those with no record (absent, on
 // leave, not yet checked in), never only those who checked in.
 export default function AdminDaily({ openEmployee }) {
@@ -23,7 +24,10 @@ export default function AdminDaily({ openEmployee }) {
     [state, setState] = useState(""),
     [punctuality, setPunctuality] = useState(""),
     [account, setAccount] = useState(""),
-    [page, setPage] = useState(1);
+    [page, setPage] = useState(1),
+    [managing, setManaging] = useState(null);
+  // Earlier days can be entered or corrected; today runs on check-in/out.
+  const past = day < todayPk();
   const term = useDebouncedValue(search.trim());
   const filters = {
     date: day,
@@ -227,12 +231,23 @@ export default function AdminDaily({ openEmployee }) {
                 key: "view",
                 label: "Details",
                 render: (r) => (
-                  <Button
-                    variant="secondary"
-                    onClick={() => openEmployee(r.user_id)}
-                  >
-                    View
-                  </Button>
+                  <span className="am-row-actions">
+                    <Button
+                      variant="secondary"
+                      onClick={() => openEmployee(r.user_id)}
+                    >
+                      View
+                    </Button>
+                    {past && (
+                      <Button
+                        variant="secondary"
+                        aria-label={`Manage ${r.name}'s attendance`}
+                        onClick={() => setManaging(r)}
+                      >
+                        Manage
+                      </Button>
+                    )}
+                  </span>
                 ),
               },
             ]}
@@ -244,6 +259,14 @@ export default function AdminDaily({ openEmployee }) {
             onPage={setPage}
           />
         </>
+      )}
+      {managing && (
+        <ManageDayDialog
+          userId={managing.user_id}
+          day={day}
+          name={managing.name}
+          onClose={() => setManaging(null)}
+        />
       )}
     </>
   );
