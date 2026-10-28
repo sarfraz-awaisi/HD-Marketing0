@@ -29,6 +29,8 @@ const MetaIntegration = lazy(routeLoaders.MetaIntegration);
 const IncomingSocial = lazy(routeLoaders.IncomingSocial);
 const MyAttendance = lazy(routeLoaders.MyAttendance);
 const AttendanceManagement = lazy(routeLoaders.AttendanceManagement);
+const MyTasks = lazy(routeLoaders.MyTasks);
+const TaskManagement = lazy(routeLoaders.TaskManagement);
 export function Protected({ role }) {
   const { user, loading } = useAuth();
   if (loading) return <Loader />;
@@ -79,6 +81,9 @@ export default function App() {
               <Route path="followups" element={<FollowUps />} />
               <Route path="visits" element={<SiteVisits />} />
               <Route path="attendance" element={<MyAttendance />} />
+              <Route element={<Protected role="agent" />}>
+                <Route path="my-tasks" element={<MyTasks />} />
+              </Route>
               <Route
                 path="deals"
                 element={
@@ -104,6 +109,7 @@ export default function App() {
                 <Route path="team" element={<Team />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="audit" element={<AuditLog />} />
+                <Route path="task-management" element={<TaskManagement />} />
                 <Route path="security-alerts" element={<SecurityAlerts />} />
                 <Route path="login-history" element={<LoginHistory />} />
                 <Route

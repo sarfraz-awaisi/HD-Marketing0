@@ -33,6 +33,8 @@ export const routeLoaders = {
   AttendanceManagement: once(
     () => import("../pages/admin/AttendanceManagement"),
   ),
+  MyTasks: once(() => import("../pages/agent/MyTasks")),
+  TaskManagement: once(() => import("../pages/admin/TaskManagement")),
 };
 const routes = {
   "/": "Dashboard",
@@ -57,6 +59,8 @@ const routes = {
   "/incoming-social": "IncomingSocial",
   "/attendance": "MyAttendance",
   "/attendance-management": "AttendanceManagement",
+  "/my-tasks": "MyTasks",
+  "/task-management": "TaskManagement",
 };
 export function preloadRoute(path) {
   const connection = navigator.connection;

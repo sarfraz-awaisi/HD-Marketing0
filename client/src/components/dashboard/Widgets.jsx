@@ -6,6 +6,8 @@ import {
   CalendarCheck,
   CalendarDays,
   Clock,
+  ListChecks,
+  LogOut,
   PhoneMissed,
   PhoneOutgoing,
   Repeat,
@@ -114,8 +116,15 @@ export function MonthHighlight({ metrics, admin }) {
     </section>
   );
 }
-// One icon per notification type (updates 038, 040 and 044).
+// One icon per notification type (updates 038, 040, 044 and 045).
 const noticeIcons = {
+  task_assigned: ListChecks,
+  task_updated: ListChecks,
+  task_cancelled: ListChecks,
+  task_report: ListChecks,
+  task_report_reviewed: ListChecks,
+  checkout_request: LogOut,
+  checkout_decision: LogOut,
   property_source_updated: Building2,
   property_source_removed: Building2,
   lead_assigned: UserPlus,

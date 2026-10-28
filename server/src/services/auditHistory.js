@@ -16,6 +16,7 @@ export const auditModules = [
   ["settings", "Settings"],
   ["integrations", "Facebook leads"],
   ["system", "Automatic CRM tasks"],
+  ["tasks", "Tasks and daily reports"],
 ];
 export const auditKinds = [
   ["create", "Added or created"],
@@ -95,6 +96,8 @@ const fieldLabels = {
   work_days: "working days",
   work_end: "end of the working day",
   work_start: "start of the working day",
+  due_on: "due date",
+  target_quantity: "target",
 };
 // ["price","availability"] as "price and availability status".
 export function fieldsText(fields) {
@@ -547,6 +550,202 @@ add(
       to = dayText(c.m.to);
     return `Copied ${number(c.m.copied) != null ? count(c.m.copied, "target") : "targets"}${from ? ` from the period starting ${from}` : ""}${to ? ` to the period starting ${to}` : ""}.`;
   },
+);
+
+// Daily tasks, reports and checkout requests (update 045)
+const taskTitle = (c) => (c.m.title ? `“${c.m.title}”` : "a task");
+const target = (c) =>
+  number(c.m.target_quantity) != null && c.m.unit
+    ? ` (target ${c.m.target_quantity} ${c.m.unit})`
+    : "";
+const qty = (c, n) =>
+  number(n) != null ? `${n}${c.m.unit ? ` ${c.m.unit}` : ""}` : null;
+const checkoutKind = (c) =>
+  c.m.kind === "emergency" ? "emergency" : c.m.kind === "early" ? "early" : "";
+const forDay = (c) => (dateOf(c) ? ` for ${dateOf(c)}` : "");
+const pct = (v) => (number(v) != null ? `${v}%` : null);
+// "18:00" as "6:00 PM": a shift time, not a moment.
+const clock = (hhmm) => {
+  const [h, m] = String(hhmm || "")
+    .split(":")
+    .map(Number);
+  if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+};
+add("task.create", "tasks", "tasks", "assign", "Assigned a task", (c) =>
+  number(c.m.assignee_count) > 1
+    ? `Assigned ${taskTitle(c)}${target(c)} to ${count(c.m.assignee_count, "agent")}${forDay(c)}; each agent has their own assignment.`
+    : `Assigned ${taskTitle(c)}${target(c)} to ${who(c, "an agent")}${forDay(c)}.`,
+);
+add(
+  "task.update",
+  "tasks",
+  "tasks",
+  "update",
+  "Changed a task",
+  (c) =>
+    changed(c, `Changed ${taskTitle(c)}`) +
+    (number(c.m.added_count)
+      ? ` Added ${count(c.m.added_count, "agent")} to it.`
+      : ""),
+);
+add(
+  "task.cancel",
+  "tasks",
+  "tasks",
+  "delete",
+  "Cancelled a task",
+  (c) =>
+    `Cancelled ${taskTitle(c)}${forDay(c)}${number(c.m.assignee_count) ? `, for ${count(c.m.assignee_count, "agent")}` : ""}. Progress already reported is kept.`,
+);
+add(
+  "task.unassign",
+  "task_assignments",
+  "tasks",
+  "delete",
+  "Took an agent off a task",
+  (c) => `Took ${who(c, "an agent")} off ${taskTitle(c)}${forDay(c)}.`,
+);
+add(
+  "task.progress",
+  "task_assignments",
+  "tasks",
+  "update",
+  "Updated task progress",
+  (c) =>
+    c.m.kind === "measurable" && number(c.m.after?.quantity) != null
+      ? `Reported ${number(c.m.target_quantity) != null ? `${c.m.after.quantity} of ${qty(c, c.m.target_quantity)}` : qty(c, c.m.after.quantity)} on ${taskTitle(c)}.`
+      : `Marked ${taskTitle(c)} as ${words(c.m.after?.status) || "updated"}.`,
+);
+add(
+  "task.verify",
+  "task_assignments",
+  "tasks",
+  "review",
+  "Verified a task",
+  (c) => {
+    const reported =
+      c.m.kind === "measurable"
+        ? qty(c, c.m.reported_quantity)
+        : words(c.m.reported_status);
+    const result =
+      c.m.verified_status === "not_done"
+        ? "not done"
+        : c.m.verified_status === "adjusted"
+          ? `adjusted to ${qty(c, c.m.verified_quantity)}`
+          : "confirmed";
+    return `Checked ${whose(c)} ${taskTitle(c)}${forDay(c)}: reported ${reported || "—"}, ${result}.`;
+  },
+);
+add(
+  "task.report_submit",
+  "task_daily_reports",
+  "tasks",
+  "create",
+  "Submitted a daily report",
+  (c) =>
+    `Submitted the daily work report${forDay(c)}${
+      number(c.m.task_count) === 0
+        ? " (no tasks that day)"
+        : pct(c.m.completion_percent)
+          ? `: ${pct(c.m.completion_percent)} across ${count(c.m.task_count, "task")}`
+          : ""
+    }${c.m.late ? ", after the day" : ""}.`,
+);
+add(
+  "task.report_amend",
+  "task_daily_reports",
+  "tasks",
+  "update",
+  "Amended a daily report",
+  (c) =>
+    `Amended the daily work report${forDay(c)}. The earlier version is kept below.`,
+);
+add(
+  "task.report_review",
+  "task_daily_reports",
+  "tasks",
+  "review",
+  "Reviewed a daily report",
+  (c) =>
+    `Reviewed ${whose(c)} daily work report${forDay(c)}${pct(c.m.completion_percent) ? ` (${pct(c.m.completion_percent)})` : ""}.`,
+);
+add(
+  "checkout.request",
+  "task_checkout_requests",
+  "tasks",
+  "request",
+  "Requested checkout approval",
+  (c) =>
+    (c.m.kind === "emergency"
+      ? `Requested an emergency checkout${forDay(c)}${pct(c.m.completion_percent) ? ` with tasks at ${pct(c.m.completion_percent)}` : ""}${c.m.report_submitted ? "" : ", report not submitted"}.`
+      : `Requested an early checkout${forDay(c)} after finishing every task due${clock(c.m.shift_end) ? `, before the ${clock(c.m.shift_end)} shift end` : ""}.`) +
+    (Number(c.m.attempt) > 1 ? ` Request ${c.m.attempt} of the day.` : ""),
+  {
+    titled: (c) =>
+      c.m.kind === "emergency"
+        ? "Requested emergency checkout"
+        : "Requested early checkout",
+  },
+);
+add(
+  "checkout.approve",
+  "task_checkout_requests",
+  "tasks",
+  "review",
+  "Approved a checkout request",
+  (c) =>
+    `Approved ${whose(c)} ${checkoutKind(c)} checkout request${forDay(c)}.${c.m.waive_report ? " The daily report was waived." : ""}${c.m.retrospective ? " Approved after the day, to record the exception." : ""}`.replace(
+      "  ",
+      " ",
+    ),
+  {
+    titled: (c) =>
+      c.m.kind === "emergency"
+        ? "Approved emergency checkout"
+        : "Approved early checkout",
+  },
+);
+add(
+  "checkout.reject",
+  "task_checkout_requests",
+  "tasks",
+  "review",
+  "Rejected a checkout request",
+  (c) =>
+    `Rejected ${whose(c)} ${checkoutKind(c)} checkout request${forDay(c)}.`.replace(
+      "  ",
+      " ",
+    ),
+  {
+    titled: (c) =>
+      c.m.kind === "emergency"
+        ? "Rejected emergency checkout"
+        : "Rejected early checkout",
+  },
+);
+add(
+  "checkout.cancel",
+  "task_checkout_requests",
+  "tasks",
+  "request",
+  "Cancelled a checkout request",
+  (c) =>
+    `Cancelled their ${checkoutKind(c)} checkout request${forDay(c)}.`.replace(
+      "  ",
+      " ",
+    ),
+);
+add(
+  "task.rules_changed",
+  "crm_settings",
+  "tasks",
+  "update",
+  "Changed the task checkout rules",
+  (c) =>
+    c.m.to
+      ? `Checkout rules start on ${dayText(c.m.to)}: agents submit a daily report before checking out, and checking out before the shift ends needs approval.`
+      : "Turned the task checkout rules off.",
 );
 
 // Properties
@@ -1014,7 +1213,7 @@ add(
   "update",
   "Checked out",
   (c) =>
-    `Checked out${dateOf(c) ? ` on ${dateOf(c)}` : ""}${number(c.m.worked_minutes) != null ? ` after working ${minutesText(c.m.worked_minutes)}` : ""}.`,
+    `Checked out${dateOf(c) ? ` on ${dateOf(c)}` : ""}${number(c.m.worked_minutes) != null ? ` after working ${minutesText(c.m.worked_minutes)}` : ""}${c.m.checkout_kind === "early" ? ", using an approved early checkout" : c.m.checkout_kind === "emergency" ? ", using an approved emergency checkout" : ""}.`,
 );
 add(
   "attendance.leave_requested",
@@ -1295,6 +1494,10 @@ const moduleByEntity = {
   account_security: "security",
   security_alerts: "security",
   crm_settings: "settings",
+  tasks: "tasks",
+  task_assignments: "tasks",
+  task_daily_reports: "tasks",
+  task_checkout_requests: "tasks",
 };
 function entryFor(action, entity) {
   return (
@@ -1395,6 +1598,32 @@ export function presentAuditEntry(row) {
         : null);
   const kind = entry?.kind || null;
   const changes = [];
+  if (c.action === "task.update" && m.before && m.after) {
+    for (const [key, label, show] of [
+      ["title", "Title", (v) => v],
+      [
+        "target_quantity",
+        "Target",
+        (v) => (number(v) != null ? String(v) : null),
+      ],
+      ["due_on", "Due date", dayText],
+    ])
+      if (
+        m.before[key] !== m.after[key] &&
+        (show(m.before[key]) || show(m.after[key]))
+      )
+        changes.push({
+          label,
+          before: show(m.before[key]),
+          after: show(m.after[key]),
+        });
+  }
+  if (c.action === "task.report_amend" && m.before && m.after)
+    changes.push({
+      label: "Completion",
+      before: pct(m.before.completion_percent),
+      after: pct(m.after.completion_percent),
+    });
   if (m.from_status && m.to_status)
     changes.push({
       label: "Lead status",

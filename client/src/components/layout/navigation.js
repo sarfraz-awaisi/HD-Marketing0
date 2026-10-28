@@ -11,6 +11,7 @@ import {
   Inbox,
   KeyRound,
   LayoutDashboard,
+  ListChecks,
   PhoneCall,
   Plug,
   ScrollText,
@@ -55,6 +56,7 @@ export const adminNavigation = [
       ["/team", "Team", UsersRound],
       ["/attendance", "My attendance", CalendarCheck],
       ["/attendance-management", "Attendance management", ClipboardCheck],
+      ["/task-management", "Task management", ListChecks],
     ],
   },
   {
@@ -90,6 +92,7 @@ export const agentNavigation = [
   {
     label: "My work",
     links: [
+      ["/my-tasks", "My tasks", ListChecks],
       ["/targets", "My targets", Target],
       ["/attendance", "My attendance", CalendarCheck],
     ],

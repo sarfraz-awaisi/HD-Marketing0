@@ -882,3 +882,157 @@ export const photoOrder = z
       }),
   })
   .strict();
+// Daily tasks, reports and checkout requests (update 045). The database
+// checks the same limits and every rule that depends on the date or role.
+const taskText = (max) => z.string().trim().max(max);
+const taskCategory = z.enum([
+  "calls",
+  "follow_ups",
+  "site_visits",
+  "listings",
+  "meetings",
+  "documents",
+  "other",
+]);
+const taskPriority = z.enum(["low", "normal", "high", "urgent"]);
+export const taskCreate = z
+  .object({
+    scope: z.enum(["team", "individual"]),
+    title: z.string().trim().min(3).max(120),
+    description: taskText(1000).optional(),
+    instructions: taskText(1000).optional(),
+    category: taskCategory.optional(),
+    priority: taskPriority.default("normal"),
+    kind: z.enum(["measurable", "simple"]),
+    target_quantity: z.coerce.number().int().min(1).max(100000).optional(),
+    unit: z.string().trim().min(1).max(30).optional(),
+    task_date: isoDay.optional(),
+    due_on: isoDay.optional(),
+    assignees: z.array(uuid).min(1).max(200).optional(),
+    all_agents: z.boolean().optional(),
+    client_key: uuid,
+    allow_duplicate: z.boolean().optional(),
+  })
+  .strict()
+  .refine((v) => v.all_agents || v.assignees?.length, {
+    message: "Choose at least one agent",
+    path: ["assignees"],
+  })
+  .refine(
+    (v) => v.kind === "simple" || (v.target_quantity != null && v.unit != null),
+    {
+      message: "A measurable task needs a target and a unit",
+      path: ["target_quantity"],
+    },
+  );
+export const taskUpdate = z
+  .object({
+    title: z.string().trim().min(3).max(120).optional(),
+    description: taskText(1000).optional(),
+    instructions: taskText(1000).optional(),
+    category: taskCategory.or(z.literal("")).optional(),
+    priority: taskPriority.optional(),
+    target_quantity: z.coerce.number().int().min(1).max(100000).optional(),
+    unit: z.string().trim().min(1).max(30).optional(),
+    due_on: isoDay.optional(),
+    add_assignees: z.array(uuid).min(1).max(200).optional(),
+    expected_updated_at: z.string().optional(),
+  })
+  .strict();
+export const taskProgress = z
+  .object({
+    quantity: z.coerce.number().int().min(0).max(1000000).optional(),
+    status: z.enum(["pending", "in_progress", "completed"]).optional(),
+    note: taskText(500).optional(),
+  })
+  .strict()
+  .refine((v) => v.quantity != null || v.status != null, {
+    message: "Enter a quantity or a status",
+  });
+export const taskReport = z
+  .object({
+    date: isoDay.optional(),
+    remarks: taskText(1000).optional(),
+    amend: z.boolean().default(false),
+  })
+  .strict();
+export const taskVerify = z
+  .object({
+    status: z.enum(["confirmed", "adjusted", "not_done"]),
+    quantity: z.coerce.number().int().min(0).max(1000000).optional(),
+    note: taskText(500).optional(),
+  })
+  .strict();
+export const taskReason = z
+  .object({ reason: taskText(300).optional() })
+  .strict();
+export const taskNote = z.object({ note: taskText(500).optional() }).strict();
+export const checkoutRequest = z
+  .object({
+    kind: z.enum(["early", "emergency"]),
+    reason: taskText(500).optional(),
+  })
+  .strict()
+  .refine((v) => v.kind === "early" || (v.reason || "").length >= 5, {
+    message: "Tell the administrator briefly what happened",
+    path: ["reason"],
+  });
+export const checkoutDecision = z
+  .object({
+    decision: z.enum(["approve", "reject"]),
+    note: taskText(300).optional(),
+    waive_report: z.boolean().default(false),
+  })
+  .strict();
+const taskPage = {
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+};
+export const taskListQuery = z
+  .object({
+    scope: z.enum(["team", "individual"]).optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    status: z.enum(["open", "cancelled"]).optional(),
+    user: uuid.optional(),
+    search: z.string().trim().max(100).optional(),
+    ...taskPage,
+  })
+  .strict();
+export const taskReportsQuery = z
+  .object({
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    user: uuid.optional(),
+    status: z.enum(["submitted", "reviewed"]).optional(),
+    ...taskPage,
+  })
+  .strict();
+export const checkoutListQuery = z
+  .object({
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    kind: z.enum(["early", "emergency"]).optional(),
+    user: uuid.optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    ...taskPage,
+  })
+  .strict();
+export const taskPerformanceQuery = z
+  .object({ from: isoDay, to: isoDay, user: uuid.optional() })
+  .strict()
+  .refine((v) => v.from <= v.to, {
+    message: "The range must end on or after its start",
+    path: ["to"],
+  });
+export const taskOverviewQuery = z.object({ date: isoDay.optional() }).strict();
+export const taskSettings = z
+  .object({ rules_from: isoDay.nullable() })
+  .strict();
+export const taskMissingQuery = z
+  .object({ from: isoDay.optional(), to: isoDay.optional() })
+  .strict()
+  .refine((v) => !v.from || !v.to || v.from <= v.to, {
+    message: "The range must end on or after its start",
+    path: ["to"],
+  });

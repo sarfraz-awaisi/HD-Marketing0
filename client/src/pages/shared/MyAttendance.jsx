@@ -28,6 +28,10 @@ import {
   StateBadge,
 } from "../../components/attendance/Badges";
 import LeaveRequestForm from "../../components/attendance/LeaveRequestForm";
+import CheckoutPanel from "../../components/tasks/CheckoutPanel";
+import { useAuth } from "../../context/AuthContext";
+import { invalidateTasks } from "../../lib/tasks";
+import "../../styles/tasks.css";
 import CorrectionRequestForm from "../../components/attendance/CorrectionRequestForm";
 // Minutes since check-in, using the server's clock offset; the server still
 // calculates the final worked time at check-out.
@@ -163,6 +167,15 @@ export default function MyAttendance() {
   const qc = useQueryClient(),
     toast = useToast();
   const q = useMyAttendance();
+  const { user } = useAuth();
+  // Task checkout rules (update 045) for agents; nothing shows while they're
+  // off or before the database has update 045.
+  const rules = useQuery({
+    queryKey: ["task-checkout"],
+    queryFn: ({ signal }) => api("/tasks/checkout", { signal }),
+    enabled: user?.role === "agent",
+    retry: false,
+  });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [confirmOut, setConfirmOut] = useState(false),
@@ -183,6 +196,7 @@ export default function MyAttendance() {
         body: {},
       });
       invalidateAttendance(qc);
+      invalidateTasks(qc);
       toast(
         kind === "check-in"
           ? `Checked in at ${pkTime(result.check_in_at)}${
@@ -352,6 +366,7 @@ export default function MyAttendance() {
           </p>
         )}
       </section>
+      {rules.data?.required && <CheckoutPanel state={rules.data} compact />}
       <section className="panel" aria-labelledby="month-title">
         <div className="panel-heading">
           <h2 id="month-title">This month</h2>
@@ -452,6 +467,11 @@ export default function MyAttendance() {
             You checked in at {pkTime(today?.check_in_at)}. After checking out
             you cannot check in again today.
           </p>
+          {rules.data?.required && !rules.data.can_check_out && (
+            <p className="checkout-blocked" role="status">
+              {rules.data.blocked_reason}
+            </p>
+          )}
           <ErrorBox error={error} />
           <footer className="review-buttons">
             <Button
