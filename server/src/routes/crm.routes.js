@@ -23,7 +23,14 @@ import {
   phoneRevealQuery,
   bulkAssignment,
   leadIds,
+  auditQuery,
 } from "../utils/validators.js";
+import {
+  auditKinds,
+  auditMatches,
+  auditModules,
+  presentAuditEntry,
+} from "../services/auditHistory.js";
 import { normalizePhone, csvCell } from "../utils/phoneMask.js";
 import { callingProvider, callCapabilities } from "../services/cloudCalling.js";
 import { assign } from "../services/leadAssignment.js";
@@ -618,17 +625,66 @@ export function crmRouter(db, options = {}) {
       ),
     );
   });
+  // Audit history (update 043): one query per page resolves every person and
+  // record; entries are described in plain English and their metadata is
+  // sanitized before it leaves the server. Audit entries are only read.
+  const auditRpc = async (name, args) => {
+    const result = await db.rpc(name, args);
+    if (["PGRST202", "42883"].includes(result.error?.code))
+      throw Object.assign(
+        new Error("Audit history needs CRM database update 043."),
+        { status: 503 },
+      );
+    return unwrap(result);
+  };
   router.get("/audit", adminOnly, async (req, res) => {
-    const q = listQuery.parse(req.query);
+    const q = auditQuery.parse(req.query);
+    if (
+      (q.module && !auditModules.some(([key]) => key === q.module)) ||
+      (q.kind && !auditKinds.some(([key]) => key === q.kind))
+    )
+      throw Object.assign(new Error("Unknown activity filter"), {
+        status: 400,
+      });
+    // A module and action type that never occur together match nothing.
+    const match = auditMatches(q);
+    const page =
+      match && !match.length
+        ? { page: q.page, limit: q.limit, count: 0, data: [] }
+        : await auditRpc("audit_page", {
+            p_actor: req.user.id,
+            p_filters: {
+              sort: q.sort,
+              ...(q.search ? { search: q.search } : {}),
+              ...(q.from ? { from: q.from } : {}),
+              ...(q.to ? { to: q.to } : {}),
+              ...(q.actor ? { actor: q.actor } : {}),
+              ...(match ? { match } : {}),
+            },
+            p_page: q.page,
+            p_limit: q.limit,
+          });
     res.json({
-      data: unwrap(
-        await db
-          .from("audit_log")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .range((q.page - 1) * q.limit, q.page * q.limit - 1),
-      ),
+      ...page,
+      data: page.data.map(presentAuditEntry),
+      modules: auditModules.map(([key, label]) => ({ key, label })),
+      kinds: auditKinds.map(([key, label]) => ({ key, label })),
     });
+  });
+  router.get("/audit/actors", adminOnly, async (req, res) => {
+    const people = await auditRpc("audit_actors", { p_actor: req.user.id });
+    res.json(
+      people.map((p) => ({
+        id: p.id,
+        name: p.name + (p.deleted ? " (deleted account)" : ""),
+        detail: [
+          p.role === "admin" ? "Admin" : "Agent",
+          p.uid ? `UID ${p.uid}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      })),
+    );
   });
   for (const table of [
     "leads",

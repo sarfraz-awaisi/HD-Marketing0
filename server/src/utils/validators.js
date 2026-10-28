@@ -632,6 +632,31 @@ export const attendanceManage = z
     (v) => new Set(v.entries.map((e) => e.date)).size === v.entries.length,
     { message: "Enter each date once", path: ["entries"] },
   );
+// Audit history filters (update 043). Module and action type names are
+// checked against the audit catalog by the route.
+export const auditQuery = z
+  .object({
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    sort: z.enum(["newest", "oldest"]).default("newest"),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    module: z
+      .string()
+      .regex(/^[a-z]{1,30}$/)
+      .optional(),
+    kind: z
+      .string()
+      .regex(/^[a-z]{1,30}$/)
+      .optional(),
+    actor: uuid.optional(),
+    search: z.string().trim().max(100).optional(),
+  })
+  .strict()
+  .refine((v) => !v.from || !v.to || v.from <= v.to, {
+    message: "The date range must end on or after its start",
+    path: ["to"],
+  });
 // Property inventory (update 041). Bodies never carry an owner: the signed-in
 // account decides whether a property is company or private agent inventory.
 export const propertyTypes = [
