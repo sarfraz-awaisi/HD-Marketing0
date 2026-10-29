@@ -10,12 +10,15 @@ import {
   todayPk,
 } from "../../lib/calendar";
 import { percent } from "../../lib/tasks";
+import { roleLabel } from "../../lib/roles";
 import { KpiTile } from "../dashboard/Widgets";
 import { ErrorBox, Loader, Table } from "../common/UI";
 import { ProgressBar } from "./TaskCard";
 // Performance history (update 045), from the actual assignments, reports and
 // requests. Every task counts equally in an average; measurable tasks count
-// up to 100%, simple tasks 100% when completed and 0% otherwise.
+// up to 100%, simple tasks 100% when completed and 0% otherwise. Agents and
+// staff alike (update 047), filtered by department if chosen; department
+// membership is each person's current department.
 const ranges = {
   week: () => [startOfWeek(todayPk()), todayPk()],
   month: () => [startOfMonth(todayPk()), todayPk()],
@@ -24,13 +27,27 @@ const ranges = {
 export default function TaskPerformance() {
   const [preset, setPreset] = useState("week"),
     [custom, setCustom] = useState(() => ranges.week()),
-    [user, setUser] = useState("");
+    [user, setUser] = useState(""),
+    [department, setDepartment] = useState("");
   const [from, to] = preset === "custom" ? custom : ranges[preset]();
   const agents = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
   });
-  const params = new URLSearchParams({ from, to, ...(user ? { user } : {}) });
+  const departments = useQuery({
+    queryKey: ["departments"],
+    queryFn: ({ signal }) => api("/admin/departments", { signal }),
+    retry: false,
+  });
+  const people = (Array.isArray(agents.data) ? agents.data : []).filter(
+    (u) => u.role === "agent" || u.role === "staff",
+  );
+  const params = new URLSearchParams({
+    from,
+    to,
+    ...(user ? { user } : {}),
+    ...(department ? { department } : {}),
+  });
   const q = useQuery({
     queryKey: ["task-performance", params.toString()],
     queryFn: ({ signal }) =>
@@ -72,19 +89,37 @@ export default function TaskPerformance() {
           </>
         )}
         <select
-          aria-label="Agent"
+          aria-label="Department"
+          value={department}
+          onChange={(e) => setDepartment(e.target.value)}
+        >
+          <option value="">All departments</option>
+          {(Array.isArray(departments.data) ? departments.data : []).map(
+            (d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ),
+          )}
+        </select>
+        <select
+          aria-label="Employee"
           value={user}
           onChange={(e) => setUser(e.target.value)}
         >
-          <option value="">All agents</option>
-          {(agents.data || [])
-            .filter((u) => u.role === "agent")
-            .map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-                {u.active ? "" : " (disabled)"}
-              </option>
-            ))}
+          <option value="">All employees</option>
+          {["agent", "staff"].map((role) => (
+            <optgroup key={role} label={role === "agent" ? "Agents" : "Staff"}>
+              {people
+                .filter((u) => u.role === role)
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                    {u.active ? "" : " (disabled)"}
+                  </option>
+                ))}
+            </optgroup>
+          ))}
         </select>
       </div>
       {from > to && (
@@ -124,17 +159,46 @@ export default function TaskPerformance() {
               tone="navy"
             />
           </section>
+          {d.departments?.some((x) => x.assignments || x.employees) && (
+            <section className="panel">
+              <h2>By department</h2>
+              <Table
+                columns={[
+                  { key: "name", label: "Department" },
+                  { key: "employees", label: "Employees" },
+                  {
+                    key: "assignments",
+                    label: "Tasks",
+                    render: (x) =>
+                      `${x.completed} of ${x.assignments} completed`,
+                  },
+                  {
+                    key: "average_percent",
+                    label: "Completion",
+                    render: (x) => percent(x.average_percent),
+                  },
+                  { key: "reports", label: "Reports" },
+                ]}
+                rows={d.departments.filter((x) => x.assignments || x.employees)}
+              />
+            </section>
+          )}
           <section className="panel">
-            <h2>By agent</h2>
+            <h2>By employee</h2>
             <Table
               columns={[
                 {
                   key: "name",
-                  label: "Agent",
+                  label: "Employee",
                   render: (e) => (
                     <>
                       {e.name}
                       {!e.active && <small> (disabled)</small>}
+                      <small className="employee-sub">
+                        {[roleLabel(e.role), e.department]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </small>
                     </>
                   ),
                 },

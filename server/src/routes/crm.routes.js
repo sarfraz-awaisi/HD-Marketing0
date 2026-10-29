@@ -42,11 +42,14 @@ import { salesRouter } from "./sales.routes.js";
 import {
   attendanceRouter,
   attendanceAdminRouter,
+  attendanceRpc,
 } from "./attendance.routes.js";
+import { employeesAdminRouter } from "./employees.routes.js";
 import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
 import { inventoryRouter } from "./inventory.routes.js";
+const portalNames = { admin: "Admin", agent: "Agent", staff: "Staff" };
 export function unwrap(r) {
   if (r.error)
     throw Object.assign(new Error("Database operation failed"), {
@@ -81,6 +84,7 @@ export function crmRouter(db, options = {}) {
   router.use("/admin/attendance", adminOnly, attendanceAdminRouter(db));
   router.use("/tasks", tasksRouter(db));
   router.use("/admin/tasks", adminOnly, tasksAdminRouter(db));
+  router.use("/admin", adminOnly, employeesAdminRouter(db));
   router.use(inventoryRouter(db));
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -98,12 +102,12 @@ export function crmRouter(db, options = {}) {
     );
   router.get("/me", (req, res) => {
     const { portal } = z
-      .object({ portal: z.enum(["agent", "admin"]).optional() })
+      .object({ portal: z.enum(["agent", "admin", "staff"]).optional() })
       .strict()
       .parse(req.query);
     if (portal && req.user.role !== portal)
       return res.status(403).json({
-        error: `This account cannot sign in to the ${portal === "admin" ? "Admin" : "Agent"} portal. Choose the correct portal for your account.`,
+        error: `This account cannot sign in to the ${portalNames[portal]} portal. Choose the correct portal for your account.`,
       });
     res.json({
       ...req.user,
@@ -113,6 +117,17 @@ export function crmRouter(db, options = {}) {
       mfa_reset_pending: req.mfa.reset_pending,
     });
   });
+  // Update 047: the signed-in employee's department, job title and shift.
+  router.get("/profile", async (req, res) =>
+    res.json(
+      await attendanceRpc(
+        db,
+        "employee_me",
+        { p_actor: req.user.id },
+        "Profiles need CRM database update 047 after 046.",
+      ),
+    ),
+  );
   router.get("/call-capabilities", (_req, res) => res.json(callCapabilities()));
   router.get("/users", adminOnly, async (req, res) =>
     res.json(

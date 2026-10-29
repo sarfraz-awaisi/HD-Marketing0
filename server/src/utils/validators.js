@@ -453,7 +453,7 @@ const peopleFilters = {
     .max(100)
     .regex(/^[\p{L}\p{N} .'-]*$/u)
     .optional(),
-  role: z.enum(["admin", "agent"]).optional(),
+  role: z.enum(["admin", "agent", "staff"]).optional(),
   account: z.enum(["active", "inactive"]).optional(),
 };
 export const attendanceRange = z
@@ -911,6 +911,9 @@ const taskCategory = z.enum([
   "listings",
   "meetings",
   "documents",
+  "media",
+  "technical",
+  "operations",
   "other",
 ]);
 const taskPriority = z.enum(["low", "normal", "high", "urgent"]);
@@ -929,14 +932,24 @@ export const taskCreate = z
     due_on: isoDay.optional(),
     assignees: z.array(uuid).min(1).max(200).optional(),
     all_agents: z.boolean().optional(),
+    // Update 047: every active staff member, or whole departments.
+    all_staff: z.boolean().optional(),
+    departments: z.array(uuid).min(1).max(20).optional(),
     client_key: uuid,
     allow_duplicate: z.boolean().optional(),
   })
   .strict()
-  .refine((v) => v.all_agents || v.assignees?.length, {
-    message: "Choose at least one agent",
-    path: ["assignees"],
-  })
+  .refine(
+    (v) =>
+      v.all_agents ||
+      v.all_staff ||
+      v.departments?.length ||
+      v.assignees?.length,
+    {
+      message: "Choose who gets this task",
+      path: ["assignees"],
+    },
+  )
   .refine(
     (v) => v.kind === "simple" || (v.target_quantity != null && v.unit != null),
     {
@@ -1038,7 +1051,12 @@ export const checkoutListQuery = z
   })
   .strict();
 export const taskPerformanceQuery = z
-  .object({ from: isoDay, to: isoDay, user: uuid.optional() })
+  .object({
+    from: isoDay,
+    to: isoDay,
+    user: uuid.optional(),
+    department: uuid.optional(),
+  })
   .strict()
   .refine((v) => v.from <= v.to, {
     message: "The range must end on or after its start",
@@ -1054,4 +1072,98 @@ export const taskMissingQuery = z
   .refine((v) => !v.from || !v.to || v.from <= v.to, {
     message: "The range must end on or after its start",
     path: ["to"],
+  });
+// Employee management (update 047): every account with its department, job
+// title, joining date and shift. Roles and access stay in Accounts.
+const employeeRole = z.enum(["admin", "agent", "staff"]);
+export const employeesQuery = z
+  .object({
+    ...pageFields,
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @.'_-]*$/u)
+      .optional(),
+    role: employeeRole.optional(),
+    department: uuid.or(z.literal("none")).optional(),
+    account: z.enum(["active", "inactive"]).optional(),
+    attendance: z
+      .enum([
+        "present",
+        "late",
+        "absent",
+        "leave",
+        "not_checked_in",
+        "checked_in",
+        "checked_out",
+        "incomplete",
+        "day_off",
+        "holiday",
+        "not_tracked",
+      ])
+      .optional(),
+    tasks: z.enum(["none", "incomplete", "complete"]).optional(),
+  })
+  .strict();
+const jobTitle = z
+  .string()
+  .trim()
+  .max(80)
+  .nullable()
+  .transform((v) => v || null);
+export const employeeUpdate = z
+  .object({
+    department_id: uuid.nullable(),
+    job_title: jobTitle,
+    joined_on: isoDay.nullable(),
+  })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "Change at least one detail",
+  });
+const clockTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time such as 09:30");
+export const employeeShift = z
+  .object({
+    effective_from: isoDay.optional(),
+    follows_company: z.boolean().default(false),
+    label: z.string().trim().min(1).max(60).optional(),
+    shift_start: clockTime.optional(),
+    shift_end: clockTime.optional(),
+    work_days: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
+    grace_minutes: z.number().int().min(0).max(120).optional(),
+  })
+  .strict()
+  .refine(
+    (v) =>
+      v.follows_company ||
+      (v.label &&
+        v.shift_start &&
+        v.shift_end &&
+        v.work_days &&
+        v.grace_minutes != null),
+    { message: "Enter the shift name, times, working days and grace period" },
+  )
+  .refine((v) => v.follows_company || v.shift_end > v.shift_start, {
+    message: "The shift must end after it starts, on the same day",
+    path: ["shift_end"],
+  });
+const departmentFields = {
+  name: z.string().trim().min(2).max(60),
+  sort_order: z.number().int().min(0).max(10000),
+  active: z.boolean(),
+};
+export const departmentCreate = z
+  .object(departmentFields)
+  .partial({ sort_order: true, active: true })
+  .strict();
+export const departmentUpdate = z
+  .object(departmentFields)
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "Change at least one detail",
   });

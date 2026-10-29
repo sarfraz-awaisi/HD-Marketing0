@@ -222,6 +222,7 @@ export function tasksAdminRouter(db) {
         p_from: q.from,
         p_to: q.to,
         p_user: q.user || null,
+        p_department: q.department || null,
       }),
     );
   });

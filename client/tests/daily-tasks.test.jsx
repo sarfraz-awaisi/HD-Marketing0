@@ -452,7 +452,7 @@ describe("Task management", () => {
     expect(
       within(form).queryByRole("option", { name: /Gone Agent/ }),
     ).toBeNull();
-    fireEvent.change(within(form).getByLabelText("Agent"), {
+    fireEvent.change(within(form).getByLabelText("Employee"), {
       target: { value: agent.id },
     });
     fireEvent.change(within(form).getByLabelText("Title"), {
@@ -634,7 +634,7 @@ describe("Task management", () => {
         : { rules_from: null, rules_active_today: false, today: "2026-10-29" };
     open("/task-management?tab=settings");
     expect(
-      await screen.findByText(/Off\. Agents check out as before\./),
+      await screen.findByText(/Off\. Agents and staff check out as before\./),
     ).toBeInTheDocument();
     const date = screen.getByLabelText("Start the rules on");
     expect(date).toHaveAttribute("min", "2026-10-29");

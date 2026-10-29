@@ -940,7 +940,7 @@ add(
   "create",
   "Created an employee account",
   (c) =>
-    `Created ${c.affected ? `${whose(c)} ` : "an "}${c.m.role === "admin" ? "admin" : c.m.role === "agent" ? "agent" : ""} account${c.m.uid ? ` with UID ${c.m.uid}` : ""}${c.m.active === false ? "; it starts disabled" : ""}.`.replace(
+    `Created ${c.affected ? `${whose(c)} ` : "an "}${c.m.role === "admin" ? "admin" : c.m.role === "agent" ? "agent" : c.m.role === "staff" ? "staff" : ""} account${c.m.uid ? ` with UID ${c.m.uid}` : ""}${c.m.department ? ` in ${c.m.department}` : ""}${c.m.job_title ? ` as ${c.m.job_title}` : ""}${c.m.active === false ? "; it starts disabled" : ""}.`.replace(
       "  ",
       " ",
     ),
@@ -976,7 +976,146 @@ add(
   "accounts",
   "update",
   "Updated an employee account",
-  (c) => changed(c, `Changed ${whose(c)} account`),
+  (c) => {
+    const parts = [];
+    if (c.m.role_from && c.m.role_to)
+      parts.push(
+        `changed the role from ${roleLabel(c.m.role_from)} to ${roleLabel(c.m.role_to)}`,
+      );
+    if (typeof c.m.active === "boolean")
+      parts.push(c.m.active ? "enabled access" : "disabled access");
+    return parts.length
+      ? `${sentence(listText(parts))} for ${who(c)}.`
+      : changed(c, `Changed ${whose(c)} account`);
+  },
+  {
+    titled: (c) =>
+      c.m.role_from && c.m.role_to
+        ? "Changed an employee's role"
+        : c.m.active === true
+          ? "Enabled an employee account"
+          : c.m.active === false
+            ? "Disabled an employee account"
+            : "Updated an employee account",
+  },
+);
+// Employee management (update 047)
+const weekdays = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function daysText(days) {
+  const list = [...new Set(Array.isArray(days) ? days : [])]
+    .map(Number)
+    .filter((d) => d >= 1 && d <= 7)
+    .sort();
+  if (!list.length) return null;
+  const consecutive = list.every((d, i) => i === 0 || d === list[i - 1] + 1);
+  return consecutive && list.length > 2
+    ? `${weekdays[list[0]]}–${weekdays[list.at(-1)]}`
+    : list.map((d) => weekdays[d]).join(", ");
+}
+const shiftText = (s) => {
+  if (!s || typeof s !== "object") return null;
+  const hours =
+    clock(s.shift_start) && clock(s.shift_end)
+      ? `${clock(s.shift_start)}–${clock(s.shift_end)}`
+      : null;
+  if (s.source === "company")
+    return hours ? `Company shift (${hours})` : "Company shift";
+  return [
+    s.label,
+    hours,
+    daysText(s.work_days),
+    number(s.grace_minutes) != null ? `${s.grace_minutes} min grace` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+};
+const employeeChanges = {
+  department: "Department",
+  job_title: "Job title",
+  joined_on: "Joining date",
+};
+add(
+  "employee.updated",
+  "profiles",
+  "accounts",
+  "update",
+  "Updated employee details",
+  (c) => {
+    const ch =
+      c.m.changes && typeof c.m.changes === "object" ? c.m.changes : {};
+    const parts = Object.entries(employeeChanges)
+      .filter(([key]) => ch[key])
+      .map(([key, label]) => {
+        const after =
+          key === "joined_on" ? dayText(ch[key].after) : ch[key].after;
+        return after
+          ? `${label.toLowerCase()} to ${after}`
+          : `removed the ${label.toLowerCase()}`;
+      });
+    return parts.length
+      ? `Set ${whose(c)} ${listText(parts)}.`.replace("Set removed", "Removed")
+      : `Updated ${whose(c)} details.`;
+  },
+  {
+    titled: (c) =>
+      c.m.changes?.department && Object.keys(c.m.changes).length === 1
+        ? "Changed an employee's department"
+        : "Updated employee details",
+  },
+);
+add(
+  "employee.shift_changed",
+  "profiles",
+  "attendance",
+  "update",
+  "Changed an employee's shift",
+  (c) => {
+    const after = shiftText(c.m.after);
+    const from = dayText(c.m.effective_from);
+    return `${after ? `Set ${whose(c)} shift to ${after}` : `Changed ${whose(c)} shift`}${from ? ` from ${from}` : ""}.`;
+  },
+);
+add(
+  "employee.shift_cancelled",
+  "profiles",
+  "attendance",
+  "update",
+  "Withdrew a planned shift change",
+  (c) =>
+    `Withdrew ${whose(c)} shift change planned for ${dayText(c.m.effective_from) || "a later date"}.`,
+);
+add(
+  "department.created",
+  "departments",
+  "accounts",
+  "create",
+  "Added a department",
+  (c) =>
+    `Added the department ${c.m.name ? `“${c.m.name}”` : ""}.`.replace(
+      " .",
+      ".",
+    ),
+);
+add(
+  "department.updated",
+  "departments",
+  "accounts",
+  "update",
+  "Changed a department",
+  (c) => {
+    const b = c.m.before || {},
+      a = c.m.after || {};
+    const parts = [];
+    if (b.name && a.name && b.name !== a.name)
+      parts.push(`renamed “${b.name}” to “${a.name}”`);
+    if (typeof a.active === "boolean" && a.active !== b.active)
+      parts.push(
+        `${a.active ? "reactivated" : "deactivated"} “${a.name || c.m.name}”`,
+      );
+    return parts.length
+      ? `${sentence(listText(parts))}.`
+      : `Changed the department “${c.m.name || "a department"}”.`;
+  },
 );
 add(
   "offboard_agent",
@@ -1531,6 +1670,7 @@ add(
 );
 
 const moduleByEntity = {
+  departments: "accounts",
   leads: "leads",
   lead_imports: "leads",
   calls: "calls",
@@ -1685,6 +1825,36 @@ export function presentAuditEntry(row) {
       label: "Completion",
       before: pct(m.before.completion_percent),
       after: pct(m.after.completion_percent),
+    });
+  if (c.action === "manage_account" && m.role_from && m.role_to)
+    changes.push({
+      label: "Role",
+      before: roleLabel(m.role_from),
+      after: roleLabel(m.role_to),
+    });
+  if (
+    c.action === "employee.updated" &&
+    m.changes &&
+    typeof m.changes === "object"
+  )
+    for (const [key, label] of Object.entries(employeeChanges))
+      if (m.changes[key])
+        changes.push({
+          label,
+          before:
+            key === "joined_on"
+              ? dayText(m.changes[key].before)
+              : m.changes[key].before || null,
+          after:
+            key === "joined_on"
+              ? dayText(m.changes[key].after)
+              : m.changes[key].after || null,
+        });
+  if (c.action === "employee.shift_changed")
+    changes.push({
+      label: "Shift",
+      before: shiftText(m.before),
+      after: shiftText(m.after),
     });
   if (m.from_status && m.to_status)
     changes.push({

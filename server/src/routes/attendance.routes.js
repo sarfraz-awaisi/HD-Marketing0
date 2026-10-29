@@ -375,11 +375,15 @@ export function attendanceAdminRouter(db) {
     );
   });
   router.get("/leave", async (req, res) => {
-    const q = requestListQuery.parse(req.query);
+    const q = requestListQuery
+      .extend({ department: uuid.optional() })
+      .parse(req.query);
     res.json(
       await admin(req, "attendance_leave_page", {
         p_mine: false,
         p_user: q.user || null,
+        // Update 047: leave by department.
+        p_department: q.department || null,
         ...page(q),
       }),
     );

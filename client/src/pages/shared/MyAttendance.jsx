@@ -31,6 +31,7 @@ import LeaveRequestForm from "../../components/attendance/LeaveRequestForm";
 import CheckoutPanel from "../../components/tasks/CheckoutPanel";
 import { useAuth } from "../../context/AuthContext";
 import { invalidateTasks } from "../../lib/tasks";
+import { hasDailyTasks } from "../../lib/roles";
 import "../../styles/tasks.css";
 import CorrectionRequestForm from "../../components/attendance/CorrectionRequestForm";
 // Minutes since check-in, using the server's clock offset; the server still
@@ -168,14 +169,19 @@ export default function MyAttendance() {
     toast = useToast();
   const q = useMyAttendance();
   const { user } = useAuth();
-  // Task checkout rules (update 045) for agents; nothing shows while they're
-  // off or before the database has update 045.
+  // Task checkout rules (update 045) for agents and, from 047, staff;
+  // nothing shows while they're off or before the database has update 045.
   const rules = useQuery({
     queryKey: ["task-checkout"],
     queryFn: ({ signal }) => api("/tasks/checkout", { signal }),
-    enabled: user?.role === "agent",
+    enabled: hasDailyTasks(user?.role),
     retry: false,
   });
+  // Leave requests (/leave and notification links) open at that section.
+  useEffect(() => {
+    if (q.data && window.location.hash === "#leave")
+      document.getElementById("leave")?.scrollIntoView();
+  }, [q.data]);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [confirmOut, setConfirmOut] = useState(false),
@@ -433,7 +439,7 @@ export default function MyAttendance() {
         />
       </section>
       <div className="dashboard-grid attendance-requests">
-        <section className="panel" aria-labelledby="my-leave-title">
+        <section className="panel" id="leave" aria-labelledby="my-leave-title">
           <div className="panel-heading">
             <h2 id="my-leave-title">My leave requests</h2>
             <Button

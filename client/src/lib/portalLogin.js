@@ -5,8 +5,8 @@ import { rememberLoginEmail } from "./loginEmails";
 import { prepareMfa } from "./mfaLogin";
 
 export async function signInToPortal({ email, password }, portal) {
-  if (!["admin", "agent"].includes(portal))
-    throw new Error("Choose Agent or Admin to sign in.");
+  if (!["admin", "agent", "staff"].includes(portal))
+    throw new Error("Choose Agent, Staff or Admin to sign in.");
   const candidate = createLoginClient();
   let session;
   try {
@@ -30,7 +30,7 @@ export async function signInToPortal({ email, password }, portal) {
     });
     if (!profile.active || profile.role !== portal)
       throw new Error(
-        `This account cannot sign in to the ${portal === "admin" ? "Admin" : "Agent"} portal. Choose the correct portal for your account.`,
+        `This account cannot sign in to the ${{ admin: "Admin", agent: "Agent", staff: "Staff" }[portal]} portal. Choose the correct portal for your account.`,
       );
     if (profile.mfa_required)
       return { mfa: await prepareMfa(candidate, profile, email) };

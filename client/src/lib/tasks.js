@@ -13,8 +13,27 @@ export const taskCategories = [
   ["listings", "Property listings"],
   ["meetings", "Meetings"],
   ["documents", "Documents"],
+  // Update 047: office staff.
+  ["media", "Media and content"],
+  ["technical", "Technical and IT"],
+  ["operations", "Office and operations"],
   ["other", "Other"],
 ];
+// Who a task was assigned to (update 047), as kept with the task.
+export function audienceText(audience) {
+  if (!audience || typeof audience !== "object") return "";
+  return [
+    audience.all_agents && "All agents",
+    audience.all_staff && "All staff",
+    ...(Array.isArray(audience.departments)
+      ? audience.departments.map((d) => `${d} team`)
+      : []),
+    audience.people &&
+      `${audience.people} chosen ${audience.people === 1 ? "person" : "people"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 export const taskStatuses = {
   pending: ["Pending", ""],
   in_progress: ["In progress", "warning"],

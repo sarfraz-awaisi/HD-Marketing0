@@ -40,7 +40,7 @@ export function ReportDetail({ id, onClose }) {
         body: note.trim() ? { note: note.trim() } : {},
       });
       invalidateTasks(qc);
-      toast("Report reviewed; the agent can no longer change it");
+      toast("Report reviewed; it can no longer be changed");
       onClose();
     } catch (e) {
       setError(e.message);
@@ -65,7 +65,7 @@ export function ReportDetail({ id, onClose }) {
         <>
           <dl className="task-facts">
             <div>
-              <dt>Agent</dt>
+              <dt>Employee</dt>
               <dd>
                 {r.user_name} · UID {r.user_uid}
               </dd>
@@ -147,7 +147,7 @@ export function ReportDetail({ id, onClose }) {
             <>
               <p className="field-hint">
                 Verify individual tasks under Team tasks or Individual tasks.
-                Reviewing locks the report and its tasks for the agent.
+                Reviewing locks the report and its tasks for the employee.
               </p>
               <label>
                 Review note (optional)
@@ -200,8 +200,8 @@ function OverdueReports({ from, to }) {
       </div>
       <p className="field-hint">
         {from || to
-          ? "Days in the chosen range when an agent had tasks due and sent no report."
-          : "The last 7 days: agents had tasks due and sent no report. They can still submit these from My tasks."}
+          ? "Days in the chosen range when someone had tasks due and sent no report."
+          : "The last 7 days: agents and staff had tasks due and sent no report. They can still submit these from My tasks."}
       </p>
       <ErrorBox error={q.error} />
       {q.isPending ? (
@@ -216,7 +216,7 @@ function OverdueReports({ from, to }) {
             },
             {
               key: "name",
-              label: "Agent",
+              label: "Employee",
               render: (r) => (
                 <>
                   {r.name} <small>UID {r.uid}</small>
@@ -310,7 +310,7 @@ export default function AdminReports({ initialDate }) {
               },
               {
                 key: "user_name",
-                label: "Agent",
+                label: "Employee",
                 render: (r) => (
                   <button
                     type="button"

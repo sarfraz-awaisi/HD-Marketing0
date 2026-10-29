@@ -12,6 +12,7 @@ import {
 import { api } from "../../lib/api";
 import { fullDayLabel, todayPk } from "../../lib/calendar";
 import { invalidateTasks, percent } from "../../lib/tasks";
+import { roleLabel } from "../../lib/roles";
 import { KpiTile } from "../../components/dashboard/Widgets";
 import {
   Button,
@@ -92,7 +93,7 @@ function Overview({ onTab }) {
             <KpiTile
               label="Reports submitted"
               value={`${o.reports_submitted}/${o.agents_with_tasks}`}
-              note={`${o.missing_reports.length === 1 ? "1 agent with tasks hasn't" : `${o.missing_reports.length} agents with tasks haven't`} reported · ${o.reports_to_review} to review`}
+              note={`${o.missing_reports.length === 1 ? "1 person with tasks hasn't" : `${o.missing_reports.length} people with tasks haven't`} reported · ${o.reports_to_review} to review`}
               icon={FileText}
               tone="gold"
             />
@@ -132,7 +133,7 @@ function Overview({ onTab }) {
           <section className="panel">
             <div className="panel-heading">
               <h2>
-                <Users size={18} aria-hidden="true" /> Agents on{" "}
+                <Users size={18} aria-hidden="true" /> Agents and staff on{" "}
                 {fullDayLabel(o.date)}
               </h2>
             </div>
@@ -140,10 +141,15 @@ function Overview({ onTab }) {
               columns={[
                 {
                   key: "name",
-                  label: "Agent",
+                  label: "Employee",
                   render: (p) => (
                     <>
                       {p.name} <small>UID {p.uid}</small>
+                      <small className="employee-sub">
+                        {[roleLabel(p.role), p.department]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </small>
                     </>
                   ),
                 },
@@ -232,9 +238,9 @@ function RulesSettings() {
         <b>Status:</b>{" "}
         {s.rules_from
           ? `${s.rules_active_today ? "On" : "Scheduled"} from ${fullDayLabel(s.rules_from)}`
-          : "Off. Agents check out as before."}
+          : "Off. Agents and staff check out as before."}
       </p>
-      <p>When the rules are on, for agents only:</p>
+      <p>When the rules are on, for agents and staff (never administrators):</p>
       <ul>
         <li>
           Checking out needs the daily work report (an honest report with
@@ -250,7 +256,7 @@ function RulesSettings() {
           they are. Administrators are never affected.
         </li>
         <li>
-          Nobody is ever checked out automatically. If an agent leaves during an
+          Nobody is ever checked out automatically. If someone leaves during an
           emergency without approval, the day is fixed afterwards with a
           check-out correction.
         </li>
@@ -296,7 +302,7 @@ export default function TaskManagement() {
           <span className="eyebrow">CLEAR GOALS, HONEST REPORTING</span>
           <h1>Task management</h1>
           <p>
-            Assign daily tasks, follow each agent's progress, review end-of-day
+            Assign daily tasks, follow each person's progress, review end-of-day
             reports and decide checkout requests.
           </p>
         </div>

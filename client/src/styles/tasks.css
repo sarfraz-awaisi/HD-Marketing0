@@ -448,3 +448,9 @@ dialog.task-dialog {
     flex: 1 1 100%;
   }
 }
+/* Update 047: a person's role, department or job title under their name. */
+.employee-sub {
+  display: block;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}

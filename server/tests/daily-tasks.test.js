@@ -267,7 +267,7 @@ describe("assigning tasks", () => {
     ).toBe("HA400");
     expect(
       (await fails(create(simple({ assignees: [agent, other] })))).message,
-    ).toBe("An individual task is for one agent");
+    ).toBe("An individual task is for one person");
   });
   it("is for administrators only", async () => {
     expect((await fails(create(simple(), pk(MON, "09:00"), agent))).code).toBe(

@@ -35,6 +35,9 @@ export const routeLoaders = {
   ),
   MyTasks: once(() => import("../pages/agent/MyTasks")),
   TaskManagement: once(() => import("../pages/admin/TaskManagement")),
+  StaffDashboard: once(() => import("../pages/staff/StaffDashboard")),
+  MyProfile: once(() => import("../pages/shared/MyProfile")),
+  MyNotifications: once(() => import("../pages/shared/MyNotifications")),
 };
 const routes = {
   "/": "Dashboard",
@@ -60,6 +63,10 @@ const routes = {
   "/attendance": "MyAttendance",
   "/attendance-management": "AttendanceManagement",
   "/my-tasks": "MyTasks",
+  "/my-reports": "MyTasks",
+  "/leave": "MyAttendance",
+  "/profile": "MyProfile",
+  "/notifications": "MyNotifications",
   "/task-management": "TaskManagement",
 };
 export function preloadRoute(path) {

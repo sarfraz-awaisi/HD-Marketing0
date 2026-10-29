@@ -632,8 +632,8 @@
   .glass-portal-toggle {
     position: relative;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: min(300px, 100%);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: min(360px, 100%);
     margin: 0 auto 22px;
     padding: 4px;
     border: 1px solid var(--glass-line);
@@ -646,14 +646,17 @@
     top: 4px;
     bottom: 4px;
     left: 4px;
-    width: calc(50% - 4px);
+    width: calc((100% - 8px) / 3);
     border-radius: 999px;
     background: var(--glass-blue);
     box-shadow: 0 6px 16px rgb(10 92 192 / 40%);
     transition: transform 380ms var(--login-motion-ease);
   }
-  .glass-portal-toggle[data-side="agent"]::before {
+  .glass-portal-toggle[data-portal="agent"]::before {
     transform: translateX(100%);
+  }
+  .glass-portal-toggle[data-portal="staff"]::before {
+    transform: translateX(200%);
   }
   .glass-portal-toggle button {
     position: relative;
@@ -720,4 +723,9 @@
     animation: none !important;
     transition: none !important;
   }
+}
+/* Update 047: the Staff Login link under the Agent preview. */
+.glass-staff-link {
+  display: block;
+  margin-top: 14px;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { roleLabel } from "../../lib/roles";
 import { useQuery } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
 import {
@@ -86,7 +87,10 @@ export default function AdminEmployee({ userId, onSelect }) {
             <h2>{d.employee.name}</h2>
             <p>
               {d.employee.uid ? `UID ${d.employee.uid} · ` : ""}
-              {d.employee.role === "admin" ? "Admin" : "Agent"} ·{" "}
+              {roleLabel(d.employee.role)}
+              {d.employee.department
+                ? ` · ${d.employee.department}`
+                : ""} ·{" "}
               {d.employee.active ? "Active account" : "Inactive account"}
             </p>
             <p className="field-hint">

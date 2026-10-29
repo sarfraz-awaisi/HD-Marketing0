@@ -4,6 +4,7 @@ import { api } from "../../lib/api";
 import { dayLabel } from "../../lib/calendar";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import {
+  audienceText,
   categoryLabel,
   invalidateTasks,
   percent,
@@ -133,7 +134,10 @@ function EditTask({ task: t, onDone }) {
     t.assignments.filter((a) => a.status !== "cancelled").map((a) => a.user_id),
   );
   const addable = (agents.data || []).filter(
-    (u) => u.role === "agent" && u.active && !assigned.has(u.id),
+    (u) =>
+      (u.role === "agent" || u.role === "staff") &&
+      u.active &&
+      !assigned.has(u.id),
   );
   const [f, setF] = useState({
       title: t.title,
@@ -170,7 +174,7 @@ function EditTask({ task: t, onDone }) {
     try {
       await api(`/admin/tasks/${t.id}`, { method: "PATCH", body });
       invalidateTasks(qc);
-      toast("Task updated; its agents were told");
+      toast("Task updated; everyone on it was told");
       onDone();
     } catch (e) {
       setError(e.message);
@@ -181,8 +185,8 @@ function EditTask({ task: t, onDone }) {
   return (
     <form className="edit-task" onSubmit={submit}>
       <p className="field-hint">
-        Changes apply to every agent with this task. Reports already submitted
-        keep the values they were submitted with.
+        Changes apply to everyone with this task. Reports already submitted keep
+        the values they were submitted with.
       </p>
       <div className="form-grid">
         <label className="wide">
@@ -259,7 +263,7 @@ function EditTask({ task: t, onDone }) {
       </div>
       {t.scope === "team" && addable.length > 0 && (
         <fieldset>
-          <legend>Add agents</legend>
+          <legend>Add people</legend>
           <div className="agent-picker">
             {addable.map((a) => (
               <label key={a.id} className="checkbox-field">
@@ -346,7 +350,7 @@ export function TaskDetail({ id, onClose }) {
         <div>
           <p>
             {mode === "cancel"
-              ? `Cancel “${t.title}” for every agent? Their reported progress is kept, and they are told.`
+              ? `Cancel “${t.title}” for everyone? Their reported progress is kept, and they are told.`
               : `Take ${mode.remove.user_name} off “${t.title}”? Their reported progress is kept.`}
           </p>
           <label>
@@ -433,7 +437,7 @@ export function TaskDetail({ id, onClose }) {
           {t.instructions && (
             <p className="field-hint">Instructions: {t.instructions}</p>
           )}
-          <h3>Agents</h3>
+          <h3>Assigned to</h3>
           <ul className="assignment-list">
             {t.assignments.map((a) => (
               <li key={a.id}>
@@ -590,9 +594,17 @@ export default function AdminTaskList({ scope }) {
             },
             {
               key: "assignees",
-              label: scope === "team" ? "Agents" : "Agent",
-              render: (t) =>
-                `${t.assignee_names.join(", ")}${t.assignees > t.assignee_names.length ? ` +${t.assignees - t.assignee_names.length}` : ""}`,
+              label: "Assigned to",
+              render: (t) => (
+                <>
+                  {`${t.assignee_names.join(", ")}${t.assignees > t.assignee_names.length ? ` +${t.assignees - t.assignee_names.length}` : ""}`}
+                  {audienceText(t.audience) && (
+                    <small className="employee-sub">
+                      {audienceText(t.audience)}
+                    </small>
+                  )}
+                </>
+              ),
             },
             {
               key: "completed",

@@ -8,8 +8,9 @@ import {
   taskPriorities,
 } from "../../lib/tasks";
 import { Button, ErrorBox, useToast } from "../common/UI";
-// Assign Team Task / Assign Individual Task (update 045). Each agent gets an
-// assignment of their own; the server checks the agents, dates and targets.
+// Assign Team Task / Assign Individual Task (update 045; staff and departments
+// from 047). Each person gets an assignment of their own, decided when the
+// task is assigned; the server checks the people, dates and targets.
 const blank = (scope) => ({
   scope,
   title: "",
@@ -30,11 +31,23 @@ export default function AssignTaskForm({ onAssigned }) {
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
   });
-  const active = (agents.data || []).filter(
-    (u) => u.role === "agent" && u.active,
+  const people = (Array.isArray(agents.data) ? agents.data : []).filter(
+    (u) => (u.role === "agent" || u.role === "staff") && u.active,
   );
+  const active = people.filter((u) => u.role === "agent");
+  const staff = people.filter((u) => u.role === "staff");
+  const departmentList = useQuery({
+    queryKey: ["departments"],
+    queryFn: ({ signal }) => api("/admin/departments", { signal }),
+    retry: false,
+  });
+  const departments = (
+    Array.isArray(departmentList.data) ? departmentList.data : []
+  ).filter((d) => d.active && d.members > 0);
   const [form, setForm] = useState(blank("team")),
     [everyone, setEveryone] = useState(true),
+    [allStaff, setAllStaff] = useState(false),
+    [chosenDepartments, setChosenDepartments] = useState([]),
     [chosen, setChosen] = useState([]),
     [single, setSingle] = useState(""),
     // One key per form: a repeated click returns the same task.
@@ -53,6 +66,12 @@ export default function AssignTaskForm({ onAssigned }) {
     setChosen(
       chosen.includes(id) ? chosen.filter((x) => x !== id) : [...chosen, id],
     );
+  const toggleDepartment = (id) =>
+    setChosenDepartments(
+      chosenDepartments.includes(id)
+        ? chosenDepartments.filter((x) => x !== id)
+        : [...chosenDepartments, id],
+    );
   async function submit(event) {
     event.preventDefault();
     if (busy) return;
@@ -64,8 +83,9 @@ export default function AssignTaskForm({ onAssigned }) {
       : single
         ? [single]
         : [];
-    if (assignees && !assignees.length) {
-      setError(team ? "Choose at least one agent." : "Choose the agent.");
+    const groups = team && (allStaff || chosenDepartments.length > 0);
+    if (assignees && !assignees.length && !groups) {
+      setError(team ? "Choose who gets this task." : "Choose the employee.");
       return;
     }
     setBusy(true);
@@ -91,16 +111,26 @@ export default function AssignTaskForm({ onAssigned }) {
               unit: form.unit.trim(),
             }
           : {}),
-        ...(assignees ? { assignees } : { all_agents: true }),
+        ...(assignees
+          ? assignees.length
+            ? { assignees }
+            : {}
+          : { all_agents: true }),
+        ...(team && allStaff ? { all_staff: true } : {}),
+        ...(team && chosenDepartments.length
+          ? { departments: chosenDepartments }
+          : {}),
         ...(allowDuplicate ? { allow_duplicate: true } : {}),
       };
       const task = await api("/admin/tasks", { method: "POST", body });
       invalidateTasks(qc);
       toast(
-        `Assigned “${task.title}” to ${task.assignments.length} ${task.assignments.length === 1 ? "agent" : "agents"}`,
+        `Assigned “${task.title}” to ${task.assignments.length} ${task.assignments.length === 1 ? "person" : "people"}`,
       );
       setForm(blank(form.scope));
       setChosen([]);
+      setChosenDepartments([]);
+      setAllStaff(false);
       setSingle("");
       setKey(crypto.randomUUID());
       setAllowDuplicate(false);
@@ -120,9 +150,13 @@ export default function AssignTaskForm({ onAssigned }) {
           [
             "team",
             "Team Task",
-            "The same task for several agents; each is responsible for the full target.",
+            "The same task for several people; each is responsible for the full target.",
           ],
-          ["individual", "Individual Task", "A task for one agent."],
+          [
+            "individual",
+            "Individual Task",
+            "A task for one agent or staff member.",
+          ],
         ].map(([value, label, hint]) => (
           <label
             key={value}
@@ -155,35 +189,92 @@ export default function AssignTaskForm({ onAssigned }) {
               />
               All active agents ({active.length})
             </label>
-            {!everyone && (
-              <div className="agent-picker" role="group" aria-label="Agents">
-                {active.map((a) => (
-                  <label key={a.id} className="checkbox-field">
+            <label className="checkbox-field">
+              <input
+                type="checkbox"
+                checked={allStaff}
+                onChange={(e) => setAllStaff(e.target.checked)}
+              />
+              All active staff ({staff.length})
+            </label>
+            {departments.length > 0 && (
+              <div
+                className="department-picker"
+                role="group"
+                aria-label="Departments"
+              >
+                {departments.map((d) => (
+                  <label key={d.id} className="checkbox-field">
                     <input
                       type="checkbox"
-                      checked={chosen.includes(a.id)}
-                      onChange={() => toggle(a.id)}
+                      checked={chosenDepartments.includes(d.id)}
+                      onChange={() => toggleDepartment(d.id)}
                     />
-                    {a.name} <small>UID {a.uid}</small>
+                    {d.name} team ({d.members})
                   </label>
                 ))}
               </div>
             )}
+            {!everyone && (
+              <>
+                <div className="agent-picker" role="group" aria-label="Agents">
+                  {active.map((a) => (
+                    <label key={a.id} className="checkbox-field">
+                      <input
+                        type="checkbox"
+                        checked={chosen.includes(a.id)}
+                        onChange={() => toggle(a.id)}
+                      />
+                      {a.name} <small>UID {a.uid}</small>
+                    </label>
+                  ))}
+                </div>
+                {staff.length > 0 && !allStaff && (
+                  <div className="agent-picker" role="group" aria-label="Staff">
+                    {staff.map((a) => (
+                      <label key={a.id} className="checkbox-field">
+                        <input
+                          type="checkbox"
+                          checked={chosen.includes(a.id)}
+                          onChange={() => toggle(a.id)}
+                        />
+                        {a.name} <small>Staff · UID {a.uid}</small>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            <p className="field-hint">
+              Everyone chosen gets their own copy. People who join a department
+              later don&apos;t get tasks already assigned.
+            </p>
           </>
         ) : (
           <label>
-            Agent
+            Employee
             <select
               required
               value={single}
               onChange={(e) => setSingle(e.target.value)}
             >
-              <option value="">Choose an agent</option>
-              {active.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name} · UID {a.uid}
-                </option>
-              ))}
+              <option value="">Choose an agent or staff member</option>
+              <optgroup label="Agents">
+                {active.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name} · UID {a.uid}
+                  </option>
+                ))}
+              </optgroup>
+              {staff.length > 0 && (
+                <optgroup label="Staff">
+                  {staff.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} · UID {a.uid}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </label>
         )}

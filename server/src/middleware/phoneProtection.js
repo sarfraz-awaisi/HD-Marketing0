@@ -29,8 +29,9 @@ export function maskAgentResponse(value) {
     );
   return value;
 }
+// Every account except administrators: agents and, from 047, staff.
 export function protectAgentPhones(req, res, next) {
-  if (req.user.role === "agent") {
+  if (req.user.role !== "admin") {
     const json = res.json.bind(res);
     res.json = (data) => {
       if (req.phoneRevealResponse === true) return json(data);

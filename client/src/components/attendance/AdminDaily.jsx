@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { roleLabel } from "../../lib/roles";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import {
@@ -94,6 +95,7 @@ export default function AdminDaily({ openEmployee }) {
         <select aria-label="Role" value={role} onChange={reset(setRole)}>
           <option value="">Admins and agents</option>
           <option value="agent">Agents</option>
+          <option value="staff">Staff</option>
           <option value="admin">Admins</option>
         </select>
         <select
@@ -159,7 +161,8 @@ export default function AdminDaily({ openEmployee }) {
                     <b>{r.name}</b>
                     <small>
                       {r.uid ? `UID ${r.uid} · ` : ""}
-                      {r.role === "admin" ? "Admin" : "Agent"}
+                      {roleLabel(r.role)}
+                      {r.department ? ` · ${r.department}` : ""}
                       {!r.account_active && " · Inactive"}
                     </small>
                   </span>
