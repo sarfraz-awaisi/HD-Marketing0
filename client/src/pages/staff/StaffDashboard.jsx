@@ -11,6 +11,7 @@ import {
 import { fullDayLabel } from "../../lib/calendar";
 import { percent } from "../../lib/tasks";
 import { workDaysText } from "../../lib/roles";
+import { scheduleName } from "../../lib/shifts";
 import { useAuth } from "../../context/AuthContext";
 import { KpiTile, RecentActivity } from "../../components/dashboard/Widgets";
 import { ErrorBox, Loader } from "../../components/common/UI";
@@ -152,6 +153,10 @@ export default function StaffDashboard() {
               <div>
                 <dt>Working days</dt>
                 <dd>{policy ? workDaysText(policy.work_days) : "—"}</dd>
+              </div>
+              <div>
+                <dt>Schedule</dt>
+                <dd>{policy ? scheduleName(policy) : "—"}</dd>
               </div>
               <div>
                 <dt>Check-in</dt>

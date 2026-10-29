@@ -8,21 +8,16 @@ import {
   startOfMonth,
   todayPk,
 } from "../../lib/calendar";
-import { clockLabel, leaveTypeLabel, minutesLabel } from "../../lib/attendance";
+import { leaveTypeLabel, minutesLabel } from "../../lib/attendance";
 import { percent } from "../../lib/tasks";
-import { roleLabel, workDaysText } from "../../lib/roles";
+import { roleLabel } from "../../lib/roles";
+import { shiftLine, shiftText, sourceLabel } from "../../lib/shifts";
 import { Button, ErrorBox, Loader, Modal, useToast } from "../common/UI";
 import { RequestBadge } from "../attendance/Badges";
-import ShiftForm from "./ShiftForm";
-// One employee in Employee management (update 047): working details and
-// shifts, with this month's attendance, leave and the last 30 days of tasks
-// from the existing attendance and task reports.
-export const shiftText = (s) =>
-  s?.shift_start
-    ? `${s.source === "company" ? "Company shift" : s.label}: ${clockLabel(s.shift_start)} – ${clockLabel(s.shift_end)}, ${workDaysText(s.work_days)}, ${s.grace_minutes} min grace`
-    : s?.source === "company"
-      ? "Company shift"
-      : "—";
+// One employee in Employee management (update 047): working details, with
+// this month's attendance, leave and the last 30 days of tasks from the
+// existing attendance and task reports. Office timings are shown here and
+// changed in Attendance management → Shift management (update 048).
 function DetailsForm({ employee, departments, onSaved, onCancel }) {
   const [form, setForm] = useState({
     department_id: employee.department_id || "",
@@ -164,7 +159,8 @@ export default function EmployeeDetail({ id, departments, onClose }) {
               ["Department", e.department || "Not assigned"],
               ["Job title", e.job_title || "—"],
               ["Joined", e.joined_on ? fullDayLabel(e.joined_on) : "—"],
-              ["Shift today", shiftText(e.shift)],
+              ["Office timing", shiftLine(e.shift)],
+              ["Schedule source", sourceLabel(e.shift)],
             ].map(([label, value]) => (
               <div key={label}>
                 <dt>{label}</dt>
@@ -175,25 +171,7 @@ export default function EmployeeDetail({ id, departments, onClose }) {
           {e.shift?.upcoming && (
             <p className="field-hint">
               From {fullDayLabel(e.shift.upcoming.effective_from)}:{" "}
-              {shiftText(e.shift.upcoming)}.{" "}
-              <button
-                type="button"
-                className="link-button"
-                onClick={async () => {
-                  try {
-                    await save(
-                      `/admin/employees/${id}/shifts/${e.shift.upcoming.effective_from}`,
-                      undefined,
-                      "DELETE",
-                      "Planned shift change withdrawn",
-                    );
-                  } catch (err) {
-                    toast(err.message);
-                  }
-                }}
-              >
-                Withdraw this change
-              </button>
+              {shiftText(e.shift.upcoming)}.
             </p>
           )}
           {editing === "details" ? (
@@ -210,27 +188,17 @@ export default function EmployeeDetail({ id, departments, onClose }) {
                 )
               }
             />
-          ) : editing === "shift" ? (
-            <ShiftForm
-              current={e.shift}
-              onCancel={() => setEditing(null)}
-              onSave={(body) =>
-                save(
-                  `/admin/employees/${id}/shifts`,
-                  body,
-                  "POST",
-                  "Shift saved",
-                )
-              }
-            />
           ) : (
             <div className="assignment-actions">
               <Button variant="secondary" onClick={() => setEditing("details")}>
                 Edit department and title
               </Button>
-              <Button variant="secondary" onClick={() => setEditing("shift")}>
-                Change shift
-              </Button>
+              <Link
+                className="button secondary"
+                to={`/attendance-management?tab=shifts&view=individual&employee=${id}`}
+              >
+                Change office timing in Shift management
+              </Link>
               <Link className="button secondary" to="/accounts">
                 Role and access in Accounts
               </Link>
@@ -305,12 +273,19 @@ export default function EmployeeDetail({ id, departments, onClose }) {
           )}
           {e.shifts?.length > 0 && (
             <>
-              <h3>Shift history</h3>
+              <h3>Individual timing history</h3>
               <ul className="request-list">
                 {e.shifts.map((s) => (
-                  <li key={s.effective_from}>
-                    From {fullDayLabel(s.effective_from)}: {shiftText(s)}
-                    {s.upcoming ? " (planned)" : ""}
+                  <li key={s.id || s.effective_from}>
+                    From {fullDayLabel(s.effective_from)}:{" "}
+                    {s.inherits
+                      ? "individual timing removed"
+                      : shiftText({ ...s, source: "individual" })}
+                    {s.withdrawn_at
+                      ? " (withdrawn)"
+                      : s.upcoming
+                        ? " (planned)"
+                        : ""}
                   </li>
                 ))}
               </ul>

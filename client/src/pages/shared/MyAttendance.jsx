@@ -14,6 +14,7 @@ import {
   workDaysLabel,
 } from "../../lib/attendance";
 import { fullDayLabel, dayLabel } from "../../lib/calendar";
+import { scheduleName, shiftHours } from "../../lib/shifts";
 import {
   Button,
   ErrorBox,
@@ -299,9 +300,16 @@ export default function MyAttendance() {
             </h2>
             <p className="field-hint">
               {policy
-                ? `Shift ${clockLabel(policy.shift_start)} – ${clockLabel(policy.shift_end)} · ${policy.grace_minutes} min grace · ${workDaysLabel(policy.work_days)}`
+                ? `Today's shift ${clockLabel(today?.shift_start || policy.shift_start)} – ${clockLabel(today?.shift_end || policy.shift_end)} · ${policy.grace_minutes} min grace · ${workDaysLabel(policy.work_days)}`
                 : "Attendance tracking has not started yet."}
             </p>
+            {policy && (
+              <p className="field-hint attendance-schedule">
+                Schedule: {scheduleName(policy)}
+                {policy.upcoming &&
+                  ` · from ${fullDayLabel(policy.upcoming.effective_from)}: ${shiftHours(policy.upcoming)} (${scheduleName(policy.upcoming)})`}
+              </p>
+            )}
           </div>
           {today && <StateBadge state={today.state} />}
         </div>

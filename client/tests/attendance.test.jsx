@@ -431,7 +431,7 @@ describe("My attendance", () => {
     ).closest("section");
     expect(
       within(card).getByText(
-        "Shift 10:00 AM – 6:00 PM · 15 min grace · Mon, Tue, Wed, Thu, Fri, Sat",
+        "Today's shift 10:00 AM – 6:00 PM · 15 min grace · Mon, Tue, Wed, Thu, Fri, Sat",
       ),
     ).toBeInTheDocument();
     expect(within(card).getByText("Not checked in")).toBeInTheDocument();
@@ -709,6 +709,10 @@ describe("Attendance management", () => {
     expect(holidays).toHaveAttribute("tabindex", "0");
     holidays.focus();
     fireEvent.keyDown(holidays, { key: "ArrowRight" });
+    const shifts = screen.getByRole("tab", { name: "Shift management" });
+    expect(shifts).toHaveAttribute("aria-selected", "true");
+    expect(shifts).toHaveFocus();
+    fireEvent.keyDown(shifts, { key: "ArrowRight" });
     const settings = screen.getByRole("tab", { name: "Settings" });
     expect(settings).toHaveAttribute("aria-selected", "true");
     expect(settings).toHaveFocus();

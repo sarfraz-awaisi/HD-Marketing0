@@ -1,19 +1,31 @@
 import { useState } from "react";
-import { Button, ErrorBox } from "../common/UI";
-import { todayPk } from "../../lib/calendar";
-import { weekdayOptions } from "../../lib/roles";
-// A shift from a date (update 047): the company shift, or the employee's own
-// times and working days. Days already worked keep the shift they had.
-export default function ShiftForm({ current, onSave, onCancel }) {
-  const own = current?.source === "assigned";
+import { Button, ErrorBox } from "../../common/UI";
+import { addDays, todayPk } from "../../../lib/calendar";
+import { weekdayOptions } from "../../../lib/roles";
+import { timingProblem } from "../../../lib/shifts";
+// A timing from a date (update 048), for a role, a department or one
+// employee. With remove, it ends that timing from the date instead and the
+// employees return to the next level (removeText says which). Changes start
+// tomorrow unless today is chosen; earlier days keep the timing they had.
+export default function ShiftTimingForm({
+  initial,
+  version,
+  named = false,
+  remove = false,
+  removeText,
+  submitLabel = "Save timing",
+  onSave,
+  onCancel,
+}) {
+  const today = todayPk();
   const [form, setForm] = useState({
-    effective_from: todayPk(),
-    follows_company: !own,
-    label: own ? current.label || "" : "",
-    shift_start: current?.shift_start || "10:00",
-    shift_end: current?.shift_end || "18:00",
-    work_days: current?.work_days || [1, 2, 3, 4, 5, 6],
-    grace_minutes: current?.grace_minutes ?? 15,
+    effective_from: addDays(today, 1),
+    label: named && initial?.label ? initial.label : "",
+    shift_start: initial?.shift_start || "10:00",
+    shift_end: initial?.shift_end || "18:00",
+    work_days: initial?.work_days || [1, 2, 3, 4, 5, 6],
+    grace_minutes: initial?.grace_minutes ?? 15,
+    reason: "",
   });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -28,16 +40,24 @@ export default function ShiftForm({ current, onSave, onCancel }) {
   async function submit(event) {
     event.preventDefault();
     if (busy) return;
+    const problem = remove ? "" : timingProblem(form);
+    if (problem) return setError(problem);
     setBusy(true);
     setError("");
+    const common = {
+      effective_from: form.effective_from,
+      expected_version: version,
+      ...(form.reason.trim() ? { reason: form.reason.trim() } : {}),
+    };
     try {
       await onSave(
-        form.follows_company
-          ? { effective_from: form.effective_from, follows_company: true }
+        remove
+          ? { ...common, inherit: true }
           : {
-              effective_from: form.effective_from,
-              follows_company: false,
-              label: form.label.trim(),
+              ...common,
+              ...(named && form.label.trim()
+                ? { label: form.label.trim() }
+                : {}),
               shift_start: form.shift_start,
               shift_end: form.shift_end,
               work_days: form.work_days,
@@ -46,60 +66,39 @@ export default function ShiftForm({ current, onSave, onCancel }) {
       );
     } catch (e) {
       setError(e.message);
-    } finally {
       setBusy(false);
     }
   }
   return (
     <form className="shift-form" onSubmit={submit}>
-      <div className="form-grid">
+      {remove && <p className="shift-remove-note">{removeText}</p>}
+      <fieldset className="form-grid" disabled={busy}>
         <label>
-          Starts on
+          Applies from
           <input
             type="date"
             required
-            min={todayPk()}
+            min={today}
+            max={addDays(today, 365)}
             value={form.effective_from}
             onChange={set("effective_from")}
           />
         </label>
-        <fieldset className="shift-choice">
-          <legend>Shift</legend>
-          <label className="checkbox-field">
-            <input
-              type="radio"
-              name="shift-kind"
-              checked={form.follows_company}
-              onChange={() => setForm((f) => ({ ...f, follows_company: true }))}
-            />
-            Company shift
-          </label>
-          <label className="checkbox-field">
-            <input
-              type="radio"
-              name="shift-kind"
-              checked={!form.follows_company}
-              onChange={() =>
-                setForm((f) => ({ ...f, follows_company: false }))
-              }
-            />
-            Own shift
-          </label>
-        </fieldset>
-        {!form.follows_company && (
+        {!remove && (
           <>
-            <label className="wide">
-              Shift name
-              <input
-                required
-                maxLength={60}
-                placeholder="e.g. Media shift"
-                value={form.label}
-                onChange={set("label")}
-              />
-            </label>
+            {named && (
+              <label>
+                Shift name (optional)
+                <input
+                  maxLength={60}
+                  placeholder="Individual shift"
+                  value={form.label}
+                  onChange={set("label")}
+                />
+              </label>
+            )}
             <label>
-              Starts at
+              Shift start
               <input
                 type="time"
                 required
@@ -108,7 +107,7 @@ export default function ShiftForm({ current, onSave, onCancel }) {
               />
             </label>
             <label>
-              Ends at
+              Shift end
               <input
                 type="time"
                 required
@@ -144,10 +143,20 @@ export default function ShiftForm({ current, onSave, onCancel }) {
             </fieldset>
           </>
         )}
-      </div>
+        <label className="wide">
+          Reason for the change (optional)
+          <input
+            maxLength={300}
+            placeholder="e.g. Evening shoots for the new project"
+            value={form.reason}
+            onChange={set("reason")}
+          />
+        </label>
+      </fieldset>
       <p className="field-hint">
-        The shift applies from the chosen day. Days already worked keep the
-        shift they were recorded with.
+        Pakistan time. Shifts start and end on the same day; overnight shifts
+        are not supported. Days before the chosen date, and anyone already
+        checked in that day, keep the timing they had.
       </p>
       <ErrorBox error={error} />
       <footer className="review-buttons">
@@ -159,8 +168,8 @@ export default function ShiftForm({ current, onSave, onCancel }) {
         >
           Cancel
         </Button>
-        <Button type="submit" disabled={busy}>
-          {busy ? "Saving…" : "Save shift"}
+        <Button type="submit" variant={remove ? "danger" : ""} disabled={busy}>
+          {busy ? "Saving…" : submitLabel}
         </Button>
       </footer>
     </form>

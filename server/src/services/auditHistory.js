@@ -1012,6 +1012,21 @@ function daysText(days) {
     ? `${weekdays[list[0]]}–${weekdays[list.at(-1)]}`
     : list.map((d) => weekdays[d]).join(", ");
 }
+// A timing without its source: "12:00 PM–8:00 PM, Mon–Sat, 15 min grace".
+const timingText = (s) =>
+  s && typeof s === "object"
+    ? [
+        clock(s.shift_start) && clock(s.shift_end)
+          ? `${clock(s.shift_start)}–${clock(s.shift_end)}`
+          : null,
+        daysText(s.work_days),
+        number(s.grace_minutes) != null ? `${s.grace_minutes} min grace` : null,
+      ]
+        .filter(Boolean)
+        .join(", ") || null
+    : null;
+// What an employee followed (update 047 wrote assigned for their own shift;
+// 048 adds department and role timings).
 const shiftText = (s) => {
   if (!s || typeof s !== "object") return null;
   const hours =
@@ -1019,16 +1034,28 @@ const shiftText = (s) => {
       ? `${clock(s.shift_start)}–${clock(s.shift_end)}`
       : null;
   if (s.source === "company")
-    return hours ? `Company shift (${hours})` : "Company shift";
-  return [
-    s.label,
-    hours,
-    daysText(s.work_days),
-    number(s.grace_minutes) != null ? `${s.grace_minutes} min grace` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
+    return hours ? `Company default shift (${hours})` : "Company default shift";
+  const name =
+    (s.source === "department" || s.source === "role") && s.source_label
+      ? s.source_label
+      : s.label;
+  return [name, timingText(s)].filter(Boolean).join(", ");
 };
+const reasonText = (c) =>
+  typeof c.m.reason === "string" && c.m.reason ? ` Reason: ${c.m.reason}` : "";
+const sameShift = (a, b, keys) =>
+  keys.every((k) => JSON.stringify(a?.[k]) === JSON.stringify(b?.[k]));
+// Shift management (update 048): the role or department a timing belongs to.
+const shiftTarget = (c) =>
+  c.m.scope === "department"
+    ? `${c.m.department || "a department"} department`
+    : c.m.role === "agent"
+      ? "Agent default"
+      : c.m.role === "staff"
+        ? "Staff default"
+        : "default";
+const fallbackText = (c) =>
+  c.m.scope === "department" ? "Role default shifts" : "Company default shift";
 const employeeChanges = {
   department: "Department",
   job_title: "Job title",
@@ -1070,9 +1097,31 @@ add(
   "update",
   "Changed an employee's shift",
   (c) => {
-    const after = shiftText(c.m.after);
     const from = dayText(c.m.effective_from);
-    return `${after ? `Set ${whose(c)} shift to ${after}` : `Changed ${whose(c)} shift`}${from ? ` from ${from}` : ""}.`;
+    if (c.m.inherits === true)
+      return `Removed ${whose(c)} individual shift${from ? ` from ${from}` : ""}; they follow the ${shiftText(c.m.after) || "shift of their department or role"}.${reasonText(c)}`;
+    const after = shiftText(c.m.after);
+    return `${after ? `Set ${whose(c)} shift to ${after}` : `Changed ${whose(c)} shift`}${from ? ` from ${from}` : ""}.${reasonText(c)}`;
+  },
+  {
+    titled: (c) => {
+      const b = c.m.before || {},
+        a = c.m.after || {};
+      if (c.m.inherits === true) return "Removed an individual shift";
+      if (b.source && !["individual", "assigned"].includes(b.source))
+        return "Assigned an individual shift";
+      if (
+        sameShift(a, b, ["shift_start", "shift_end", "grace_minutes"]) &&
+        !sameShift(a, b, ["work_days"])
+      )
+        return "Changed an employee's working days";
+      if (
+        sameShift(a, b, ["shift_start", "shift_end", "work_days"]) &&
+        !sameShift(a, b, ["grace_minutes"])
+      )
+        return "Changed an employee's grace period";
+      return "Changed an employee's shift";
+    },
   },
 );
 add(
@@ -1083,6 +1132,38 @@ add(
   "Withdrew a planned shift change",
   (c) =>
     `Withdrew ${whose(c)} shift change planned for ${dayText(c.m.effective_from) || "a later date"}.`,
+);
+add(
+  "shift.default_changed",
+  "shift_schedules",
+  "attendance",
+  "update",
+  "Changed a shift timing",
+  (c) => {
+    const from = dayText(c.m.effective_from);
+    const told =
+      number(c.m.notified) > 0
+        ? ` ${count(c.m.notified, "employee")} whose timing changes ${c.m.notified === 1 ? "was" : "were"} notified.`
+        : "";
+    return c.m.inherits === true
+      ? `Ended the ${shiftTarget(c)} shift${from ? ` from ${from}` : ""}; its employees follow ${fallbackText(c).toLowerCase().replace("role", "their role")}.${told}${reasonText(c)}`
+      : `Set the ${shiftTarget(c)} shift to ${timingText(c.m.after) || "a new timing"}${from ? ` from ${from}` : ""}.${told}${reasonText(c)}`;
+  },
+  {
+    titled: (c) =>
+      c.m.inherits === true
+        ? `Removed ${shiftTarget(c)} shift`
+        : `Updated ${shiftTarget(c)} shift`,
+  },
+);
+add(
+  "shift.default_withdrawn",
+  "shift_schedules",
+  "attendance",
+  "update",
+  "Withdrew a planned shift change",
+  (c) =>
+    `Withdrew the ${shiftTarget(c)} shift change planned for ${dayText(c.m.effective_from) || "a later date"}.`,
 );
 add(
   "department.created",
@@ -1671,6 +1752,7 @@ add(
 
 const moduleByEntity = {
   departments: "accounts",
+  shift_schedules: "attendance",
   leads: "leads",
   lead_imports: "leads",
   calls: "calls",
@@ -1855,6 +1937,13 @@ export function presentAuditEntry(row) {
       label: "Shift",
       before: shiftText(m.before),
       after: shiftText(m.after),
+    });
+  if (c.action === "shift.default_changed")
+    changes.push({
+      label: "Shift",
+      before:
+        m.before && !m.before.inherits ? timingText(m.before) : fallbackText(c),
+      after: m.inherits ? fallbackText(c) : timingText(m.after),
     });
   if (m.from_status && m.to_status)
     changes.push({

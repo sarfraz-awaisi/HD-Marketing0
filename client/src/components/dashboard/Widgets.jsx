@@ -116,7 +116,7 @@ export function MonthHighlight({ metrics, admin }) {
     </section>
   );
 }
-// One icon per notification type (updates 038, 040, 044 and 045).
+// One icon per notification type (updates 038, 040, 044, 045 and 048).
 const noticeIcons = {
   task_assigned: ListChecks,
   task_updated: ListChecks,
@@ -140,6 +140,7 @@ const noticeIcons = {
   attendance_review: CalendarCheck,
   attendance_incomplete: CalendarCheck,
   attendance_summary: CalendarCheck,
+  shift_changed: Clock,
 };
 const noticeIcon = (type) => noticeIcons[type] || Bell;
 const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });

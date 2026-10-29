@@ -25,9 +25,8 @@ import {
   PunctualityBadge,
   StateBadge,
 } from "../../components/attendance/Badges";
-import EmployeeDetail, {
-  shiftText,
-} from "../../components/employees/EmployeeDetail";
+import EmployeeDetail from "../../components/employees/EmployeeDetail";
+import { shiftHours, sourceLabel } from "../../lib/shifts";
 import Departments from "../../components/employees/Departments";
 import "../../styles/dashboard.css";
 import "../../styles/tasks.css";
@@ -226,11 +225,17 @@ export default function Team() {
               },
               {
                 key: "shift",
-                label: "Shift",
+                label: "Office timing",
                 render: (r) => (
-                  <small>
-                    <Clock3 size={13} aria-hidden="true" /> {shiftText(r.shift)}
-                  </small>
+                  <>
+                    <small>
+                      <Clock3 size={13} aria-hidden="true" />{" "}
+                      {shiftHours(r.shift)}
+                    </small>
+                    <small className="employee-sub">
+                      {sourceLabel(r.shift)}
+                    </small>
+                  </>
                 ),
               },
               {

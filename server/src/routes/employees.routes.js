@@ -1,19 +1,19 @@
 import { Router } from "express";
-import { z } from "zod";
 import { reportLimit, sensitiveLimit } from "../middleware/rateLimit.js";
 import { attendanceRpc } from "./attendance.routes.js";
 import {
   uuid,
   employeesQuery,
   employeeUpdate,
-  employeeShift,
   departmentCreate,
   departmentUpdate,
 } from "../utils/validators.js";
 // Employee management (update 047), mounted for administrators only. Roles
 // and account access stay in Accounts behind its PIN; these are working
-// details (department, job title, joining date, shift). The SQL functions
-// check the administrator again and audit every change.
+// details (department, job title, joining date). Office timings are changed
+// only in Shift management (update 048, shifts.routes.js), which checks the
+// version being edited; the 047 shift routes here were retired. The SQL
+// functions check the administrator again and audit every change.
 const update = "Employee management needs CRM database update 047 after 046.";
 
 export function employeesAdminRouter(db) {
@@ -45,27 +45,6 @@ export function employeesAdminRouter(db) {
         p_request: req.id,
       }),
     ),
-  );
-  router.post("/employees/:id/shifts", sensitiveLimit, async (req, res) =>
-    res.json(
-      await admin(req, "employee_shift_save", {
-        p_user: uuid.parse(req.params.id),
-        p_data: employeeShift.parse(req.body),
-        p_request: req.id,
-      }),
-    ),
-  );
-  router.delete(
-    "/employees/:id/shifts/:date",
-    sensitiveLimit,
-    async (req, res) =>
-      res.json(
-        await admin(req, "employee_shift_cancel", {
-          p_user: uuid.parse(req.params.id),
-          p_from: z.iso.date().parse(req.params.date),
-          p_request: req.id,
-        }),
-      ),
   );
   router.get("/departments", async (req, res) =>
     res.json(await admin(req, "employee_departments")),

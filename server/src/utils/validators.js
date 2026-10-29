@@ -1126,31 +1126,89 @@ export const employeeUpdate = z
 const clockTime = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time such as 09:30");
-export const employeeShift = z
+// Shift timings (update 048). A timing applies from a date (today or later)
+// until the next change; inherit ends an employee's, department's or role's
+// own timing from that date. Shifts end after they start on the same day:
+// overnight shifts are not supported.
+const shiftFields = {
+  effective_from: isoDay.optional(),
+  inherit: z.boolean().optional(),
+  shift_start: clockTime.optional(),
+  shift_end: clockTime.optional(),
+  work_days: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
+  grace_minutes: z.number().int().min(0).max(120).optional(),
+  reason: z
+    .string()
+    .trim()
+    .max(300)
+    .optional()
+    .transform((v) => v || undefined),
+  expected_version: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/)
+    .optional(),
+};
+const shiftComplete = (v) =>
+  v.inherit ||
+  (v.shift_start && v.shift_end && v.work_days && v.grace_minutes != null);
+// Times that don't end after they start are refused by the database, which
+// explains that overnight shifts are not supported.
+const shiftRules = (schema, message) =>
+  schema.refine(shiftComplete, { message });
+// Every save and withdrawal starts from the version that was shown.
+export const shiftEdit = shiftRules(
+  z
+    .object({
+      ...shiftFields,
+      label: z.string().trim().min(1).max(60).optional(),
+      expected_version: shiftFields.expected_version.unwrap(),
+    })
+    .strict(),
+  "Enter the shift times, working days and grace period",
+);
+export const shiftDefaultEdit = shiftRules(
+  z
+    .object({
+      ...shiftFields,
+      expected_version: shiftFields.expected_version.unwrap(),
+    })
+    .strict(),
+  "Enter the shift times, working days and grace period",
+);
+export const shiftEmployeesQuery = z
   .object({
-    effective_from: isoDay.optional(),
-    follows_company: z.boolean().default(false),
-    label: z.string().trim().min(1).max(60).optional(),
-    shift_start: clockTime.optional(),
-    shift_end: clockTime.optional(),
-    work_days: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
-    grace_minutes: z.number().int().min(0).max(120).optional(),
+    ...pageFields,
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @.'_+-]*$/u)
+      .optional(),
+    role: employeeRole.optional(),
+    department: uuid.or(z.literal("none")).optional(),
+    source: z.enum(["individual", "department", "role", "company"]).optional(),
+    account: z.enum(["active", "inactive"]).optional(),
   })
-  .strict()
-  .refine(
-    (v) =>
-      v.follows_company ||
-      (v.label &&
-        v.shift_start &&
-        v.shift_end &&
-        v.work_days &&
-        v.grace_minutes != null),
-    { message: "Enter the shift name, times, working days and grace period" },
-  )
-  .refine((v) => v.follows_company || v.shift_end > v.shift_start, {
-    message: "The shift must end after it starts, on the same day",
-    path: ["shift_end"],
-  });
+  .strict();
+export const shiftVersion = z
+  .object({ version: shiftFields.expected_version.unwrap() })
+  .strict();
+export const shiftHistoryQuery = z
+  .object({
+    ...pageFields,
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @.'_+-]*$/u)
+      .optional(),
+    scope: z.enum(["individual", "role", "department"]).optional(),
+    status: z
+      .enum(["current", "planned", "ended", "replaced", "withdrawn"])
+      .optional(),
+    user: uuid.optional(),
+  })
+  .strict();
 const departmentFields = {
   name: z.string().trim().min(2).max(60),
   sort_order: z.number().int().min(0).max(10000),

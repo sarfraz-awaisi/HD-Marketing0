@@ -45,6 +45,7 @@ import {
   attendanceRpc,
 } from "./attendance.routes.js";
 import { employeesAdminRouter } from "./employees.routes.js";
+import { shiftsAdminRouter } from "./shifts.routes.js";
 import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
@@ -81,6 +82,7 @@ export function crmRouter(db, options = {}) {
   router.use(securityRouter(db));
   router.use(salesRouter(db));
   router.use("/attendance", attendanceRouter(db));
+  router.use("/admin/attendance/shifts", adminOnly, shiftsAdminRouter(db));
   router.use("/admin/attendance", adminOnly, attendanceAdminRouter(db));
   router.use("/tasks", tasksRouter(db));
   router.use("/admin/tasks", adminOnly, tasksAdminRouter(db));

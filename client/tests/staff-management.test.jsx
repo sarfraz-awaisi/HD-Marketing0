@@ -338,8 +338,9 @@ describe("the Staff workspace", () => {
     expect(details).toHaveTextContent("DepartmentMedia");
     expect(details).toHaveTextContent("Job titleVideo Editor");
     expect(details).toHaveTextContent(
-      "Company shift: 10:00 AM – 6:00 PM, Mon–Sat, 15 min grace",
+      "Office timing10:00 AM – 6:00 PM, Mon–Sat, 15 min grace",
     );
+    expect(details).toHaveTextContent("ScheduleCompany default");
   });
   it("sends My reports and Leave requests to the existing pages", async () => {
     open("/my-reports");
@@ -389,7 +390,7 @@ describe("Employee management", () => {
       expect(last).toContain("account=active");
     });
   });
-  it("changes an employee's department and shift", async () => {
+  it("changes an employee's department and links to Shift management", async () => {
     routes["/admin/employees/"] = (path, options) =>
       options?.method
         ? employee({ department: "Technical", department_id: TECH, shifts: [] })
@@ -431,32 +432,21 @@ describe("Employee management", () => {
         joined_on: null,
       }),
     );
-    fireEvent.click(
-      await within(dialog).findByRole("button", { name: "Change shift" }),
-    );
-    fireEvent.click(within(dialog).getByRole("radio", { name: "Own shift" }));
-    fireEvent.change(
-      within(dialog).getByRole("textbox", { name: "Shift name" }),
-      { target: { value: "Media shift" } },
-    );
-    fireEvent.change(within(dialog).getByLabelText("Starts at"), {
-      target: { value: "11:00" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Ends at"), {
-      target: { value: "19:00" },
-    });
-    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Sat" }));
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save shift" }));
-    await waitFor(() =>
-      expect(calls("POST", "/admin/employees/")[0][1].body).toMatchObject({
-        follows_company: false,
-        label: "Media shift",
-        shift_start: "11:00",
-        shift_end: "19:00",
-        work_days: [1, 2, 3, 4, 5],
-        grace_minutes: 15,
+    // Office timings are changed in Shift management, not here (update 048).
+    expect(
+      within(dialog).getByText("Company default shift"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("link", {
+        name: "Change office timing in Shift management",
       }),
+    ).toHaveAttribute(
+      "href",
+      `/attendance-management?tab=shifts&view=individual&employee=${staff.id}`,
     );
+    expect(
+      within(dialog).queryByRole("button", { name: "Change shift" }),
+    ).toBeNull();
   });
   it("adds a department", async () => {
     open("/team");

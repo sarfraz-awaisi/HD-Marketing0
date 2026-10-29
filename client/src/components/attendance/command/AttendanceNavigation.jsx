@@ -15,6 +15,7 @@ export const managementTabs = [
   ["leave", "Leave requests"],
   ["corrections", "Corrections"],
   ["holidays", "Holidays"],
+  ["shifts", "Shift management"],
   ["settings", "Settings"],
 ];
 export const allTabs = [...primaryTabs, ...managementTabs];

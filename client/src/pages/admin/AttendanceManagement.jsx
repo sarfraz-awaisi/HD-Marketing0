@@ -13,11 +13,14 @@ import AdminRequests from "../../components/attendance/AdminRequests";
 import AdminHolidays from "../../components/attendance/AdminHolidays";
 import AdminAttendanceSettings from "../../components/attendance/AdminAttendanceSettings";
 import AttendanceManage from "../../components/attendance/AttendanceManage";
+import ShiftManagement from "../../components/attendance/shifts/ShiftManagement";
 import { useAttendanceOverview } from "../../lib/attendanceDashboard";
 import "../../styles/attendance-command.css";
 // Attendance Command Center for administrators (update 040). The overview
 // is the dashboard; the other sections keep their existing tools. ?tab=
-// links, including ?tab=employee&user=<id>, are unchanged.
+// links, including ?tab=employee&user=<id>, are unchanged. Shift management
+// (update 048) is ?tab=shifts&view=<roles|departments|individual|history>,
+// with &employee=<id> to open one employee's timing.
 export default function AttendanceManagement() {
   const [params, setParams] = useSearchParams();
   const tab = allTabs.some(([key]) => key === params.get("tab"))
@@ -43,6 +46,15 @@ export default function AttendanceManagement() {
         tab: "manage",
         ...(next.user ? { user: next.user } : {}),
         ...(next.date ? { date: next.date } : {}),
+      }),
+    [setParams],
+  );
+  const shifts = useCallback(
+    (next) =>
+      setParams({
+        tab: "shifts",
+        ...(next.view ? { view: next.view } : {}),
+        ...(next.employee ? { employee: next.employee } : {}),
       }),
     [setParams],
   );
@@ -88,6 +100,19 @@ export default function AttendanceManagement() {
           <AdminRequests key={tab} kind={tab} />
         )}
         {tab === "holidays" && <AdminHolidays />}
+        {tab === "shifts" && (
+          <ShiftManagement
+            view={params.get("view") || "roles"}
+            employee={params.get("employee") || ""}
+            onView={(view) => shifts({ view })}
+            onEmployee={(employee) =>
+              shifts({
+                view: params.get("view") || "individual",
+                employee,
+              })
+            }
+          />
+        )}
         {tab === "settings" && <AdminAttendanceSettings />}
       </section>
       {tab === "overview" && drawer && (

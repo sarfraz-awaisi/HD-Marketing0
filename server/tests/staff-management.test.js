@@ -653,7 +653,7 @@ describe("staff attendance and shifts", () => {
       (await one("select public.employee_shift_info($1,$2) r", [editor, TUE]))
         .r,
     ).toMatchObject({
-      source: "assigned",
+      source: "individual",
       label: "Media shift",
       shift_start: "11:00",
       work_days: [1, 2, 3, 4, 5],
@@ -671,43 +671,40 @@ describe("staff attendance and shifts", () => {
       ).r,
     ).toMatchObject({ source: "company", shift_start: "10:00" });
   });
-  it("change from today or later through the API, audited, and future changes can be withdrawn", async () => {
+  it("change from today or later through Shift management, audited, and future changes can be withdrawn", async () => {
     const day = await today();
     const later = (await one("select ($1::date+3)::text d", [day])).d;
-    const saved = await send(
-      admin,
-      "post",
-      `/admin/employees/${developer}/shifts`,
-      {
-        effective_from: later,
-        label: "Late tech shift",
-        shift_start: "12:00",
-        shift_end: "20:00",
-        work_days: [1, 2, 3, 4, 5],
-        grace_minutes: 10,
-      },
-    );
+    // Update 048 retired the 047 routes; changes go through Shift management
+    // and start from the version shown.
+    const path = `/admin/attendance/shifts/employees/${developer}`;
+    const version = async () => (await get(admin, path)).body.shift_version;
+    const saved = await send(admin, "post", path, {
+      effective_from: later,
+      expected_version: await version(),
+      label: "Late tech shift",
+      shift_start: "12:00",
+      shift_end: "20:00",
+      work_days: [1, 2, 3, 4, 5],
+      grace_minutes: 10,
+    });
     expect(saved.status, JSON.stringify(saved.body)).toBe(200);
     expect(saved.body.shift.upcoming).toMatchObject({
       effective_from: later,
       label: "Late tech shift",
     });
-    const past = await send(
-      admin,
-      "post",
-      `/admin/employees/${developer}/shifts`,
-      {
-        effective_from: "2026-01-05",
-        follows_company: true,
-      },
-    );
+    const past = await send(admin, "post", path, {
+      effective_from: "2026-01-05",
+      expected_version: await version(),
+      inherit: true,
+    });
     expect(past.status).toBe(400);
     expect(past.body.error).toBe(
       "Choose today or a date up to a year ahead. Days already worked keep the shift they had.",
     );
     expect(
       (
-        await send(admin, "post", `/admin/employees/${developer}/shifts`, {
+        await send(admin, "post", path, {
+          expected_version: await version(),
           label: "Broken",
           shift_start: "18:00",
           shift_end: "09:00",
@@ -717,19 +714,19 @@ describe("staff attendance and shifts", () => {
       ).status,
     ).toBe(400);
     const entry = (await get(admin, "/audit?module=attendance")).body.data.find(
-      (e) => e.title === "Changed an employee's shift",
+      (e) => e.title === "Assigned an individual shift",
     );
     expect(entry.description).toContain(
       "Set Hassan Developer's shift to Late tech shift, 12:00 PM–8:00 PM, Mon–Fri, 10 min grace",
     );
     expect(entry.changes[0]).toMatchObject({
       label: "Shift",
-      before: "Company shift (10:00 AM–6:00 PM)",
+      before: "Company default shift (10:00 AM–6:00 PM)",
     });
     const withdrawn = await send(
       admin,
       "delete",
-      `/admin/employees/${developer}/shifts/${later}`,
+      `${path}/${later}?version=${await version()}`,
     );
     expect(withdrawn.status).toBe(200);
     expect(withdrawn.body.shift.upcoming).toBeNull();
@@ -738,7 +735,7 @@ describe("staff attendance and shifts", () => {
         await send(
           admin,
           "delete",
-          `/admin/employees/${developer}/shifts/${later}`,
+          `${path}/${later}?version=${await version()}`,
         )
       ).status,
     ).toBe(409);

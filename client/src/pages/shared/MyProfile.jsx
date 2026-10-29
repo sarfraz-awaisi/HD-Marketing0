@@ -1,17 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
-import { clockLabel } from "../../lib/attendance";
 import { fullDayLabel } from "../../lib/calendar";
-import { roleLabel, workDaysText } from "../../lib/roles";
+import { roleLabel } from "../../lib/roles";
+import { scheduleName, shiftLine } from "../../lib/shifts";
 import { ErrorBox, Loader } from "../../components/common/UI";
 import AccountUid from "../../components/accounts/AccountUid";
 import "../../styles/tasks.css";
 // My profile (update 047): the signed-in employee's account and working
-// details. Administrators set them in Employee management and Accounts.
-const shiftText = (s) =>
-  s?.shift_start
-    ? `${s.source === "company" ? "Company shift" : s.label || "Assigned shift"}: ${clockLabel(s.shift_start)} – ${clockLabel(s.shift_end)}, ${workDaysText(s.work_days)}, ${s.grace_minutes} min grace`
-    : "Not set yet";
+// details. Administrators set them in Employee management, Accounts and
+// Shift management.
 export default function MyProfile() {
   const q = useQuery({
     queryKey: ["my-profile"],
@@ -44,7 +41,11 @@ export default function MyProfile() {
               ["Department", p.department || "Not assigned"],
               ["Job title", p.job_title || "—"],
               ["Joined", p.joined_on ? fullDayLabel(p.joined_on) : "—"],
-              ["Shift", shiftText(p.shift)],
+              [
+                "Office timing",
+                p.shift?.shift_start ? shiftLine(p.shift) : "Not set yet",
+              ],
+              ["Schedule", scheduleName(p.shift)],
             ].map(([label, value]) => (
               <div key={label}>
                 <dt>{label}</dt>
@@ -55,10 +56,7 @@ export default function MyProfile() {
           {p.shift?.upcoming && (
             <p className="field-hint">
               From {fullDayLabel(p.shift.upcoming.effective_from)}:{" "}
-              {p.shift.upcoming.source === "company"
-                ? "the company shift"
-                : shiftText(p.shift.upcoming)}
-              .
+              {shiftLine(p.shift.upcoming)} ({scheduleName(p.shift.upcoming)}).
             </p>
           )}
         </section>
