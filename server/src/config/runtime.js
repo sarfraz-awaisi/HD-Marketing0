@@ -22,6 +22,46 @@ export function trustProxy(value = "loopback") {
     );
   return entries;
 }
+// The Supabase CLI's local API; LOCAL_DEV_ONLY accepts nothing else.
+export function isLocalSupabase(value) {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      url.hostname === "127.0.0.1" &&
+      url.port === "54321" &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+// LOCAL_DEV_ONLY=true (local .env only) refuses every setting that reaches a
+// hosted service, so a stray production value stops startup instead of
+// touching live data, sending real email or calling Meta.
+export function localOnlyProblems(env = process.env) {
+  const problems = [];
+  if (env.NODE_ENV === "production")
+    problems.push("NODE_ENV must not be production");
+  if (!isLocalSupabase(env.SUPABASE_URL))
+    problems.push(
+      "SUPABASE_URL must be the local Supabase API http://127.0.0.1:54321",
+    );
+  if (["smtp", "resend"].includes(env.ACCOUNT_EMAIL_PROVIDER))
+    problems.push(
+      "ACCOUNT_EMAIL_PROVIDER must not send real email (local Auth email goes to Mailpit)",
+    );
+  if (env.CALL_PROVIDER && !["manual", "mock"].includes(env.CALL_PROVIDER))
+    problems.push("CALL_PROVIDER must be manual or mock");
+  const meta = Object.keys(env).filter(
+    (key) =>
+      key.startsWith("META_") && key !== "META_ANSWER_RETENTION_DAYS" && env[key],
+  );
+  if (meta.length)
+    problems.push(meta.join(", ") + " must be empty (Meta is a live service)");
+  return problems;
+}
 export function validateRuntime(env = process.env) {
   trustProxy(env.TRUST_PROXY || "loopback");
   // Throws for a RATE_LIMIT_* value that is not a whole number >= 1.
@@ -34,6 +74,11 @@ export function validateRuntime(env = process.env) {
     throw new Error(
       "JOB_INTERVAL_SECONDS must be between 10 and 240 for the five-minute health check.",
     );
+  if (env.LOCAL_DEV_ONLY === "true") {
+    const problems = localOnlyProblems(env);
+    if (problems.length)
+      throw new Error("LOCAL_DEV_ONLY: " + problems.join("; "));
+  }
   if (env.NODE_ENV !== "production") return;
   const failures = [];
   for (const key of [

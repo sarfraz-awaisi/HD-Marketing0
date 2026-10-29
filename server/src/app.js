@@ -8,6 +8,7 @@ import { createApiLimiters } from "./middleware/rateLimit.js";
 import { crmRouter } from "./routes/crm.routes.js";
 import { webhooksRouter } from "./routes/webhooks.routes.js";
 import { protectAgentPhones } from "./middleware/phoneProtection.js";
+import { staffAccess } from "./middleware/staffAccess.js";
 import { onboardingRouter } from "./routes/onboarding.routes.js";
 import { authRouter } from "./routes/auth.routes.js";
 import { mfaRouter } from "./routes/mfa.routes.js";
@@ -90,6 +91,7 @@ export function createApp(db, options = {}) {
     "/api/health",
     limits.unauthenticated,
     auth(db),
+    staffAccess,
     limits.perUser,
     healthRouter(db),
   );
@@ -104,6 +106,7 @@ export function createApp(db, options = {}) {
     "/api/integrations/meta",
     limits.unauthenticated,
     auth(db),
+    staffAccess,
     limits.perUser,
     metaRouter(db, options),
   );
@@ -111,6 +114,8 @@ export function createApp(db, options = {}) {
     "/api",
     limits.unauthenticated,
     auth(db),
+    // Staff (047) reach only their own workspace; everything else is refused.
+    staffAccess,
     limits.perUser,
     protectAgentPhones,
     crmRouter(db, options),

@@ -19,6 +19,7 @@ it("keeps five unique recent emails per portal, without passwords or other data"
   expect(JSON.parse(localStorage.getItem(key))).toEqual({
     agent: savedLoginEmails("agent"),
     admin: ["owner@example.com"],
+    staff: [],
   });
 });
 it("ignores malformed values, unknown roles and duplicate stored emails", () => {
@@ -51,6 +52,7 @@ it("ignores malformed values, unknown roles and duplicate stored emails", () => 
   expect(JSON.parse(localStorage.getItem(key))).toEqual({
     agent: ["new@example.com", "valid@example.com"],
     admin: [],
+    staff: [],
   });
 });
 it("recovers from invalid JSON and blocked storage without failing login work", () => {

@@ -1,0 +1,263 @@
+/* Audit history (update 043). A readable table on wide screens and one card
+   per activity on phones; nothing scrolls sideways. */
+.audit-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  align-items: end;
+  gap: 12px 14px;
+}
+.audit-filters label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.audit-filters input,
+.audit-filters select {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+}
+.audit-search {
+  grid-column: span 2;
+}
+.audit-clear {
+  min-height: 42px;
+}
+.audit-count {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.audit-table {
+  table-layout: fixed;
+  font-size: 13px;
+}
+.audit-table th:nth-child(1) {
+  width: 150px;
+}
+.audit-table th:nth-child(3),
+.audit-table th:nth-child(4) {
+  width: 190px;
+}
+.audit-table th:nth-child(5) {
+  width: 104px;
+}
+.audit-table td {
+  max-width: none;
+  vertical-align: top;
+}
+.audit-when > span,
+.audit-when > small {
+  display: block;
+}
+.audit-when > small {
+  margin-top: 3px;
+}
+.audit-when small,
+.audit-person small,
+.audit-activity small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.audit-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+}
+.audit-activity > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.audit-description {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.audit-icon {
+  display: inline-grid;
+  flex: 0 0 32px;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #eef2f8;
+  color: var(--navy);
+}
+.audit-icon.module-attendance,
+.audit-icon.module-accounts {
+  background: var(--gold-light);
+  color: #8a6427;
+}
+.audit-icon.module-security {
+  background: #fdecec;
+  color: #a23737;
+}
+.audit-icon.module-system {
+  background: #f1f1f4;
+  color: var(--muted);
+}
+.audit-person {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.audit-note {
+  font-style: italic;
+}
+.audit-action {
+  text-align: right;
+}
+dialog.audit-dialog {
+  width: min(720px, calc(100% - 32px));
+}
+.audit-detail-description {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.audit-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 18px;
+  margin: 0 0 16px;
+}
+.audit-facts .wide {
+  grid-column: 1 / -1;
+}
+.audit-facts dt,
+.audit-technical dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.audit-facts dd,
+.audit-technical dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+.audit-changes-wrap {
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+.audit-changes caption {
+  padding-bottom: 6px;
+  font-weight: 600;
+  text-align: left;
+}
+.audit-changes th,
+.audit-changes td {
+  padding: 9px 12px;
+  white-space: normal;
+}
+.audit-technical {
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.audit-technical summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+.audit-technical dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+.audit-technical code,
+.audit-technical pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.audit-technical pre {
+  max-height: 260px;
+  margin: 12px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 8px;
+  background: #f6f8fb;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+  /* Two filters per row so the results start within the first screen. */
+  .audit-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .audit-search,
+  .audit-clear {
+    grid-column: 1 / -1;
+  }
+  /* Phones give tables a 600px minimum for sideways scrolling; these two
+     fit the screen instead. */
+  .audit-table,
+  .audit-changes {
+    min-width: 0;
+  }
+  .audit-table,
+  .audit-table tbody,
+  .audit-table tr,
+  .audit-table td {
+    display: block;
+    width: 100%;
+  }
+  .audit-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+  .audit-table tr {
+    margin-bottom: 12px;
+    padding: 6px 4px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .audit-table td {
+    padding: 8px 12px;
+    border: 0;
+  }
+  .audit-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .audit-when > span,
+  .audit-when > small {
+    display: inline;
+  }
+  .audit-when small::before {
+    content: " · ";
+  }
+  .audit-action {
+    text-align: left;
+  }
+  .audit-action .button,
+  .audit-action button {
+    width: 100%;
+  }
+  .audit-facts,
+  .audit-technical dl {
+    grid-template-columns: 1fr;
+  }
+}

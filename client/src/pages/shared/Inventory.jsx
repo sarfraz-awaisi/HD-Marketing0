@@ -76,6 +76,17 @@ export default function Inventory() {
     : tabs[0][0];
   const agentId = admin && tab === "agents" ? params.get("agent") : null;
   const open = (next) => setParams(next, { replace: false });
+  // ?property=<id> (from a notification) opens that property's details.
+  const openId = params.get("property");
+  const opened = () =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("property");
+        return next;
+      },
+      { replace: true },
+    );
   return (
     <>
       <div className="page-heading">
@@ -105,6 +116,8 @@ export default function Inventory() {
             ownership="agent"
             notice="Only you and administrators can see these properties."
             emptyText="You have not added any properties yet. Choose + Add property to start your inventory."
+            openId={openId}
+            onOpened={opened}
           />
         )}
         {tab === "company" && (
@@ -113,6 +126,8 @@ export default function Inventory() {
             scope="company"
             canAdd={admin}
             ownership="company"
+            openId={openId}
+            onOpened={opened}
             notice={
               admin
                 ? "Every agent can view these listings. Only administrators can change them."
@@ -133,8 +148,11 @@ export default function Inventory() {
                 key={agentId}
                 scope="agent"
                 agentId={agentId}
+                canPromote
                 notice="Agent inventories are read-only for administrators."
                 emptyText="This agent has not added any properties yet."
+                openId={openId}
+                onOpened={opened}
               />
             </>
           ) : (

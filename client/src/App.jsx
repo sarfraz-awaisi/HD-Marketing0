@@ -29,13 +29,26 @@ const MetaIntegration = lazy(routeLoaders.MetaIntegration);
 const IncomingSocial = lazy(routeLoaders.IncomingSocial);
 const MyAttendance = lazy(routeLoaders.MyAttendance);
 const AttendanceManagement = lazy(routeLoaders.AttendanceManagement);
-export function Protected({ role }) {
+const MyTasks = lazy(routeLoaders.MyTasks);
+const TaskManagement = lazy(routeLoaders.TaskManagement);
+const StaffDashboard = lazy(routeLoaders.StaffDashboard);
+const MyProfile = lazy(routeLoaders.MyProfile);
+const MyNotifications = lazy(routeLoaders.MyNotifications);
+// `role` admits one role, `roles` several. The server enforces the same
+// rules; this only keeps each workspace to its own pages.
+export function Protected({ role, roles }) {
   const { user, loading } = useAuth();
   if (loading) return <Loader />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.mfa_required) return <Navigate to="/login" replace />;
   if (role && user.role !== role) return <Navigate to="/" replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return <Outlet />;
+}
+// Staff (update 047) have their own overview.
+function Home() {
+  const { user } = useAuth();
+  return user?.role === "staff" ? <StaffDashboard /> : <Dashboard />;
 }
 class PageLoadError extends Component {
   state = { failed: false };
@@ -65,30 +78,45 @@ export default function App() {
           <Route path="/accept-invitation" element={<AcceptInvitation />} />
           <Route element={<Protected />}>
             <Route element={<Layout />}>
-              <Route index element={<Dashboard />} />
-              <Route path="leads" element={<Leads />} />
-              <Route path="leads/:id" element={<LeadDetail />} />
-              <Route path="inventory" element={<Inventory />} />
-              <Route
-                path="properties"
-                element={<Navigate to="/inventory" replace />}
-              />
-              <Route path="documents" element={<Documentation />} />
-              <Route path="documents/:id" element={<Documentation />} />
-              <Route path="targets" element={<Targets />} />
-              <Route path="followups" element={<FollowUps />} />
-              <Route path="visits" element={<SiteVisits />} />
+              <Route index element={<Home />} />
+              <Route element={<Protected roles={["admin", "agent"]} />}>
+                <Route path="leads" element={<Leads />} />
+                <Route path="leads/:id" element={<LeadDetail />} />
+                <Route path="inventory" element={<Inventory />} />
+                <Route
+                  path="properties"
+                  element={<Navigate to="/inventory" replace />}
+                />
+                <Route path="documents" element={<Documentation />} />
+                <Route path="documents/:id" element={<Documentation />} />
+                <Route path="targets" element={<Targets />} />
+                <Route path="followups" element={<FollowUps />} />
+                <Route path="visits" element={<SiteVisits />} />
+                <Route
+                  path="deals"
+                  element={
+                    <RecordsPage
+                      entity="deals"
+                      title="Deals"
+                      description="Track negotiations and record closed business."
+                    />
+                  }
+                />
+              </Route>
               <Route path="attendance" element={<MyAttendance />} />
+              <Route path="profile" element={<MyProfile />} />
+              <Route path="notifications" element={<MyNotifications />} />
               <Route
-                path="deals"
-                element={
-                  <RecordsPage
-                    entity="deals"
-                    title="Deals"
-                    description="Track negotiations and record closed business."
-                  />
-                }
+                path="leave"
+                element={<Navigate to="/attendance#leave" replace />}
               />
+              <Route element={<Protected roles={["agent", "staff"]} />}>
+                <Route path="my-tasks" element={<MyTasks />} />
+                <Route
+                  path="my-reports"
+                  element={<Navigate to="/my-tasks?tab=reports" replace />}
+                />
+              </Route>
               <Route element={<Protected role="admin" />}>
                 <Route path="deleted-leads" element={<DeletedLeads />} />
                 <Route path="integrations/meta" element={<MetaIntegration />} />
@@ -104,6 +132,7 @@ export default function App() {
                 <Route path="team" element={<Team />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="audit" element={<AuditLog />} />
+                <Route path="task-management" element={<TaskManagement />} />
                 <Route path="security-alerts" element={<SecurityAlerts />} />
                 <Route path="login-history" element={<LoginHistory />} />
                 <Route

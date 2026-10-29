@@ -12,6 +12,22 @@ import { processMetaLeads } from "./processMetaLeads.js";
 import { validateRuntime } from "../config/runtime.js";
 import { createJobRunner } from "./maintenance.js";
 validateRuntime();
+// Local development runs no jobs unless RUN_LOCAL_JOBS=true. The process stays
+// idle rather than exiting, because `npm run dev` stops every stream when one
+// exits (concurrently -k).
+if (
+  process.env.LOCAL_DEV_ONLY === "true" &&
+  process.env.RUN_LOCAL_JOBS !== "true"
+) {
+  console.log(
+    "Background jobs are off for local development. Set RUN_LOCAL_JOBS=true in .env to run them against local Supabase.",
+  );
+  const idle = setInterval(() => {}, 60 * 60 * 1000);
+  const exit = () => (clearInterval(idle), process.exit(0));
+  process.once("SIGTERM", exit);
+  process.once("SIGINT", exit);
+  await new Promise(() => {});
+}
 const db = getAdmin();
 const tick = createJobRunner(db, [
   ["deleteOldRecordings", deleteOldRecordings],

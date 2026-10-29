@@ -3789,7 +3789,8 @@ audio {
 }
 
 /* ------------------------------------------- property inventory (041) */
-.inventory-stats {
+/* .kpi-grid in dashboard.css loads later; the extra class keeps these rules. */
+.kpi-grid.inventory-stats {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   margin-bottom: var(--space-5);
 }
@@ -3921,6 +3922,57 @@ dialog.property-dialog {
   color: var(--ink-2);
   font-size: var(--text-sm);
 }
+/* Building categories (046): grouped checkboxes, then grouped tags. */
+.property-form .category-picker {
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  border: 0;
+}
+.property-form .category-picker > legend {
+  padding: 0;
+  font-weight: 600;
+}
+.category-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.property-form .category-group {
+  margin: 0;
+  padding: var(--space-3);
+}
+.category-group legend {
+  padding: 0 4px;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.category-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+.category-list dt {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.category-list dd {
+  margin: 4px 0 0;
+}
+.category-list .amenity-list {
+  margin: 0;
+}
+.property-categories {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .category-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 .property-meta {
   margin-top: var(--space-4);
   padding-top: var(--space-3);
@@ -3950,13 +4002,75 @@ dialog.property-dialog {
   background: var(--neutral-soft);
   color: var(--neutral);
 }
+/* Admin property promotion (044). */
+.property-origin {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+.property-card-body .property-promoted {
+  align-self: flex-start;
+}
+.promotion-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.promotion-status p {
+  flex: 1 1 260px;
+  margin: 0;
+}
+.promotion-status.added {
+  border-color: var(--success-soft);
+  background: var(--success-soft);
+  color: var(--success);
+}
+.promotion-status.added > div {
+  display: grid;
+  flex: 1 1 220px;
+  gap: 2px;
+}
+.promotion-status.added small {
+  color: var(--ink-2);
+}
+.promotion-origin {
+  margin: var(--space-3) 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--brand-gold);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.promotion-origin h3 {
+  margin: 0 0 var(--space-2);
+}
+.promotion-origin .property-specs {
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.promotion-origin .field-hint {
+  margin: var(--space-2) 0 0;
+}
+.promotion-points {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-4);
+  padding-left: 20px;
+}
 @media (max-width: 1150px) {
-  .inventory-stats {
+  .kpi-grid.inventory-stats {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 600px) {
-  .inventory-stats {
+  .kpi-grid.inventory-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .inventory-bar > .button {
@@ -3964,5 +4078,8 @@ dialog.property-dialog {
   }
   .inventory-status {
     max-width: none;
+  }
+  .promotion-status > .button {
+    width: 100%;
   }
 }

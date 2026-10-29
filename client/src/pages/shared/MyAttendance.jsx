@@ -14,6 +14,7 @@ import {
   workDaysLabel,
 } from "../../lib/attendance";
 import { fullDayLabel, dayLabel } from "../../lib/calendar";
+import { scheduleName, shiftHours } from "../../lib/shifts";
 import {
   Button,
   ErrorBox,
@@ -28,6 +29,11 @@ import {
   StateBadge,
 } from "../../components/attendance/Badges";
 import LeaveRequestForm from "../../components/attendance/LeaveRequestForm";
+import CheckoutPanel from "../../components/tasks/CheckoutPanel";
+import { useAuth } from "../../context/AuthContext";
+import { invalidateTasks } from "../../lib/tasks";
+import { hasDailyTasks } from "../../lib/roles";
+import "../../styles/tasks.css";
 import CorrectionRequestForm from "../../components/attendance/CorrectionRequestForm";
 // Minutes since check-in, using the server's clock offset; the server still
 // calculates the final worked time at check-out.
@@ -163,6 +169,20 @@ export default function MyAttendance() {
   const qc = useQueryClient(),
     toast = useToast();
   const q = useMyAttendance();
+  const { user } = useAuth();
+  // Task checkout rules (update 045) for agents and, from 047, staff;
+  // nothing shows while they're off or before the database has update 045.
+  const rules = useQuery({
+    queryKey: ["task-checkout"],
+    queryFn: ({ signal }) => api("/tasks/checkout", { signal }),
+    enabled: hasDailyTasks(user?.role),
+    retry: false,
+  });
+  // Leave requests (/leave and notification links) open at that section.
+  useEffect(() => {
+    if (q.data && window.location.hash === "#leave")
+      document.getElementById("leave")?.scrollIntoView();
+  }, [q.data]);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [confirmOut, setConfirmOut] = useState(false),
@@ -183,6 +203,7 @@ export default function MyAttendance() {
         body: {},
       });
       invalidateAttendance(qc);
+      invalidateTasks(qc);
       toast(
         kind === "check-in"
           ? `Checked in at ${pkTime(result.check_in_at)}${
@@ -279,9 +300,16 @@ export default function MyAttendance() {
             </h2>
             <p className="field-hint">
               {policy
-                ? `Shift ${clockLabel(policy.shift_start)} – ${clockLabel(policy.shift_end)} · ${policy.grace_minutes} min grace · ${workDaysLabel(policy.work_days)}`
+                ? `Today's shift ${clockLabel(today?.shift_start || policy.shift_start)} – ${clockLabel(today?.shift_end || policy.shift_end)} · ${policy.grace_minutes} min grace · ${workDaysLabel(policy.work_days)}`
                 : "Attendance tracking has not started yet."}
             </p>
+            {policy && (
+              <p className="field-hint attendance-schedule">
+                Schedule: {scheduleName(policy)}
+                {policy.upcoming &&
+                  ` · from ${fullDayLabel(policy.upcoming.effective_from)}: ${shiftHours(policy.upcoming)} (${scheduleName(policy.upcoming)})`}
+              </p>
+            )}
           </div>
           {today && <StateBadge state={today.state} />}
         </div>
@@ -352,6 +380,7 @@ export default function MyAttendance() {
           </p>
         )}
       </section>
+      {rules.data?.required && <CheckoutPanel state={rules.data} compact />}
       <section className="panel" aria-labelledby="month-title">
         <div className="panel-heading">
           <h2 id="month-title">This month</h2>
@@ -418,7 +447,7 @@ export default function MyAttendance() {
         />
       </section>
       <div className="dashboard-grid attendance-requests">
-        <section className="panel" aria-labelledby="my-leave-title">
+        <section className="panel" id="leave" aria-labelledby="my-leave-title">
           <div className="panel-heading">
             <h2 id="my-leave-title">My leave requests</h2>
             <Button
@@ -452,6 +481,11 @@ export default function MyAttendance() {
             You checked in at {pkTime(today?.check_in_at)}. After checking out
             you cannot check in again today.
           </p>
+          {rules.data?.required && !rules.data.can_check_out && (
+            <p className="checkout-blocked" role="status">
+              {rules.data.blocked_reason}
+            </p>
+          )}
           <ErrorBox error={error} />
           <footer className="review-buttons">
             <Button

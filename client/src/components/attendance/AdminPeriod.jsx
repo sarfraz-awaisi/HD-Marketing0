@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { roleLabel } from "../../lib/roles";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { minutesLabel, percentLabel, stateInfo } from "../../lib/attendance";
@@ -162,6 +163,7 @@ export default function AdminPeriod({ mode, openEmployee }) {
         >
           <option value="">Admins and agents</option>
           <option value="agent">Agents</option>
+          <option value="staff">Staff</option>
           <option value="admin">Admins</option>
         </select>
         <select
@@ -194,7 +196,8 @@ export default function AdminPeriod({ mode, openEmployee }) {
                     <b>{e.name}</b>
                     <small>
                       {e.uid ? `UID ${e.uid} · ` : ""}
-                      {e.role === "admin" ? "Admin" : "Agent"}
+                      {roleLabel(e.role)}
+                      {e.department ? ` · ${e.department}` : ""}
                       {!e.active && " · Inactive"}
                     </small>
                   </button>

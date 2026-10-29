@@ -7,6 +7,7 @@ import PropertyPhotoPicker from "./PropertyPhotoPicker";
 import {
   amenities,
   areaUnits,
+  buildingCategoryGroups,
   constructionStatuses,
   furnishings,
   isPlot,
@@ -74,6 +75,7 @@ const schema = z
     furnishing: z.string(),
     construction_status: z.string(),
     amenities: z.array(z.string()),
+    building_categories: z.array(z.string()),
     owner_name: text(120),
     owner_phone: phone,
     owner_alt_phone: phone,
@@ -116,6 +118,7 @@ function defaults(p = {}) {
     furnishing: asText(p.furnishing),
     construction_status: asText(p.construction_status),
     amenities: p.amenities || [],
+    building_categories: p.building_categories || [],
     owner_name: asText(contact.owner_name),
     owner_phone: asText(contact.owner_phone),
     owner_alt_phone: asText(contact.owner_alt_phone),
@@ -165,6 +168,7 @@ export function propertyPayload(v, { ownership, initial } = {}) {
       property_age: numberOrNull(v.property_age),
       furnishing: v.furnishing || null,
       construction_status: v.construction_status || null,
+      building_categories: v.building_categories,
     });
   // Refuse to overwrite a newer save made by someone else meanwhile.
   if (initial?.updated_at) payload.expected_updated_at = initial.updated_at;
@@ -220,11 +224,12 @@ export default function PropertyForm({ initial, ownership, onSave }) {
     resolver: zodResolver(schema),
     defaultValues: defaults(initial),
   });
-  const [type, purpose, availability, chosen] = watch([
+  const [type, purpose, availability, chosen, categories] = watch([
     "type",
     "purpose",
     "availability",
     "amenities",
+    "building_categories",
   ]);
   useEffect(() => {
     if (!statusFor(purpose).some((s) => s.value === availability))
@@ -433,6 +438,46 @@ export default function PropertyForm({ initial, ownership, onSave }) {
               </select>,
             )}
           </div>
+          {/* Update 046: every kind of unit or space on offer, several at once. */}
+          <fieldset className="category-picker">
+            <legend>Building categories</legend>
+            <p className="field-hint">
+              Tick every kind of unit or space this property or building offers.
+              This is separate from the bedroom count above.
+            </p>
+            <div className="category-groups">
+              {buildingCategoryGroups.map((g) => (
+                <fieldset key={g.label} className="category-group">
+                  <legend>{g.label}</legend>
+                  <div className="tag-picker">
+                    {g.options.map((o) => (
+                      <label key={o.value}>
+                        <input
+                          type="checkbox"
+                          aria-label={
+                            g.options.length > 1
+                              ? `${g.label} — ${o.label}`
+                              : o.label
+                          }
+                          disabled={isSubmitting}
+                          checked={categories.includes(o.value)}
+                          onChange={(e) =>
+                            setValue(
+                              "building_categories",
+                              e.target.checked
+                                ? [...categories, o.value]
+                                : categories.filter((v) => v !== o.value),
+                            )
+                          }
+                        />
+                        {o.label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ))}
+            </div>
+          </fieldset>
         </fieldset>
       )}
       <fieldset>

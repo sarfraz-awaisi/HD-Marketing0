@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createClient } from "@supabase/supabase-js";
+import { validateRuntime } from "../server/src/config/runtime.js";
+// Applies the LOCAL_DEV_ONLY checks before signing in anywhere.
+validateRuntime();
 const url = process.env.SUPABASE_URL,
   key = process.env.VITE_SUPABASE_ANON_KEY;
 const own = process.env.LIVE_OWN_LEAD_ID,

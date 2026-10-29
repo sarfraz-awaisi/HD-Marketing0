@@ -550,6 +550,7 @@ describe("PIN-protected account administration", () => {
       total: 3,
       admins: 2,
       agents: 1,
+      staff: 0,
       disabled: 0,
       pending: 0,
       expired: 0,

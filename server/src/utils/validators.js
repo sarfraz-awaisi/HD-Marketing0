@@ -453,7 +453,7 @@ const peopleFilters = {
     .max(100)
     .regex(/^[\p{L}\p{N} .'-]*$/u)
     .optional(),
-  role: z.enum(["admin", "agent"]).optional(),
+  role: z.enum(["admin", "agent", "staff"]).optional(),
   account: z.enum(["active", "inactive"]).optional(),
 };
 export const attendanceRange = z
@@ -591,6 +591,72 @@ export const attendancePolicy = z
       path: ["grace_minutes"],
     },
   );
+// Administrator entries for earlier days (update 042). The SQL function
+// decides each date (day off, existing attendance, grace) and reports it.
+export const attendanceManageDay = z
+  .object({ user: uuid, date: isoDay })
+  .strict();
+export const attendanceManage = z
+  .object({
+    user_id: uuid,
+    entries: z
+      .array(
+        z
+          .object({
+            date: isoDay,
+            // clear removes an entered day so it is no longer counted.
+            status: z.enum([
+              "present",
+              "late",
+              "half_day",
+              "absent",
+              "leave",
+              "clear",
+            ]),
+            check_in: hhmm.optional(),
+            check_out: hhmm.optional(),
+            leave_type: z
+              .enum(["casual", "sick", "emergency", "unpaid", "other"])
+              .optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(31),
+    reason: z.string().trim().max(300).optional(),
+    replace: z.boolean().default(false),
+    dry_run: z.boolean().default(false),
+  })
+  .strict()
+  .refine(
+    (v) => new Set(v.entries.map((e) => e.date)).size === v.entries.length,
+    { message: "Enter each date once", path: ["entries"] },
+  );
+// Audit history filters (update 043). Module and action type names are
+// checked against the audit catalog by the route.
+export const auditQuery = z
+  .object({
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    sort: z.enum(["newest", "oldest"]).default("newest"),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    module: z
+      .string()
+      .regex(/^[a-z]{1,30}$/)
+      .optional(),
+    kind: z
+      .string()
+      .regex(/^[a-z]{1,30}$/)
+      .optional(),
+    actor: uuid.optional(),
+    search: z.string().trim().max(100).optional(),
+  })
+  .strict()
+  .refine((v) => !v.from || !v.to || v.from <= v.to, {
+    message: "The date range must end on or after its start",
+    path: ["to"],
+  });
 // Property inventory (update 041). Bodies never carry an owner: the signed-in
 // account decides whether a property is company or private agent inventory.
 export const propertyTypes = [
@@ -643,6 +709,19 @@ export const amenities = [
   "lawn",
   "drawing_room",
   "store_room",
+];
+// Update 046: the kinds of units or spaces a property or building offers.
+// The same identifiers, order and labels as the database (046) and
+// client/src/lib/inventory.js; a test keeps the three equal.
+export const buildingCategories = [
+  { value: "residential_1_bed", label: "Residential — 1 Bedroom" },
+  { value: "residential_2_bed", label: "Residential — 2 Bedrooms" },
+  { value: "residential_3_bed", label: "Residential — 3 Bedrooms" },
+  { value: "hotel_apartment_1_bed", label: "Hotel Apartments — 1 Bedroom" },
+  { value: "hotel_apartment_2_bed", label: "Hotel Apartments — 2 Bedrooms" },
+  { value: "hotel_apartment_3_bed", label: "Hotel Apartments — 3 Bedrooms" },
+  { value: "commercial_outlet", label: "Commercial Outlets / Retail Shops" },
+  { value: "workspace", label: "Office Spaces / Workspaces" },
 ];
 const optionalText = (max) =>
   z
@@ -708,6 +787,12 @@ const propertyFields = {
     .max(20)
     .refine((list) => new Set(list).size === list.length, {
       message: "Choose each amenity once",
+    }),
+  building_categories: z
+    .array(z.enum(buildingCategories.map((c) => c.value)))
+    .max(20)
+    .refine((list) => new Set(list).size === list.length, {
+      message: "Choose each building category once",
     }),
   owner_contact: z
     .object({
@@ -816,3 +901,327 @@ export const photoOrder = z
       }),
   })
   .strict();
+// Daily tasks, reports and checkout requests (update 045). The database
+// checks the same limits and every rule that depends on the date or role.
+const taskText = (max) => z.string().trim().max(max);
+const taskCategory = z.enum([
+  "calls",
+  "follow_ups",
+  "site_visits",
+  "listings",
+  "meetings",
+  "documents",
+  "media",
+  "technical",
+  "operations",
+  "other",
+]);
+const taskPriority = z.enum(["low", "normal", "high", "urgent"]);
+export const taskCreate = z
+  .object({
+    scope: z.enum(["team", "individual"]),
+    title: z.string().trim().min(3).max(120),
+    description: taskText(1000).optional(),
+    instructions: taskText(1000).optional(),
+    category: taskCategory.optional(),
+    priority: taskPriority.default("normal"),
+    kind: z.enum(["measurable", "simple"]),
+    target_quantity: z.coerce.number().int().min(1).max(100000).optional(),
+    unit: z.string().trim().min(1).max(30).optional(),
+    task_date: isoDay.optional(),
+    due_on: isoDay.optional(),
+    assignees: z.array(uuid).min(1).max(200).optional(),
+    all_agents: z.boolean().optional(),
+    // Update 047: every active staff member, or whole departments.
+    all_staff: z.boolean().optional(),
+    departments: z.array(uuid).min(1).max(20).optional(),
+    client_key: uuid,
+    allow_duplicate: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (v) =>
+      v.all_agents ||
+      v.all_staff ||
+      v.departments?.length ||
+      v.assignees?.length,
+    {
+      message: "Choose who gets this task",
+      path: ["assignees"],
+    },
+  )
+  .refine(
+    (v) => v.kind === "simple" || (v.target_quantity != null && v.unit != null),
+    {
+      message: "A measurable task needs a target and a unit",
+      path: ["target_quantity"],
+    },
+  );
+export const taskUpdate = z
+  .object({
+    title: z.string().trim().min(3).max(120).optional(),
+    description: taskText(1000).optional(),
+    instructions: taskText(1000).optional(),
+    category: taskCategory.or(z.literal("")).optional(),
+    priority: taskPriority.optional(),
+    target_quantity: z.coerce.number().int().min(1).max(100000).optional(),
+    unit: z.string().trim().min(1).max(30).optional(),
+    due_on: isoDay.optional(),
+    add_assignees: z.array(uuid).min(1).max(200).optional(),
+    expected_updated_at: z.string().optional(),
+  })
+  .strict();
+export const taskProgress = z
+  .object({
+    quantity: z.coerce.number().int().min(0).max(1000000).optional(),
+    status: z.enum(["pending", "in_progress", "completed"]).optional(),
+    note: taskText(500).optional(),
+  })
+  .strict()
+  .refine((v) => v.quantity != null || v.status != null, {
+    message: "Enter a quantity or a status",
+  });
+export const taskReport = z
+  .object({
+    date: isoDay.optional(),
+    remarks: taskText(1000).optional(),
+    amend: z.boolean().default(false),
+  })
+  .strict();
+export const taskVerify = z
+  .object({
+    status: z.enum(["confirmed", "adjusted", "not_done"]),
+    quantity: z.coerce.number().int().min(0).max(1000000).optional(),
+    note: taskText(500).optional(),
+  })
+  .strict();
+export const taskReason = z
+  .object({ reason: taskText(300).optional() })
+  .strict();
+export const taskNote = z.object({ note: taskText(500).optional() }).strict();
+export const checkoutRequest = z
+  .object({
+    kind: z.enum(["early", "emergency"]),
+    reason: taskText(500).optional(),
+  })
+  .strict()
+  .refine((v) => v.kind === "early" || (v.reason || "").length >= 5, {
+    message: "Tell the administrator briefly what happened",
+    path: ["reason"],
+  });
+export const checkoutDecision = z
+  .object({
+    decision: z.enum(["approve", "reject"]),
+    note: taskText(300).optional(),
+    waive_report: z.boolean().default(false),
+  })
+  .strict();
+const taskPage = {
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+};
+export const taskListQuery = z
+  .object({
+    scope: z.enum(["team", "individual"]).optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    status: z.enum(["open", "cancelled"]).optional(),
+    user: uuid.optional(),
+    search: z.string().trim().max(100).optional(),
+    ...taskPage,
+  })
+  .strict();
+export const taskReportsQuery = z
+  .object({
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    user: uuid.optional(),
+    status: z.enum(["submitted", "reviewed"]).optional(),
+    ...taskPage,
+  })
+  .strict();
+export const checkoutListQuery = z
+  .object({
+    status: z.enum(["pending", "approved", "rejected", "cancelled"]).optional(),
+    kind: z.enum(["early", "emergency"]).optional(),
+    user: uuid.optional(),
+    from: isoDay.optional(),
+    to: isoDay.optional(),
+    ...taskPage,
+  })
+  .strict();
+export const taskPerformanceQuery = z
+  .object({
+    from: isoDay,
+    to: isoDay,
+    user: uuid.optional(),
+    department: uuid.optional(),
+  })
+  .strict()
+  .refine((v) => v.from <= v.to, {
+    message: "The range must end on or after its start",
+    path: ["to"],
+  });
+export const taskOverviewQuery = z.object({ date: isoDay.optional() }).strict();
+export const taskSettings = z
+  .object({ rules_from: isoDay.nullable() })
+  .strict();
+export const taskMissingQuery = z
+  .object({ from: isoDay.optional(), to: isoDay.optional() })
+  .strict()
+  .refine((v) => !v.from || !v.to || v.from <= v.to, {
+    message: "The range must end on or after its start",
+    path: ["to"],
+  });
+// Employee management (update 047): every account with its department, job
+// title, joining date and shift. Roles and access stay in Accounts.
+const employeeRole = z.enum(["admin", "agent", "staff"]);
+export const employeesQuery = z
+  .object({
+    ...pageFields,
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @.'_-]*$/u)
+      .optional(),
+    role: employeeRole.optional(),
+    department: uuid.or(z.literal("none")).optional(),
+    account: z.enum(["active", "inactive"]).optional(),
+    attendance: z
+      .enum([
+        "present",
+        "late",
+        "absent",
+        "leave",
+        "not_checked_in",
+        "checked_in",
+        "checked_out",
+        "incomplete",
+        "day_off",
+        "holiday",
+        "not_tracked",
+      ])
+      .optional(),
+    tasks: z.enum(["none", "incomplete", "complete"]).optional(),
+  })
+  .strict();
+const jobTitle = z
+  .string()
+  .trim()
+  .max(80)
+  .nullable()
+  .transform((v) => v || null);
+export const employeeUpdate = z
+  .object({
+    department_id: uuid.nullable(),
+    job_title: jobTitle,
+    joined_on: isoDay.nullable(),
+  })
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "Change at least one detail",
+  });
+const clockTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a time such as 09:30");
+// Shift timings (update 048). A timing applies from a date (today or later)
+// until the next change; inherit ends an employee's, department's or role's
+// own timing from that date. Shifts end after they start on the same day:
+// overnight shifts are not supported.
+const shiftFields = {
+  effective_from: isoDay.optional(),
+  inherit: z.boolean().optional(),
+  shift_start: clockTime.optional(),
+  shift_end: clockTime.optional(),
+  work_days: z.array(z.number().int().min(1).max(7)).min(1).max(7).optional(),
+  grace_minutes: z.number().int().min(0).max(120).optional(),
+  reason: z
+    .string()
+    .trim()
+    .max(300)
+    .optional()
+    .transform((v) => v || undefined),
+  expected_version: z
+    .string()
+    .regex(/^[0-9a-f]{32}$/)
+    .optional(),
+};
+const shiftComplete = (v) =>
+  v.inherit ||
+  (v.shift_start && v.shift_end && v.work_days && v.grace_minutes != null);
+// Times that don't end after they start are refused by the database, which
+// explains that overnight shifts are not supported.
+const shiftRules = (schema, message) =>
+  schema.refine(shiftComplete, { message });
+// Every save and withdrawal starts from the version that was shown.
+export const shiftEdit = shiftRules(
+  z
+    .object({
+      ...shiftFields,
+      label: z.string().trim().min(1).max(60).optional(),
+      expected_version: shiftFields.expected_version.unwrap(),
+    })
+    .strict(),
+  "Enter the shift times, working days and grace period",
+);
+export const shiftDefaultEdit = shiftRules(
+  z
+    .object({
+      ...shiftFields,
+      expected_version: shiftFields.expected_version.unwrap(),
+    })
+    .strict(),
+  "Enter the shift times, working days and grace period",
+);
+export const shiftEmployeesQuery = z
+  .object({
+    ...pageFields,
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @.'_+-]*$/u)
+      .optional(),
+    role: employeeRole.optional(),
+    department: uuid.or(z.literal("none")).optional(),
+    source: z.enum(["individual", "department", "role", "company"]).optional(),
+    account: z.enum(["active", "inactive"]).optional(),
+  })
+  .strict();
+export const shiftVersion = z
+  .object({ version: shiftFields.expected_version.unwrap() })
+  .strict();
+export const shiftHistoryQuery = z
+  .object({
+    ...pageFields,
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @.'_+-]*$/u)
+      .optional(),
+    scope: z.enum(["individual", "role", "department"]).optional(),
+    status: z
+      .enum(["current", "planned", "ended", "replaced", "withdrawn"])
+      .optional(),
+    user: uuid.optional(),
+  })
+  .strict();
+const departmentFields = {
+  name: z.string().trim().min(2).max(60),
+  sort_order: z.number().int().min(0).max(10000),
+  active: z.boolean(),
+};
+export const departmentCreate = z
+  .object(departmentFields)
+  .partial({ sort_order: true, active: true })
+  .strict();
+export const departmentUpdate = z
+  .object(departmentFields)
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, {
+    message: "Change at least one detail",
+  });

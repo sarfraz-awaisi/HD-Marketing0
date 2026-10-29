@@ -87,6 +87,11 @@ function sendProperty(req, res, property, status = 200) {
   }
   res.status(status).json(property);
 }
+// Storage reports a missing source file as "not found" (404 in the body).
+const missingFile = (error) =>
+  error?.status === 404 ||
+  String(error?.statusCode) === "404" ||
+  /not.?found/i.test(error?.message || "");
 function signatureType(buffer) {
   if (
     buffer
@@ -278,6 +283,69 @@ export function inventoryRouter(db) {
       }
     },
   );
+  // Adds an agent's listing to Admin Properties as an independent copy
+  // (update 044). Each picture is copied to a new Storage file reserved by
+  // SQL, so the copy never shares a file with the original. A failed attempt
+  // removes only its own copies; anything left behind is removed by the
+  // clean-up job when its reservation expires.
+  router.post(
+    "/properties/:id/promote",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const id = uuid.parse(req.params.id);
+      z.object({})
+        .strict()
+        .parse(req.body ?? {});
+      const copyId = crypto.randomUUID();
+      const plan = await rpc(req, "inventory_promote_prepare", {
+        p_property: id,
+        p_copy: copyId,
+      });
+      const copied = [];
+      try {
+        for (const photo of plan.photos) {
+          const { error } = await bucket(db).copy(photo.from, photo.to);
+          // A picture already missing from Storage is skipped.
+          if (error && missingFile(error)) continue;
+          if (error)
+            throw Object.assign(
+              new Error("The pictures could not be copied. Please try again."),
+              { status: 503 },
+            );
+          copied.push(photo.to);
+        }
+        const property = await rpc(req, "inventory_promote", {
+          p_property: id,
+          p_copy: copyId,
+          p_paths: copied,
+          p_request: req.id,
+        });
+        sendProperty(
+          req,
+          res,
+          { ...property, photos_missing: plan.photos.length - copied.length },
+          201,
+        );
+      } catch (error) {
+        await releasePromotion(req, copyId, copied);
+        throw error;
+      }
+    },
+  );
+  async function releasePromotion(req, copyId, copied) {
+    try {
+      const { committed } = await rpc(req, "inventory_promote_release", {
+        p_copy: copyId,
+      });
+      if (committed || !copied.length) return;
+      // Only this attempt's copies: every path is under the new property id.
+      const removed = await bucket(db).remove(copied);
+      if (!removed.error) await cleanupPropertyPhotos(db, copyId);
+    } catch {
+      console.error("Promotion picture clean-up pending; jobs will retry");
+    }
+  }
   router.put(
     "/properties/:id/photos/order",
     sensitiveLimit,

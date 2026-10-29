@@ -11,7 +11,7 @@ import {
 export function mfaRouter(db, options = {}) {
   const router = Router();
   router.post("/verify", mfaVerifyLimit, async (req, res) => {
-    if (req.user.role !== "agent")
+    if (req.user.role === "admin")
       return res.status(400).json({
         error:
           "Administrator sign-in uses email and password. No authenticator code is required.",

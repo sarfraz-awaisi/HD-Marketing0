@@ -12,6 +12,9 @@ import { KpiTile } from "../dashboard/Widgets";
 import { ErrorBox } from "../common/UI";
 // Counts come from the server; an agent's summary holds only their own
 // inventory and the company total, never other agents' figures.
+// Update 044: an agent listing added to Admin Properties is one listing in
+// two records. "Admin properties" counts records (copies included); the
+// unique count and its availability figures count each listing once.
 export default function InventoryStats() {
   const q = useQuery({
     queryKey: ["inventory-summary"],
@@ -22,14 +25,30 @@ export default function InventoryStats() {
     return q.error.status === 503 ? null : <ErrorBox error={q.error} />;
   const s = q.data;
   const closed = (c) => (c ? (c.sold || 0) + (c.rented || 0) : undefined);
+  // Before update 044 there is no unique count; every record is a listing.
+  const unique = s?.unique || s?.all;
   const tiles =
     s?.role === "admin"
       ? [
-          ["Company properties", s.company?.total, Building2, "navy"],
+          [
+            "Admin properties",
+            s.company?.total,
+            Building2,
+            "navy",
+            s.promoted
+              ? `${s.promoted} added from agent inventories`
+              : undefined,
+          ],
           ["Agent properties", s.agents?.total, Users, "gold"],
-          ["All properties", s.all?.total, House, "navy"],
-          ["Available", s.all?.available, CircleCheck, "green"],
-          ["Sold or rented", closed(s.all), Handshake, "gold"],
+          [
+            "Unique properties",
+            unique?.total,
+            House,
+            "navy",
+            "Each listing counted once",
+          ],
+          ["Available", unique?.available, CircleCheck, "green"],
+          ["Sold or rented", closed(unique), Handshake, "gold"],
           ["Agents with listings", s.agents_with_properties, Users, "navy"],
         ]
       : [
@@ -45,11 +64,12 @@ export default function InventoryStats() {
       className="kpi-grid inventory-stats"
       aria-label="Inventory summary"
     >
-      {tiles.map(([label, value, icon, tone]) => (
+      {tiles.map(([label, value, icon, tone, note]) => (
         <KpiTile
           key={label}
           label={label}
           value={q.isPending ? "…" : value}
+          note={note}
           icon={icon}
           tone={tone}
         />

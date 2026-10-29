@@ -260,6 +260,7 @@ describe("separate login portals", () => {
       ).toEqual({
         agent: portal === "agent" ? ["person@example.com"] : [],
         admin: portal === "admin" ? ["person@example.com"] : [],
+        staff: [],
       });
     },
   );
@@ -500,7 +501,7 @@ describe("separate login portals", () => {
   it("checks the returned profile and rejects invalid portal values before authenticating", async () => {
     await expect(
       signInToPortal({ email: "a@example.com", password: "fixture" }, "owner"),
-    ).rejects.toThrow("Choose Agent or Admin");
+    ).rejects.toThrow("Choose Agent, Staff or Admin");
     expect(mocks.createLoginClient).not.toHaveBeenCalled();
     nextProfileCheck(async () => response({ ...mocks.profile, role: "admin" }));
     await expect(

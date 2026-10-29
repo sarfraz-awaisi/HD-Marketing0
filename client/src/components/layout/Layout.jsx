@@ -19,7 +19,9 @@ import AccountUid from "../accounts/AccountUid";
 import IdleGuard from "../common/IdleGuard";
 import { useSecurityAlertSummary } from "../../lib/securityAlerts";
 import { useMetaSummary, metaApi, platformLabel } from "../../lib/meta";
-import { adminNavigation, agentNavigation, breadcrumb } from "./navigation";
+import { breadcrumb, navigationFor } from "./navigation";
+import { roleLabel, workDaysText } from "../../lib/roles";
+import { clockLabel } from "../../lib/attendance";
 // The collapsed sidebar is a per-browser preference; storage can be blocked.
 const collapseKey = "hd-crm-sidebar-collapsed";
 function storedCollapse() {
@@ -105,7 +107,14 @@ export default function Layout() {
       setNoticeError(error.message);
     }
   }
-  const navigation = user.role === "admin" ? adminNavigation : agentNavigation;
+  const navigation = navigationFor(user.role);
+  // Update 047: department, job title and shift, read when the panel opens.
+  const details = useQuery({
+    queryKey: ["my-profile"],
+    queryFn: ({ signal }) => api("/profile", { signal }),
+    enabled: profile,
+    retry: false,
+  });
   const trail = breadcrumb(navigation, pathname);
   async function signOut() {
     await logout();
@@ -433,8 +442,20 @@ export default function Layout() {
               {[
                 ["Name", user.name],
                 ["Email", user.email || "—"],
-                ["Role", user.role === "admin" ? "Admin" : "Agent"],
+                ["Role", roleLabel(user.role)],
                 ["Employee UID", <AccountUid uid={user.uid} />],
+                ...(details.data
+                  ? [
+                      ["Department", details.data.department || "—"],
+                      ["Job title", details.data.job_title || "—"],
+                      [
+                        "Shift",
+                        details.data.shift?.shift_start
+                          ? `${clockLabel(details.data.shift.shift_start)} – ${clockLabel(details.data.shift.shift_end)} · ${workDaysText(details.data.shift.work_days)}`
+                          : "—",
+                      ],
+                    ]
+                  : []),
               ].map(([label, value]) => (
                 <div key={label}>
                   <dt>{label}</dt>

@@ -45,7 +45,7 @@ const password = z
     "Use a password up to 72 bytes",
   );
 const name = z.string().trim().min(1).max(200),
-  role = z.enum(["admin", "agent"]);
+  role = z.enum(["admin", "agent", "staff"]);
 const accountChange = z
   .object({
     name: name.optional(),
@@ -929,9 +929,9 @@ export function accountsRouter(db, options = {}) {
         .eq("id", id)
         .single();
       if (target.error || !target.data) throw fail("Account not found.", 404);
-      if (target.data.role !== "agent")
+      if (target.data.role === "admin")
         throw fail(
-          "Administrator accounts do not require two-factor login. Only agent factors can be reset here.",
+          "Administrator accounts do not require two-factor login. Only agent and staff factors can be reset here.",
           400,
           "MFA_NOT_REQUIRED",
         );

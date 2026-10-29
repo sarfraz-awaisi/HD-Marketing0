@@ -1374,3 +1374,117 @@ describe("email-code requests created before update 036", () => {
     expect((await verify(p)).status).toBe(200);
   });
 });
+
+describe("staff accounts (update 047)", () => {
+  // Resetting accounts empties departments too; each test adds its own.
+  const department = async (name, active = true) =>
+    (
+      await one(
+        "insert into departments(name,active) values($1,$2) returning id",
+        [name, active],
+      )
+    ).id;
+  it("creates a staff account with its department and job title", async () => {
+    const media = await department("Media");
+    const r = await create({
+      role: "staff",
+      email: "editor@gmail.com",
+      department_id: media,
+      job_title: " Video   Editor ",
+    });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body).toMatchObject({ role: "staff", active: true });
+    expect(
+      await one(
+        "select role,department_id,job_title from profiles where id=$1",
+        [r.body.id],
+      ),
+    ).toEqual({
+      role: "staff",
+      department_id: media,
+      job_title: "Video Editor",
+    });
+    expect(
+      (
+        await one(
+          "select metadata from audit_log where action='account.created' and entity_id=$1",
+          [r.body.id],
+        )
+      ).metadata,
+    ).toMatchObject({
+      role: "staff",
+      department: "Media",
+      job_title: "Video Editor",
+    });
+    // The new staff member signs in through the Staff portal.
+    expect(
+      (
+        await request(app)
+          .get("/api/me?portal=staff")
+          .set({ Authorization: "Bearer " + r.body.id })
+      ).body,
+    ).toMatchObject({ role: "staff" });
+  });
+  it("refuses an inactive or unknown department before any login exists", async () => {
+    const closed = await department("Closed team", false);
+    for (const department_id of [closed, randomUUID()]) {
+      const r = await create({
+        role: "staff",
+        email: "nobody@gmail.com",
+        department_id,
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe(
+        "Choose an active department and a job title of up to 80 characters.",
+      );
+      expect(await authUsers("nobody@gmail.com")).toBe(0);
+    }
+    expect(db.auth.admin.createUser).not.toHaveBeenCalled();
+    expect(
+      (
+        await one(
+          "select count(*)::int n from account_provisioning where status='creating'",
+        )
+      ).n,
+    ).toBe(0);
+  });
+  it("changes an agent to Staff only after their leads are handed over", async () => {
+    const lead = (
+      await one(
+        "insert into leads(name,masked_phone,assigned_agent) values('Buyer','+92******567',$1) returning id",
+        [agent],
+      )
+    ).id;
+    const refused = await request(app)
+      .patch(`/api/accounts/${agent}`)
+      .set(headers())
+      .send({ role: "staff" });
+    expect(refused.status).toBe(400);
+    expect(
+      (await one("select role from profiles where id=$1", [agent])).role,
+    ).toBe("agent");
+    await pg.query("update leads set assigned_agent=null where id=$1", [lead]);
+    const changed = await request(app)
+      .patch(`/api/accounts/${agent}`)
+      .set(headers())
+      .send({ role: "staff" });
+    expect(changed.status, JSON.stringify(changed.body)).toBe(200);
+    expect(
+      (
+        await one(
+          "select metadata from audit_log where action='manage_account' and entity_id=$1",
+          [agent],
+        )
+      ).metadata,
+    ).toMatchObject({ role_from: "agent", role_to: "staff" });
+    // Staff can't change their own role.
+    expect(
+      (
+        await request(app)
+          .patch(`/api/accounts/${agent}`)
+          .set(headers(agent))
+          .send({ role: "admin" })
+      ).status,
+    ).toBe(403);
+  });
+});

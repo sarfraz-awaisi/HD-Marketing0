@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bell,
   BookOpen,
   Building2,
   CalendarCheck,
@@ -7,10 +8,12 @@ import {
   ClipboardCheck,
   Clock,
   FileSpreadsheet,
+  FileText,
   Handshake,
   Inbox,
   KeyRound,
   LayoutDashboard,
+  ListChecks,
   PhoneCall,
   Plug,
   ScrollText,
@@ -19,6 +22,7 @@ import {
   Target,
   Trash2,
   UserCog,
+  UserRound,
   Users,
   UsersRound,
 } from "lucide-react";
@@ -52,9 +56,10 @@ export const adminNavigation = [
     links: [
       ["/targets", "Team targets", Target],
       ["/reports", "Reports", BarChart3],
-      ["/team", "Team", UsersRound],
+      ["/team", "Employee management", UsersRound],
       ["/attendance", "My attendance", CalendarCheck],
       ["/attendance-management", "Attendance management", ClipboardCheck],
+      ["/task-management", "Task management", ListChecks],
     ],
   },
   {
@@ -90,11 +95,43 @@ export const agentNavigation = [
   {
     label: "My work",
     links: [
+      ["/my-tasks", "My tasks", ListChecks],
       ["/targets", "My targets", Target],
       ["/attendance", "My attendance", CalendarCheck],
     ],
   },
 ];
+// Update 047: office staff see only their own work, attendance and profile.
+export const staffNavigation = [
+  { label: "", links: [["/", "My dashboard", LayoutDashboard]] },
+  {
+    label: "My work",
+    links: [
+      ["/my-tasks", "My tasks", ListChecks],
+      ["/my-reports", "My reports", FileText],
+    ],
+  },
+  {
+    label: "Attendance",
+    links: [
+      ["/attendance", "Attendance", CalendarCheck],
+      ["/leave", "Leave requests", CalendarDays],
+    ],
+  },
+  {
+    label: "Me",
+    links: [
+      ["/notifications", "Notifications", Bell],
+      ["/profile", "My profile", UserRound],
+    ],
+  },
+];
+export const navigationFor = (role) =>
+  role === "admin"
+    ? adminNavigation
+    : role === "staff"
+      ? staffNavigation
+      : agentNavigation;
 // Section and page names for the breadcrumb: an exact menu match, else the
 // menu item the path sits under (for example /leads/:id under Leads).
 export function breadcrumb(navigation, pathname) {

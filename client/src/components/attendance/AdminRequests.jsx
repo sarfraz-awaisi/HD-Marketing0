@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { roleLabel } from "../../lib/roles";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
@@ -26,14 +27,22 @@ export default function AdminRequests({ kind }) {
   const qc = useQueryClient(),
     toast = useToast();
   const [status, setStatus] = useState("pending"),
+    [department, setDepartment] = useState(""),
     [page, setPage] = useState(1),
     [reviewing, setReviewing] = useState(null);
+  // Update 047: leave by department.
+  const departments = useQuery({
+    queryKey: ["departments"],
+    queryFn: ({ signal }) => api("/admin/departments", { signal }),
+    enabled: kind === "leave",
+    retry: false,
+  });
   const base =
     kind === "leave"
       ? "/admin/attendance/leave"
       : "/admin/attendance/corrections";
   const q = useQuery({
-    queryKey: ["attendance-admin", kind, status, page],
+    queryKey: ["attendance-admin", kind, status, department, page],
     queryFn: ({ signal }) =>
       api(
         base +
@@ -42,6 +51,7 @@ export default function AdminRequests({ kind }) {
             page,
             limit: 20,
             ...(status ? { status } : {}),
+            ...(kind === "leave" && department ? { department } : {}),
           }),
         { signal },
       ),
@@ -74,6 +84,23 @@ export default function AdminRequests({ kind }) {
           <option value="cancelled">Cancelled</option>
           <option value="">All requests</option>
         </select>
+        {kind === "leave" && Array.isArray(departments.data) && (
+          <select
+            aria-label="Department"
+            value={department}
+            onChange={(e) => {
+              setDepartment(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All departments</option>
+            {departments.data.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
@@ -91,7 +118,10 @@ export default function AdminRequests({ kind }) {
                     <b>{r.employee_name}</b>
                     <small>
                       {r.employee_uid ? `UID ${r.employee_uid} · ` : ""}
-                      {r.employee_role === "admin" ? "Admin" : "Agent"}
+                      {roleLabel(r.employee_role)}
+                      {r.employee_department
+                        ? ` · ${r.employee_department}`
+                        : ""}
                     </small>
                   </span>
                 ),

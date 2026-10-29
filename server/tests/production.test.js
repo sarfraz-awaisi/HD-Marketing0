@@ -14,6 +14,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import request from "supertest";
 import { validateRuntime, trustProxy } from "../src/config/runtime.js";
+import { getAdmin } from "../src/config/supabaseAdmin.js";
 import { pinSecret } from "../src/services/accountsSecurity.js";
 import { createJobRunner } from "../src/jobs/maintenance.js";
 import { systemJobs } from "../src/services/systemStatus.js";
@@ -144,6 +145,44 @@ describe("production startup and trusted proxies", () => {
   ])("rejects invalid production settings %j", (change) =>
     expect(() => validateRuntime({ ...production, ...change })).toThrow(),
   );
+  it("keeps LOCAL_DEV_ONLY development on local services only", () => {
+    const local = {
+      NODE_ENV: "development",
+      LOCAL_DEV_ONLY: "true",
+      SUPABASE_URL: "http://127.0.0.1:54321",
+      CALL_PROVIDER: "manual",
+    };
+    expect(() => validateRuntime(local)).not.toThrow();
+    for (const change of [
+      { SUPABASE_URL: "https://project.supabase.co" },
+      { SUPABASE_URL: "http://user:pass@127.0.0.1:54321" },
+      { SUPABASE_URL: "http://127.0.0.1:5432" },
+      { NODE_ENV: "production" },
+      { ACCOUNT_EMAIL_PROVIDER: "smtp" },
+      { ACCOUNT_EMAIL_PROVIDER: "resend" },
+      { CALL_PROVIDER: "cloud" },
+      { META_APP_SECRET: "configured" },
+    ])
+      expect(() => validateRuntime({ ...local, ...change })).toThrow(
+        "LOCAL_DEV_ONLY",
+      );
+    // Without the flag, development settings behave exactly as before.
+    expect(() =>
+      validateRuntime({
+        ...local,
+        LOCAL_DEV_ONLY: undefined,
+        SUPABASE_URL: "https://project.supabase.co",
+      }),
+    ).not.toThrow();
+  });
+  it("refuses a hosted admin client under LOCAL_DEV_ONLY", () => {
+    vi.stubEnv("LOCAL_DEV_ONLY", "true");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "local-test-key");
+    vi.stubEnv("SUPABASE_URL", "https://project.supabase.co");
+    expect(() => getAdmin()).toThrow("LOCAL_DEV_ONLY");
+    vi.stubEnv("SUPABASE_URL", "http://127.0.0.1:54321");
+    expect(getAdmin()).toBeTruthy();
+  });
   it("fails API and jobs entrypoints before touching any provider", () => {
     for (const entry of ["src/index.js", "src/jobs/runner.js"]) {
       const r = spawnSync(process.execPath, [entry], {

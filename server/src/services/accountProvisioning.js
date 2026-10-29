@@ -27,8 +27,17 @@ const fields = z
     name: z.string().trim().min(1).max(200),
     email: z.string(),
     password: creationPassword,
-    role: z.enum(["agent", "admin"]),
+    role: z.enum(["agent", "admin", "staff"]),
     active: z.boolean().default(true),
+    // Update 047: optional working details, saved with the profile.
+    department_id: z.uuid().nullable().optional(),
+    job_title: z
+      .string()
+      .trim()
+      .max(80)
+      .nullable()
+      .optional()
+      .transform((v) => v || null),
     uid_mode: z.enum(["auto", "manual"]).default("auto"),
     uid: z.union([z.string(), z.number()]).nullable().optional(),
   })
@@ -126,6 +135,29 @@ export function accountProvisioningService(db) {
         p_uid: data.uid,
         p_request: request,
       });
+      // Before the login exists: a refused department or title creates nothing.
+      if (data.department_id || data.job_title) {
+        try {
+          await rpc("account_provisioning_details", {
+            ...grant,
+            p_id: id,
+            p_department: data.department_id || null,
+            p_job_title: data.job_title,
+          });
+        } catch (error) {
+          await rpc("fail_account_provisioning", {
+            ...grant,
+            p_id: id,
+            p_request: request,
+          }).catch(() => {});
+          throw error.status === 400
+            ? fail(
+                "Choose an active department and a job title of up to 80 characters.",
+                400,
+              )
+            : error;
+        }
+      }
       // Server-only Auth administration: the admin's own session is untouched.
       // The profile trigger stores the reserved UID, name and role in the same
       // database transaction as the Auth user, with access still disabled.

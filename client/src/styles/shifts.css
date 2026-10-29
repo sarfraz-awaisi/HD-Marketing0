@@ -1,0 +1,60 @@
+/* Shift management (update 048). Built on the attendance and task styles. */
+.shift-management {
+  display: grid;
+  gap: var(--space-4);
+}
+.shift-management > .review-tabs {
+  margin-bottom: 0;
+}
+.shift-company,
+.shift-summary,
+.shift-current {
+  margin: 0 0 var(--space-3);
+  font-size: 13px;
+  color: var(--muted, #566d87);
+  overflow-wrap: anywhere;
+}
+.shift-planned {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.shift-planned li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+}
+.shift-dialog .shift-planned {
+  margin: 0 0 var(--space-3);
+}
+.shift-remove-note {
+  margin: 0 0 var(--space-3);
+  font-size: 13px;
+}
+.shift-dialog .shift-remove {
+  margin-top: var(--space-3);
+}
+.badge.shift-source {
+  font-size: 11px;
+}
+.badge.shift-source.individual {
+  background: #faf1df;
+  color: #896721;
+}
+.badge.shift-source.department {
+  background: #eaf1fb;
+  color: #2f5c8f;
+}
+.badge.shift-source.role {
+  background: #edf7f0;
+  color: #397751;
+}
+@media (max-width: 760px) {
+  .shift-management .review-tabs button {
+    flex: 1 1 calc(50% - 8px);
+  }
+}

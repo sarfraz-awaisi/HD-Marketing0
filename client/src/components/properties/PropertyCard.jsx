@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Building2, Images } from "lucide-react";
 import { pkr } from "../../lib/api";
 import {
+  categorySummary,
   propertyRef,
   purposeLabel,
   sizeLabel,
@@ -83,8 +84,24 @@ export default function PropertyCard({ property, onView }) {
           {sizeLabel(property)} · {property.type}
           {property.purpose && <> · {purposeLabel(property.purpose)}</>}
         </p>
+        {property.building_categories?.length > 0 && (
+          <p className="property-categories">
+            {categorySummary(property.building_categories)}
+          </p>
+        )}
         {property.property_no && (
           <p className="property-ref">{propertyRef(property.property_no)}</p>
+        )}
+        {/* Update 044: promoted copies name the original listing agent. */}
+        {property.promoted_from && (
+          <p className="property-origin">
+            Originally listed by {property.promoted_from.agent_name}
+            {property.promoted_from.agent_uid != null &&
+              ` · UID ${property.promoted_from.agent_uid}`}
+          </p>
+        )}
+        {property.admin_copy && (
+          <span className="badge info property-promoted">In Admin List</span>
         )}
         <Button variant="secondary" onClick={onView}>
           View property ↗

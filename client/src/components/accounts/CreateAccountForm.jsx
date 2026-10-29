@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button, ErrorBox, PasswordInput } from "../common/UI";
+import { api } from "../../lib/api";
 import {
   gmailError,
   normalizeEmail,
@@ -19,7 +21,9 @@ const schema = z
   .object({
     name: z.string(),
     email: z.string(),
-    role: z.enum(["agent", "admin"]),
+    role: z.enum(["agent", "admin", "staff"]),
+    department_id: z.string(),
+    job_title: z.string(),
     password: z.string(),
     confirm_password: z.string(),
     uid_mode: z.enum(["auto", "manual"]),
@@ -43,6 +47,18 @@ const schema = z
       data.password !== data.confirm_password ? "Passwords must match." : "",
     );
     if (data.uid_mode === "manual") check("uid", uidError(data.uid));
+    check(
+      "job_title",
+      data.job_title.trim().length > 80
+        ? "Use a job title of up to 80 characters."
+        : "",
+    );
+    check(
+      "department_id",
+      data.role === "staff" && !data.department_id
+        ? "Choose the department this staff member works in."
+        : "",
+    );
   });
 const fieldFor = {
   ACCOUNTS_INVALID_EMAIL: "email",
@@ -70,6 +86,8 @@ export default function CreateAccountForm({
       name: "",
       email: "",
       role: "agent",
+      department_id: "",
+      job_title: "",
       password: "",
       confirm_password: "",
       uid_mode: "auto",
@@ -77,7 +95,14 @@ export default function CreateAccountForm({
     },
   });
   const mode = watch("uid_mode"),
-    uid = watch("uid");
+    uid = watch("uid"),
+    role = watch("role");
+  // Update 047: departments for the new account (active ones only).
+  const departments = useQuery({
+    queryKey: ["departments"],
+    queryFn: ({ signal }) => api("/admin/departments", { signal }),
+    retry: false,
+  });
   const [availability, setAvailability] = useState(null);
   useEffect(() => {
     if (mode === "auto") clearErrors("uid");
@@ -121,6 +146,12 @@ export default function CreateAccountForm({
             name: data.name.trim(),
             email: normalizeEmail(data.email),
             role: data.role,
+            ...(data.department_id
+              ? { department_id: data.department_id }
+              : {}),
+            ...(data.job_title.trim()
+              ? { job_title: data.job_title.trim() }
+              : {}),
             password: data.password,
             uid_mode: data.uid_mode,
             ...(data.uid_mode === "manual" ? { uid: data.uid } : {}),
@@ -147,8 +178,53 @@ export default function CreateAccountForm({
             {...register("role")}
           >
             <option value="agent">Agent</option>
+            <option value="staff">Staff</option>
             <option value="admin">Admin</option>
           </select>
+          {role === "staff" && (
+            <span className="field-hint">
+              Office staff: tasks, reports, attendance and leave only, without
+              leads or inventory.
+            </span>
+          )}
+        </label>
+        <label>
+          Department{role === "staff" ? " *" : ""}
+          <select
+            aria-label="Department"
+            aria-invalid={!!errors.department_id}
+            disabled={busy}
+            {...register("department_id")}
+          >
+            <option value="">Not assigned</option>
+            {(Array.isArray(departments.data) ? departments.data : [])
+              .filter((d) => d.active)
+              .map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+          </select>
+          <span className="field-error">{errors.department_id?.message}</span>
+        </label>
+        <label>
+          Job title
+          <input
+            aria-label="Job title"
+            placeholder={
+              role === "staff" ? "e.g. Video Editor" : "e.g. Sales Agent"
+            }
+            maxLength={80}
+            disabled={busy}
+            {...register("job_title")}
+          />
+          <span className="field-error">{errors.job_title?.message}</span>
+          {role === "staff" && (
+            <span className="field-hint">
+              A shift other than the company shift is set in Employee management
+              after the account is created.
+            </span>
+          )}
         </label>
         <label className="wide">
           Gmail address *
@@ -228,8 +304,8 @@ export default function CreateAccountForm({
       </fieldset>
       <p className="security-note">
         The account is created immediately with this password and can sign in
-        through the matching Agent or Admin login. Share the password with its
-        owner securely; it is never shown again.
+        through the matching Agent, Staff or Admin login. Share the password
+        with its owner securely; it is never shown again.
       </p>
       <ErrorBox error={errors.root?.message} />
       <footer>

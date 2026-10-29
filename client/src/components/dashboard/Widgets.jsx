@@ -2,9 +2,12 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bell,
+  Building2,
   CalendarCheck,
   CalendarDays,
   Clock,
+  ListChecks,
+  LogOut,
   PhoneMissed,
   PhoneOutgoing,
   Repeat,
@@ -113,8 +116,17 @@ export function MonthHighlight({ metrics, admin }) {
     </section>
   );
 }
-// One icon per notification type (updates 038 and 040).
+// One icon per notification type (updates 038, 040, 044, 045 and 048).
 const noticeIcons = {
+  task_assigned: ListChecks,
+  task_updated: ListChecks,
+  task_cancelled: ListChecks,
+  task_report: ListChecks,
+  task_report_reviewed: ListChecks,
+  checkout_request: LogOut,
+  checkout_decision: LogOut,
+  property_source_updated: Building2,
+  property_source_removed: Building2,
   lead_assigned: UserPlus,
   lead_moved_away: Repeat,
   lead_kept: UserPlus,
@@ -128,6 +140,7 @@ const noticeIcons = {
   attendance_review: CalendarCheck,
   attendance_incomplete: CalendarCheck,
   attendance_summary: CalendarCheck,
+  shift_changed: Clock,
 };
 const noticeIcon = (type) => noticeIcons[type] || Bell;
 const relative = new Intl.RelativeTimeFormat("en", { numeric: "auto" });

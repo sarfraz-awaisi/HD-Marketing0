@@ -9,7 +9,7 @@ const credentials = z
   .object({
     email: z.string().trim().toLowerCase().min(3).max(254),
     password: z.string().min(1).max(1024),
-    portal: z.enum(["admin", "agent"]),
+    portal: z.enum(["admin", "agent", "staff"]),
   })
   .strict();
 const bounded = (value, fallback, min, max, name) => {

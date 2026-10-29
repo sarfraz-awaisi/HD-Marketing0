@@ -1,5 +1,5 @@
 const key = "hd-marketing-login-emails-v1";
-const roles = ["agent", "admin"];
+const roles = ["agent", "admin", "staff"];
 const limit = 5;
 function emailAddress(value) {
   if (typeof value !== "string") return null;
@@ -25,7 +25,7 @@ function history() {
       ]),
     );
   } catch {
-    return { agent: [], admin: [] };
+    return { agent: [], admin: [], staff: [] };
   }
 }
 export function savedLoginEmails(role) {

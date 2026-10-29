@@ -20,12 +20,19 @@ import {
   holidayCreate,
   holidayQuery,
   attendancePolicy,
+  attendanceManage,
+  attendanceManageDay,
 } from "../utils/validators.js";
 import { csvCell } from "../utils/phoneMask.js";
 // Attendance (update 040). Every handler runs after the shared auth
 // middleware; the employee is always req.user, never an id from the browser.
 // SQL raises HA<status> with messages written for the signed-in user.
-export async function attendanceRpc(db, name, args) {
+export async function attendanceRpc(
+  db,
+  name,
+  args,
+  update = "Attendance needs CRM database update 040 after 039.",
+) {
   const { data, error } = await db.rpc(name, args);
   if (!error) return data;
   const custom = /^HA(\d{3})$/.exec(error.code || "");
@@ -46,7 +53,7 @@ export async function attendanceRpc(db, name, args) {
   throw Object.assign(
     new Error(
       missing
-        ? "Attendance needs CRM database update 040 after 039."
+        ? update
         : status === 409
           ? "This was changed at the same moment. Refresh and try again."
           : status === 400
@@ -325,8 +332,9 @@ function sendSheet(res, rows, name, format) {
 
 export function attendanceAdminRouter(db) {
   const router = Router();
-  const admin = (req, name, args = {}) =>
-    attendanceRpc(db, name, { p_actor: req.user.id, ...args });
+  const admin = (req, name, args = {}, update) =>
+    attendanceRpc(db, name, { p_actor: req.user.id, ...args }, update);
+  const needs042 = "Attendance management needs CRM database update 042.";
   const daily = (req, q, limit = q.limit, pageNo = q.page) =>
     admin(req, "attendance_daily", {
       p_date: q.date,
@@ -367,11 +375,15 @@ export function attendanceAdminRouter(db) {
     );
   });
   router.get("/leave", async (req, res) => {
-    const q = requestListQuery.parse(req.query);
+    const q = requestListQuery
+      .extend({ department: uuid.optional() })
+      .parse(req.query);
     res.json(
       await admin(req, "attendance_leave_page", {
         p_mine: false,
         p_user: q.user || null,
+        // Update 047: leave by department.
+        p_department: q.department || null,
         ...page(q),
       }),
     );
@@ -418,6 +430,37 @@ export function attendanceAdminRouter(db) {
         p_data: body,
         p_request: req.id,
       }),
+    );
+  });
+  // Entering or correcting another employee's earlier days (update 042). A
+  // dry run returns the same per-date plan without changing anything.
+  router.get("/manage", reportLimit, async (req, res) => {
+    const q = attendanceManageDay.parse(req.query);
+    res.json(
+      await admin(
+        req,
+        "attendance_admin_day",
+        { p_user: q.user, p_day: q.date },
+        needs042,
+      ),
+    );
+  });
+  router.post("/manage", sensitiveLimit, async (req, res) => {
+    const body = attendanceManage.parse(req.body);
+    res.json(
+      await admin(
+        req,
+        "attendance_admin_set",
+        {
+          p_user: body.user_id,
+          p_entries: body.entries,
+          p_reason: body.reason || null,
+          p_replace: body.replace,
+          p_dry_run: body.dry_run,
+          p_request: req.id,
+        },
+        needs042,
+      ),
     );
   });
   router.get("/holidays", async (req, res) => {

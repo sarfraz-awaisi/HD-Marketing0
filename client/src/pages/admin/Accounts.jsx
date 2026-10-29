@@ -17,6 +17,7 @@ import {
   Power,
   Hash,
   CircleCheck,
+  Briefcase,
 } from "lucide-react";
 import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
@@ -34,7 +35,9 @@ import {
   PasswordInput,
   useToast,
 } from "../../components/common/UI";
-const roleLabel = (role) => (role === "admin" ? "Admin" : "Agent");
+// Update 047: Staff joins Admin and Agent.
+const roleLabel = (role) =>
+  ({ admin: "Admin", agent: "Agent", staff: "Staff" })[role] || role;
 const needsInvitation = (account) =>
   (!!account.invitation_state || account.invitation_required) &&
   account.invitation_state !== "accepted";
@@ -85,6 +88,7 @@ const accountFields = (own) => [
           label: "Account role",
           options: [
             { value: "agent", label: "Agent" },
+            { value: "staff", label: "Staff" },
             { value: "admin", label: "Admin" },
           ],
           required: true,
@@ -235,7 +239,7 @@ function AccountDetails({
         {data.account_status !== "deletion_pending" &&
           !data.account_creation_pending && (
             <>
-              {!own && data.role === "agent" && (
+              {!own && data.role !== "admin" && (
                 <Button
                   variant="secondary"
                   disabled={busy}
@@ -753,7 +757,10 @@ function AccountDialog({ dialog, onClose, request, user, onSaved, onChanged }) {
               if (
                 kind === "edit" &&
                 account.role === "agent" &&
-                data.access === "disabled" &&
+                // An agent becoming staff hands over their leads first, as
+                // when disabling (update 047).
+                (data.access === "disabled" ||
+                  (data.role === "staff" && account.assigned_leads > 0)) &&
                 !needsInvitation(account) &&
                 !!account.email_confirmed_at
               ) {
@@ -1041,7 +1048,7 @@ export default function Accounts() {
         <div>
           <span className="eyebrow">CONTROL ACCESS WITH CONFIDENCE</span>
           <h1>Accounts</h1>
-          <p>Create and manage your team’s Agent and Admin accounts.</p>
+          <p>Create and manage your team’s Agent, Staff and Admin accounts.</p>
         </div>
         <div className="actions account-header-actions">
           <Link className="button secondary" to="/settings/security">
@@ -1166,6 +1173,7 @@ export default function Accounts() {
                 ["Total accounts", data.summary.total, UsersRound],
                 ["Active admins", data.summary.admins, ShieldCheck],
                 ["Active agents", data.summary.agents, UserRound],
+                ["Active staff", data.summary.staff ?? 0, Briefcase],
                 ["Disabled accounts", data.summary.disabled, LockKeyhole],
               ].map(([label, value, Icon]) => (
                 <section className="metric fx-card" key={label}>
@@ -1201,6 +1209,7 @@ export default function Accounts() {
                 <option value="">All roles</option>
                 <option value="admin">Admins</option>
                 <option value="agent">Agents</option>
+                <option value="staff">Staff</option>
               </select>
               <select
                 aria-label="Filter account access"

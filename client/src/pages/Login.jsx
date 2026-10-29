@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Navigate } from "react-router-dom";
-import { MoveHorizontal, ShieldCheck, Users } from "lucide-react";
+import { Briefcase, MoveHorizontal, ShieldCheck, Users } from "lucide-react";
 import { supabase, configured } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import { ErrorBox } from "../components/common/UI";
@@ -29,8 +29,21 @@ const portals = {
     Icon: Users,
     description: "Manage your leads, calls, follow-ups, and daily attendance.",
   },
+  // Update 047: office staff (media, technical, operations).
+  staff: {
+    label: "Staff",
+    title: "Staff Login",
+    Icon: Briefcase,
+    description: "Your daily tasks, work reports, attendance, and leave.",
+  },
 };
+// Agent and Staff share one side of the page; Admin has the other.
+const sideOf = (portal) => (portal === "admin" ? "admin" : "agent");
 const other = (portal) => (portal === "admin" ? "agent" : "admin");
+const resetRefused = (role) =>
+  role === "staff"
+    ? "Staff cannot reset their own passwords. Please contact your administrator."
+    : "Agents cannot reset their own passwords. Please contact your administrator.";
 // The slide is skipped when the browser asks for reduced motion (and in
 // jsdom, which has no matchMedia), so the form swaps immediately.
 function motionAllowed() {
@@ -82,6 +95,7 @@ export default function Login() {
   // halfway through the slide.
   const [portal, setPortal] = useState("agent"),
     [side, setSide] = useState("agent"),
+    [target, setTarget] = useState("agent"),
     [leaving, setLeaving] = useState(false);
   const swapTimer = useRef(null),
     formPane = useRef(null),
@@ -138,12 +152,15 @@ export default function Login() {
     formPane.current?.querySelector("input")?.focus();
   }, [portal]);
   function choosePortal(next) {
-    if (pending.current || next === side) return;
-    setSide(next);
+    if (pending.current || next === target) return;
+    const nextSide = sideOf(next);
+    setTarget(next);
+    setSide(nextSide);
     setMessage("");
-    if (next === "agent" && mode === "reset") setMode("login");
+    if (next !== "admin" && mode === "reset") setMode("login");
     clearTimeout(swapTimer.current);
-    if (!motionAllowed()) {
+    // Agent and Staff forms swap in place; only Admin slides across.
+    if (nextSide === side || !motionAllowed()) {
       setPortal(next);
       setLeaving(false);
       return;
@@ -186,12 +203,13 @@ export default function Login() {
               role="group"
               aria-label="Login portal"
               data-side={side}
+              data-portal={target}
             >
-              {["admin", "agent"].map((role) => (
+              {["admin", "agent", "staff"].map((role) => (
                 <button
                   key={role}
                   type="button"
-                  aria-pressed={side === role}
+                  aria-pressed={target === role}
                   disabled={busy}
                   onClick={() => choosePortal(role)}
                 >
@@ -250,9 +268,12 @@ export default function Login() {
                   Back to sign in
                 </button>
               </>
-            ) : mode === "update" && user?.role === "agent" ? (
+            ) : mode === "update" &&
+              (user?.role === "agent" || user?.role === "staff") ? (
               <>
-                <ErrorBox error="Password reset is only available for administrator accounts. Agents cannot reset their own passwords. Please contact your administrator." />
+                <ErrorBox
+                  error={`Password reset is only available for administrator accounts. ${resetRefused(user.role)}`}
+                />
                 <button
                   className="glass-ghost"
                   onClick={async () => {
@@ -335,10 +356,8 @@ export default function Login() {
                       }
                       let result;
                       if (mode === "reset") {
-                        if (portal === "agent")
-                          throw new Error(
-                            "Agents cannot reset their own passwords. Please contact your administrator.",
-                          );
+                        if (portal !== "admin")
+                          throw new Error(resetRefused(portal));
                         const res = await api("/auth/forgot-password", {
                           method: "POST",
                           body: { email: data.email.trim() },
@@ -350,10 +369,9 @@ export default function Login() {
                         return;
                       } else {
                         if (user && user.role !== "admin") {
+                          const role = user.role;
                           await supabase.auth.signOut();
-                          throw new Error(
-                            "Agents cannot reset their own passwords. Please contact your administrator.",
-                          );
+                          throw new Error(resetRefused(role));
                         }
                         if (data.password.length < 12)
                           throw new Error("Use at least 12 characters");
@@ -374,6 +392,22 @@ export default function Login() {
                     }
                   }}
                 >
+                  {mode === "login" && portal !== "admin" && (
+                    <div className="glass-row">
+                      <button
+                        type="button"
+                        className="glass-link"
+                        disabled={busy}
+                        onClick={() =>
+                          choosePortal(portal === "agent" ? "staff" : "agent")
+                        }
+                      >
+                        {portal === "agent"
+                          ? "Office staff? Use the Staff Login"
+                          : "Sales agent? Use the Agent Login"}
+                      </button>
+                    </div>
+                  )}
                   {mode === "login" && portal === "admin" && (
                     <div className="glass-row">
                       <button
@@ -413,7 +447,7 @@ export default function Login() {
               </p>
             )}
             <small className="glass-footnote">
-              {portal === "agent"
+              {portal !== "admin"
                 ? "Access is provisioned and passwords are managed by your administrator."
                 : "Access is provisioned by your administrator."}
             </small>
@@ -458,6 +492,19 @@ export default function Login() {
                 >
                   Open {preview.title}
                 </button>
+                {portal === "admin" && (
+                  <button
+                    type="button"
+                    className="glass-link glass-staff-link"
+                    disabled={busy}
+                    onClick={() => {
+                      focusForm.current = true;
+                      choosePortal("staff");
+                    }}
+                  >
+                    Office staff? Open Staff Login
+                  </button>
+                )}
               </>
             ) : (
               <>
