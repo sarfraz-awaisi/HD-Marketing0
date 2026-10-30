@@ -22,8 +22,6 @@ for (const file of files) {
   parts.push(`\n-- Migration: ${file}\n`, sql);
 }
 parts.push(
-  "\n-- Safe sample property; real Auth accounts are created later.\n",
-  await readFile(new URL("seed.sql", root), "utf8"),
   "COMMIT;",
   "SELECT 'HD Marketing database setup completed' AS status;",
 );
