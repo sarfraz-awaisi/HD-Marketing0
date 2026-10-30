@@ -1,5 +1,7 @@
+import { requireLocalDevelopment } from "./local-only.js";
 import { readFile } from "node:fs/promises";
 import { createHmac } from "node:crypto";
+requireLocalDevelopment();
 if (!process.env.WEBHOOK_SECRET)
   throw new Error("Configure WEBHOOK_SECRET first");
 const body = await readFile(

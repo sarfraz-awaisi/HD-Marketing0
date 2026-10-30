@@ -6461,11 +6461,4628 @@ notify pgrst,'reload schema';
 
 
 
--- Safe sample property; real Auth accounts are created later.
+-- Migration: 042_attendance_admin_entries.sql
 
--- Auth accounts must be created by scripts/setup-dev.js first.
--- No auth.users insertion and no embedded passwords.
-insert into public.properties(title,description,location,price,type,area,area_unit) select 'Park View Residence','Development sample property','Islamabad',25000000,'House',10,'marla' where not exists(select 1 from public.properties where title='Park View Residence');
+-- Apply after 041. Safe to rerun. Administrator attendance entries (update
+-- 042): an administrator can enter or correct another employee's attendance
+-- for earlier days, one day or up to 31 at a time, for example the days
+-- before the CRM started tracking attendance. The attendance model of 040 is
+-- unchanged:
+-- * a worked day (present, late or a half day) is an attendance record with a
+--   check-in and check-out; punctuality and durations come from
+--   attendance_compute under that day's rules, and the record is marked
+--   corrected;
+-- * an absence is still never stored: it is a scheduled working day in the
+--   employee's attendance period with no record, holiday or approved leave;
+-- * leave is an approved one-day leave row that names the administrator who
+--   recorded it.
+-- A day before the employee's own attendance start counts only once it is
+-- entered: it gets an attendance period of its own, marked with the
+-- administrator who entered it. Days nobody entered stay uncounted and never
+-- become absences. Entering a day before tracking began also moves the first
+-- rules' start back, so the day counts under the same rules; employees whose
+-- attendance starts later are unaffected. An entered day can be removed
+-- again. Every change is audited with the values before and after. Nothing
+-- notifies anyone: these are earlier days, not today's live attendance.
+-- Installing this update changes no existing attendance, leave, correction,
+-- period or rule; it only adds two empty columns and new functions.
+-- Errors raised here use SQLSTATE HA<http status> (HA400, HA403, HA404,
+-- HA409) with messages that are safe to show to the signed-in user.
+
+do $$ begin
+ if to_regprocedure('public.attendance_compute(date,time,time,integer,timestamptz,timestamptz)') is null then
+  raise exception 'Apply CRM update 040 (attendance) before update 042.';
+ end if;
+end $$;
+
+-- Leave an administrator recorded directly, rather than one an employee
+-- requested. Only such leave can later be changed or removed here.
+alter table public.attendance_leave_requests add column if not exists recorded_by uuid references public.profiles(id);
+alter table public.attendance_leave_requests drop constraint if exists attendance_leave_recorded;
+alter table public.attendance_leave_requests add constraint attendance_leave_recorded
+ check(recorded_by is null or (status='approved' and reviewer_id=recorded_by));
+-- Attendance periods an administrator entered for earlier days (always
+-- closed). Periods opened and closed with the account keep recorded_by null.
+alter table public.attendance_periods add column if not exists recorded_by uuid references public.profiles(id);
+alter table public.attendance_periods drop constraint if exists attendance_periods_recorded;
+alter table public.attendance_periods add constraint attendance_periods_recorded check(recorded_by is null or ends_on is not null);
+
+-- The rules for a day: the version in force, or for a day before tracking
+-- began, the first version (which an entry would extend back to that day).
+create or replace function public.attendance_admin_rules(p_day date) returns public.attendance_policies language sql stable security definer set search_path='' as $$
+ select * from (
+  select * from public.attendance_policies a where a.effective_from<=p_day and (a.effective_to is null or a.effective_to>=p_day)
+  union all
+  select * from (select * from public.attendance_policies order by effective_from limit 1) f where p_day<f.effective_from
+ ) r limit 1
+$$;
+
+-- Keeps entered periods tidy: drops one that counts no working day (left by a
+-- removal), and joins entered periods separated only by days off or holidays,
+-- running the last one up to the next period, so a weekend between entered
+-- weeks shows as a day off rather than outside attendance.
+create or replace function public.attendance_admin_tidy(p_user uuid) returns void language plpgsql security definer set search_path='' as $$
+declare a public.attendance_periods;b public.attendance_periods;changed boolean;
+begin
+ delete from public.attendance_periods e where e.user_id=p_user and e.recorded_by is not null and not exists(
+  select 1 from generate_series(e.starts_on::timestamp,e.ends_on::timestamp,interval '1 day') g
+  where extract(isodow from g::date)::smallint=any((public.attendance_admin_rules(g::date)).work_days)
+   and not exists(select 1 from public.attendance_holidays h where h.holiday_date=g::date));
+ loop
+  changed=false;a=null;
+  for b in select * from public.attendance_periods where user_id=p_user order by starts_on loop
+   if a.recorded_by is not null and b.starts_on>a.ends_on and not exists(
+    select 1 from generate_series((a.ends_on+1)::timestamp,(b.starts_on-1)::timestamp,interval '1 day') g
+    where extract(isodow from g::date)::smallint=any((public.attendance_admin_rules(g::date)).work_days)
+     and not exists(select 1 from public.attendance_holidays h where h.holiday_date=g::date)) then
+    if b.recorded_by is not null then
+     delete from public.attendance_periods where id=b.id;
+     update public.attendance_periods set ends_on=b.ends_on where id=a.id;
+     changed=true;exit;
+    elsif a.ends_on<b.starts_on-1 then
+     update public.attendance_periods set ends_on=b.starts_on-1 where id=a.id;
+    end if;
+   end if;
+   a=b;
+  end loop;
+  exit when not changed;
+ end loop;
+end $$;
+
+-- One employee's day as an administrator sees it before changing it: the
+-- derived state, record, leave, rules, whether the day is counted (and only
+-- because it was entered), and the audited history of that day.
+create or replace function public.attendance_admin_day_at(p_actor uuid,p_user uuid,p_day date,p_now timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);person public.profiles;rules public.attendance_policies;
+ rec public.attendance_records;lv public.attendance_leave_requests;d record;
+begin
+ if p_day is null then raise exception 'Choose a date' using errcode='HA400';end if;
+ select * into person from public.profiles where id=p_user and role in ('admin','agent') and deleted_at is null;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ rules=public.attendance_admin_rules(p_day);
+ select * into rec from public.attendance_records where user_id=p_user and attendance_date=p_day;
+ select * into lv from public.attendance_leave_requests where user_id=p_user and status='approved' and p_day between start_date and end_date order by created_at limit 1;
+ select * into d from public.attendance_days(p_day,p_day,p_user,p_now) limit 1;
+ return jsonb_build_object('date',p_day,'today',public.attendance_local_date(p_now),'self',p_user=p_actor,
+  'employee',jsonb_build_object('id',person.id,'name',person.name,'uid',person.uid,'role',person.role,'active',person.active),
+  'state',coalesce(d.state,case when rules.id is null then 'not_tracked' else 'not_employed' end),
+  'record',case when rec.id is not null then jsonb_build_object('id',rec.id,'check_in_at',rec.check_in_at,'check_out_at',rec.check_out_at,
+   'state',rec.state,'punctuality',rec.punctuality,'late_minutes',rec.late_minutes,'worked_minutes',rec.worked_minutes,
+   'early_departure_minutes',rec.early_departure_minutes,'corrected',rec.corrected) end,
+  'leave',case when lv.id is not null then jsonb_build_object('id',lv.id,'leave_type',lv.leave_type,'start_date',lv.start_date,'end_date',lv.end_date,
+   'recorded_by_admin',lv.recorded_by is not null) end,
+  'rules',case when rules.id is not null then jsonb_build_object('shift_start',to_char(rules.shift_start,'HH24:MI'),'shift_end',to_char(rules.shift_end,'HH24:MI'),
+   'grace_minutes',rules.grace_minutes,'work_days',to_jsonb(rules.work_days)) end,
+  'holiday',(select name from public.attendance_holidays where holiday_date=p_day),
+  'pending_correction',exists(select 1 from public.attendance_corrections where user_id=p_user and attendance_date=p_day and status='pending'),
+  'attendance_start',(select min(starts_on) from public.attendance_periods where user_id=p_user and recorded_by is null),
+  'counted',exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.starts_on<=p_day and (e.ends_on is null or e.ends_on>=p_day)),
+  'entered',not exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.recorded_by is null and e.starts_on<=p_day and (e.ends_on is null or e.ends_on>=p_day))
+   and exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.recorded_by is not null and e.starts_on<=p_day and e.ends_on>=p_day),
+  'tracking_started',(select min(effective_from) from public.attendance_policies),
+  'history',(select coalesce(jsonb_agg(jsonb_build_object('at',a.created_at,'action',a.action,'by',coalesce(p.name,'System'),
+    'before',a.metadata->'before','after',a.metadata->'after','reason',a.metadata->>'reason') order by a.created_at desc),'[]'::jsonb)
+   from (select * from public.audit_log a where a.action like 'attendance.%' and a.metadata->>'date'=p_day::text
+    and (a.metadata->>'user_id'=p_user::text or (a.actor_id=p_user and a.action in ('attendance.check_in','attendance.check_out')))
+    order by a.created_at desc limit 50) a left join public.profiles p on p.id=a.actor_id));
+end $$;
+
+-- Plan, and unless p_dry_run apply, attendance for earlier days. Each entry is
+-- {date, status: present|late|half_day|absent|leave|clear, check_in,
+-- check_out ("HH:MM", Pakistan time), leave_type}; clear removes an entered
+-- day so it is no longer counted. Every date gets one result: create,
+-- update, unchanged, skip (existing attendance kept because p_replace is
+-- false) or error (with the reason). Malformed input raises instead. The
+-- dates that can be saved are saved together in this transaction.
+create or replace function public.attendance_admin_set_at(p_actor uuid,p_user uuid,p_entries jsonb,p_reason text,p_replace boolean,p_dry_run boolean,p_request text,p_now timestamptz)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);person public.profiles;today date=public.attendance_local_date(p_now);
+ note text=nullif(btrim(coalesce(p_reason,'')),'');overwrite boolean=coalesce(p_replace,false);first_policy public.attendance_policies;
+ real_start date;new_tracking date;item jsonb;p jsonb;day date;wanted text;wanted_leave text;t_in time;t_out time;
+ rules public.attendance_policies;rec public.attendance_records;lv public.attendance_leave_requests;holiday_name text;
+ covered boolean;covered_real boolean;in_at timestamptz;out_at timestamptz;calc record;outcome text;message text;was jsonb;will jsonb;
+ plan jsonb='[]'::jsonb;counted jsonb;target_id text;audit_entity text;seg public.attendance_periods;seg_next public.attendance_periods;
+begin
+ if p_user is null or jsonb_typeof(p_entries) is distinct from 'array' or jsonb_array_length(p_entries) not between 1 and 31 then
+  raise exception 'Choose between 1 and 31 dates' using errcode='HA400';end if;
+ if note is not null and length(note)>300 then raise exception 'Use a reason of 300 characters or fewer' using errcode='HA400';end if;
+ if p_user=p_actor then raise exception 'You cannot change your own attendance. Another administrator must do it.' using errcode='HA403';end if;
+ select * into person from public.profiles where id=p_user and role in ('admin','agent') and deleted_at is null for share;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ if exists(select 1 from jsonb_array_elements(p_entries) e where jsonb_typeof(e) is distinct from 'object'
+   or (e-array['date','status','check_in','check_out','leave_type'])<>'{}'::jsonb
+   or coalesce(e->>'date','')!~'^\d{4}-\d{2}-\d{2}$'
+   or coalesce(e->>'status','') not in ('present','late','half_day','absent','leave','clear')
+   or (e ? 'check_in' and coalesce(e->>'check_in','')!~'^([01]\d|2[0-3]):[0-5]\d$')
+   or (e ? 'check_out' and coalesce(e->>'check_out','')!~'^([01]\d|2[0-3]):[0-5]\d$')
+   or (e ? 'leave_type' and coalesce(e->>'leave_type','') not in ('casual','sick','emergency','unpaid','other'))) then
+  raise exception 'Invalid attendance entry' using errcode='HA400';end if;
+ if (select count(distinct e->>'date') from jsonb_array_elements(p_entries) e)<>jsonb_array_length(p_entries) then
+  raise exception 'Enter each date once' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_user,40));
+ select * into first_policy from public.attendance_policies order by effective_from limit 1;
+ if first_policy.id is null then raise exception 'Attendance tracking is not set up yet' using errcode='HA409';end if;
+ -- The account's own attendance (opened when it was enabled) starts here;
+ -- only days before it can be entered as extra counted days.
+ select min(starts_on) into real_start from public.attendance_periods where user_id=p_user and recorded_by is null;
+ if real_start is null then raise exception 'This account has never been enabled for attendance' using errcode='HA409';end if;
+
+ -- 1. Decide every date without changing anything.
+ for item in select e from jsonb_array_elements(p_entries) e order by e->>'date' loop
+  day=(item->>'date')::date;wanted=item->>'status';wanted_leave=item->>'leave_type';
+  t_in=(item->>'check_in')::time;t_out=(item->>'check_out')::time;
+  outcome=null;message=null;will=null;in_at=null;out_at=null;
+  rules=public.attendance_admin_rules(day);
+  select * into rec from public.attendance_records where user_id=p_user and attendance_date=day for update;
+  select * into lv from public.attendance_leave_requests l where l.user_id=p_user and l.status='approved' and day between l.start_date and l.end_date
+   order by l.created_at limit 1 for update;
+  holiday_name=(select h.name from public.attendance_holidays h where h.holiday_date=day);
+  covered=exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.starts_on<=day and (e.ends_on is null or e.ends_on>=day));
+  covered_real=exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.recorded_by is null and e.starts_on<=day and (e.ends_on is null or e.ends_on>=day));
+  was=jsonb_build_object('state',case when rec.id is not null then case when rec.state='checked_in' then 'incomplete' else rec.state end
+    when lv.id is not null and covered then 'leave' when covered then 'absent' else 'not_counted' end,
+   'check_in_at',rec.check_in_at,'check_out_at',rec.check_out_at,'punctuality',rec.punctuality,'leave_type',lv.leave_type);
+  if day>today then outcome='error';message='Future dates cannot be entered';
+  elsif day=today then outcome='error';message='Today''s attendance uses check-in and check-out. Choose an earlier day.';
+  elsif day<today-366 then outcome='error';message='Choose a date within the last year';
+  elsif rules.id is null then outcome='error';message='Attendance rules are not set up for this date';
+  elsif not (extract(isodow from day)::smallint=any(rules.work_days)) then outcome='error';message='Scheduled day off';
+  elsif holiday_name is not null then outcome='error';message='Company holiday: '||holiday_name;
+  elsif not covered and day>=real_start then outcome='error';message='The account was not active on this date';
+  elsif exists(select 1 from public.attendance_corrections c where c.user_id=p_user and c.attendance_date=day and c.status='pending') then
+   outcome='error';message='A correction request for this day is waiting. Review it first.';
+  elsif wanted in ('present','late','half_day') then
+   if t_in is null or t_out is null then outcome='error';message='Enter both the check-in and check-out times';
+   elsif t_out<=t_in then outcome='error';message='Check-out must be after check-in';
+   else
+    in_at=public.attendance_moment(day,t_in);out_at=public.attendance_moment(day,t_out);
+    select * into calc from public.attendance_compute(day,coalesce(rec.shift_start,rules.shift_start),coalesce(rec.shift_end,rules.shift_end),
+     coalesce(rec.grace_minutes,rules.grace_minutes),in_at,out_at);
+    if wanted='late' and calc.punctuality<>'late' then outcome='error';
+     message=format('A %s check-in is within the %s-minute grace period, so the day is not late',to_char(t_in,'HH24:MI'),coalesce(rec.grace_minutes,rules.grace_minutes));
+    elsif wanted='half_day' and calc.early_departure_minutes=0 then outcome='error';
+     message=format('A half day ends before the shift ends at %s',to_char(coalesce(rec.shift_end,rules.shift_end),'HH24:MI'));
+    elsif rec.id is not null then
+     if rec.check_in_at=in_at and rec.check_out_at is not distinct from out_at and covered then outcome='unchanged';message='Already recorded with these times';
+     elsif not overwrite then outcome='skip';message='Already recorded. Choose to replace existing attendance to change it.';
+     else outcome='update';end if;
+    elsif lv.id is not null then
+     if not overwrite then outcome='skip';message='On approved leave. Choose to replace existing attendance to record work instead.';
+     else outcome='update';end if;
+    else outcome='create';end if;
+    will=jsonb_build_object('state','checked_out','check_in_at',in_at,'check_out_at',out_at,'punctuality',calc.punctuality,
+     'late_minutes',calc.late_minutes,'worked_minutes',calc.worked_minutes,'early_departure_minutes',calc.early_departure_minutes);
+   end if;
+  elsif wanted='absent' then
+   if rec.id is not null then
+    if not overwrite then outcome='skip';message='Already recorded as worked. Choose to replace existing attendance to mark it absent.';
+    elsif exists(select 1 from public.attendance_corrections c where c.record_id=rec.id) then outcome='error';
+     message='This day has correction history, so its record cannot be removed';
+    else outcome='update';end if;
+   elsif lv.id is not null then
+    if not overwrite then outcome='skip';message='On approved leave. Choose to replace existing attendance to mark it absent.';
+    elsif lv.recorded_by is null or lv.start_date<>lv.end_date then outcome='error';
+     message='This day is covered by an approved leave request, which cannot be changed here';
+    else outcome='update';end if;
+   elsif covered then outcome='unchanged';message='Already counted as absent';
+   else outcome='create';end if;
+   will=jsonb_build_object('state','absent');
+  elsif wanted='leave' then
+   if wanted_leave is null then outcome='error';message='Choose the leave type';
+   elsif exists(select 1 from public.attendance_leave_requests l where l.user_id=p_user and l.status='pending' and day between l.start_date and l.end_date) then
+    outcome='error';message='A leave request covering this day is waiting. Review it instead.';
+   elsif rec.id is not null then
+    if not overwrite then outcome='skip';message='Already recorded as worked. Choose to replace existing attendance to record leave.';
+    elsif exists(select 1 from public.attendance_corrections c where c.record_id=rec.id) then outcome='error';
+     message='This day has correction history, so its record cannot be removed';
+    else outcome='update';end if;
+   elsif lv.id is not null then
+    if lv.leave_type=wanted_leave and covered then outcome='unchanged';message='Already on this leave';
+    elsif not overwrite then outcome='skip';message='Already on approved leave. Choose to replace existing attendance to change it.';
+    elsif lv.recorded_by is null or lv.start_date<>lv.end_date then outcome='error';
+     message='This day is covered by an approved leave request, which cannot be changed here';
+    else outcome='update';end if;
+   else outcome='create';end if;
+   will=jsonb_build_object('state','leave','leave_type',wanted_leave);
+  else
+   -- clear: remove an entered day, so it is no longer counted.
+   if covered_real then outcome='error';
+    message='This day is part of the employee''s own attendance. Mark it absent or enter attendance instead.';
+   elsif not covered and rec.id is null and lv.id is null then outcome='unchanged';message='Not counted';
+   elsif not overwrite then outcome='skip';message='Choose to replace existing attendance to remove it.';
+   elsif rec.id is not null and exists(select 1 from public.attendance_corrections c where c.record_id=rec.id) then outcome='error';
+    message='This day has correction history, so its record cannot be removed';
+   elsif lv.id is not null and (lv.recorded_by is null or lv.start_date<>lv.end_date) then outcome='error';
+    message='This day is covered by an approved leave request, which cannot be changed here';
+   else outcome='update';end if;
+   will=jsonb_build_object('state','not_counted');
+  end if;
+  plan=plan||jsonb_build_array(jsonb_build_object('date',day,'status',wanted,'result',outcome,'message',message,'before',was,
+   'after',case when outcome in ('create','update') then will end,
+   '_record',rec.id,'_leave',lv.id,'_leave_admin',lv.recorded_by is not null and lv.start_date=lv.end_date,'_in',in_at,'_out',out_at,'_type',wanted_leave,
+   '_count',not covered and wanted<>'clear'));
+ end loop;
+
+ -- 2. The days that become counted, and the start of tracking they need.
+ select coalesce(jsonb_agg(x->'date' order by x->>'date'),'[]'::jsonb) into counted from jsonb_array_elements(plan) x
+  where x->>'result' in ('create','update') and (x->>'_count')::boolean;
+ select min((x->>'date')::date) into new_tracking from jsonb_array_elements(plan) x where x->>'result' in ('create','update') and (x->>'date')::date<first_policy.effective_from;
+
+ -- 3. Apply.
+ if not coalesce(p_dry_run,false) then
+  if new_tracking is not null then
+   perform pg_advisory_xact_lock(873440);
+   update public.attendance_policies set effective_from=new_tracking where id=first_policy.id and effective_from>new_tracking;
+   insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+    values(p_actor,'attendance.tracking_start_moved','attendance_policies',first_policy.id::text,p_request,
+     jsonb_build_object('user_id',p_user,'from',first_policy.effective_from,'to',new_tracking,'reason',note));
+  end if;
+  for p in select x from jsonb_array_elements(plan) x where x->>'result' in ('create','update') loop
+   day=(p->>'date')::date;wanted=p->>'status';audit_entity='attendance_records';target_id=p->>'_record';
+   -- Count an entered day: join it to an entered period next to it, or give
+   -- it its own.
+   if (p->>'_count')::boolean then
+    select * into seg from public.attendance_periods where user_id=p_user and recorded_by is not null and ends_on=day-1 for update;
+    select * into seg_next from public.attendance_periods where user_id=p_user and recorded_by is not null and starts_on=day+1 for update;
+    if seg.id is not null and seg_next.id is not null then
+     delete from public.attendance_periods where id=seg_next.id;
+     update public.attendance_periods set ends_on=seg_next.ends_on where id=seg.id;
+    elsif seg.id is not null then update public.attendance_periods set ends_on=day where id=seg.id;
+    elsif seg_next.id is not null then update public.attendance_periods set starts_on=day where id=seg_next.id;
+    else insert into public.attendance_periods(user_id,starts_on,ends_on,recorded_by) values(p_user,day,day,p_actor);
+    end if;
+   end if;
+   if wanted in ('present','late','half_day') then
+    in_at=(p->>'_in')::timestamptz;out_at=(p->>'_out')::timestamptz;
+    if p->>'_record' is not null then
+     select * into rec from public.attendance_records where id=(p->>'_record')::uuid for update;
+     select * into calc from public.attendance_compute(day,rec.shift_start,rec.shift_end,rec.grace_minutes,in_at,out_at);
+     update public.attendance_records set check_in_at=in_at,check_out_at=out_at,state='checked_out',punctuality=calc.punctuality,
+      late_minutes=calc.late_minutes,beyond_grace_minutes=calc.beyond_grace_minutes,worked_minutes=calc.worked_minutes,
+      early_departure_minutes=calc.early_departure_minutes,overtime_minutes=calc.overtime_minutes,corrected=true where id=rec.id;
+    else
+     rules=public.attendance_policy_on(day);
+     select * into calc from public.attendance_compute(day,rules.shift_start,rules.shift_end,rules.grace_minutes,in_at,out_at);
+     insert into public.attendance_records(user_id,attendance_date,policy_id,shift_start,shift_end,grace_minutes,check_in_at,check_out_at,state,
+      punctuality,late_minutes,beyond_grace_minutes,worked_minutes,early_departure_minutes,overtime_minutes,corrected)
+     values(p_user,day,rules.id,rules.shift_start,rules.shift_end,rules.grace_minutes,in_at,out_at,'checked_out',calc.punctuality,calc.late_minutes,
+      calc.beyond_grace_minutes,calc.worked_minutes,calc.early_departure_minutes,calc.overtime_minutes,true)
+     returning id::text into target_id;
+     -- Leave recorded here gives way to the worked day. Leave the employee
+     -- requested stays on file; a check-in counts as present anyway.
+     if (p->>'_leave_admin')::boolean then delete from public.attendance_leave_requests where id=(p->>'_leave')::uuid;end if;
+    end if;
+   elsif wanted='absent' then
+    if p->>'_record' is not null then delete from public.attendance_records where id=(p->>'_record')::uuid;
+    elsif p->>'_leave' is not null then
+     audit_entity='attendance_leave_requests';target_id=p->>'_leave';
+     delete from public.attendance_leave_requests where id=(p->>'_leave')::uuid;
+    else audit_entity='attendance_periods';target_id=p_user::text;
+    end if;
+   elsif wanted='leave' then
+    if p->>'_record' is not null then delete from public.attendance_records where id=(p->>'_record')::uuid;end if;
+    audit_entity='attendance_leave_requests';
+    if p->>'_leave' is not null then
+     target_id=p->>'_leave';
+     if (p->>'_leave_admin')::boolean then
+      update public.attendance_leave_requests set leave_type=p->>'_type' where id=(p->>'_leave')::uuid;
+     end if;
+    else
+     -- The administrator's reason stays in the audit log; the employee sees
+     -- this leave in their own list.
+     insert into public.attendance_leave_requests(user_id,leave_type,start_date,end_date,reason,status,reviewer_id,reviewed_at,recorded_by)
+     values(p_user,p->>'_type',day,day,'Recorded by an administrator','approved',p_actor,now(),p_actor)
+     returning id::text into target_id;
+    end if;
+   else
+    if p->>'_record' is not null then delete from public.attendance_records where id=(p->>'_record')::uuid;end if;
+    if (p->>'_leave_admin')::boolean then
+     delete from public.attendance_leave_requests where id=(p->>'_leave')::uuid;
+     if target_id is null then audit_entity='attendance_leave_requests';target_id=p->>'_leave';end if;
+    end if;
+    if target_id is null then audit_entity='attendance_periods';target_id=p_user::text;end if;
+    -- Stop counting the day: shrink or split the entered period holding it.
+    select * into seg from public.attendance_periods where user_id=p_user and recorded_by is not null and starts_on<=day and ends_on>=day for update;
+    if seg.id is not null then
+     if seg.starts_on=day and seg.ends_on=day then delete from public.attendance_periods where id=seg.id;
+     elsif seg.starts_on=day then update public.attendance_periods set starts_on=day+1 where id=seg.id;
+     elsif seg.ends_on=day then update public.attendance_periods set ends_on=day-1 where id=seg.id;
+     else
+      update public.attendance_periods set ends_on=day-1 where id=seg.id;
+      insert into public.attendance_periods(user_id,starts_on,ends_on,recorded_by) values(p_user,day+1,seg.ends_on,seg.recorded_by);
+     end if;
+    end if;
+   end if;
+   insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+    values(p_actor,case when p->>'result'='create' then 'attendance.manual_create' else 'attendance.manual_update' end,audit_entity,target_id,p_request,
+     jsonb_build_object('user_id',p_user,'date',day,'status',wanted,'before',p->'before','after',p->'after','reason',note,
+      'counted',(p->>'_count')::boolean));
+  end loop;
+  perform public.attendance_admin_tidy(p_user);
+ end if;
+ return jsonb_build_object('dry_run',coalesce(p_dry_run,false),
+  'employee',jsonb_build_object('id',person.id,'name',person.name,'uid',person.uid,'role',person.role),
+  'results',(select coalesce(jsonb_agg(x-array['_record','_leave','_leave_admin','_in','_out','_type','_count'] order by x->>'date'),'[]'::jsonb) from jsonb_array_elements(plan) x),
+  'summary',(select jsonb_build_object('created',count(*) filter(where x->>'result'='create'),'updated',count(*) filter(where x->>'result'='update'),
+    'unchanged',count(*) filter(where x->>'result'='unchanged'),'skipped',count(*) filter(where x->>'result'='skip'),
+    'failed',count(*) filter(where x->>'result'='error')) from jsonb_array_elements(plan) x),
+  'counted_days',counted,
+  'tracking_start',case when new_tracking is not null then jsonb_build_object('from',first_policy.effective_from,'to',new_tracking) end);
+end $$;
+create or replace function public.attendance_admin_day(p_actor uuid,p_user uuid,p_day date) returns jsonb language sql security definer set search_path='' as $$
+ select public.attendance_admin_day_at(p_actor,p_user,p_day,now())
+$$;
+create or replace function public.attendance_admin_set(p_actor uuid,p_user uuid,p_entries jsonb,p_reason text,p_replace boolean,p_dry_run boolean,p_request text)
+returns jsonb language sql security definer set search_path='' as $$
+ select public.attendance_admin_set_at(p_actor,p_user,p_entries,p_reason,p_replace,p_dry_run,p_request,now())
+$$;
+
+-- Browser roles get nothing. The API calls the service-role functions; the
+-- explicit-time forms and the tidy helper are for the database owner only.
+do $$ declare f record;begin
+ for f in select oid::regprocedure signature,proname from pg_proc where pronamespace='public'::regnamespace and proname in
+  ('attendance_admin_rules','attendance_admin_tidy','attendance_admin_day_at','attendance_admin_set_at','attendance_admin_day','attendance_admin_set') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  if f.proname in ('attendance_admin_tidy','attendance_admin_day_at','attendance_admin_set_at') then
+   execute format('revoke all on function %s from service_role',f.signature);
+  else
+   execute format('grant execute on function %s to service_role',f.signature);
+  end if;
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
+
+
+-- Migration: 043_audit_history.sql
+
+-- Apply after 042. Safe to rerun. Readable audit history (update 043).
+-- Adds two read-only functions for the administrator's Audit history page:
+-- * audit_page: one filtered, paginated page of audit entries, with the
+--   people and records each entry refers to resolved in the same query: who
+--   did it, the employee affected, an assigned agent, and the lead, property,
+--   document or import file involved. Searching matches the name or UID of
+--   the person who acted or the employee affected.
+-- * audit_actors: everyone who has a recorded action, for the "Performed by"
+--   filter.
+-- Audit entries are not changed: no table, column, row, trigger or
+-- permission of audit_log is added or altered, and it stays append-only.
+-- The API turns these rows into plain-English descriptions and removes
+-- anything secret from the metadata before it reaches the browser.
+
+do $$ begin
+ if to_regprocedure('public.accounts_admin(uuid)') is null or to_regprocedure('public.format_lead_no(bigint)') is null then
+  raise exception 'Apply CRM updates up to 042 before update 043.';
+ end if;
+end $$;
+
+-- p_filters: {search, from, to (Pakistan dates), actor, sort: newest|oldest,
+-- match: [{action, prefix, entity}]}. An entry matches the list when it fits
+-- any item; each item's keys are optional and all of them must fit.
+create or replace function public.audit_page(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare f jsonb=coalesce(p_filters,'{}'::jsonb);term text=nullif(btrim(coalesce(f->>'search','')),'');
+ oldest boolean=coalesce(f->>'sort','newest')='oldest';since date;until date;acted_by uuid;matches jsonb=f->'match';
+ uuid_re text='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';result jsonb;
+begin
+ perform public.accounts_admin(p_actor);
+ if p_page is null or p_page not between 1 and 100000 or p_limit is null or p_limit not between 1 and 100
+  or length(coalesce(term,''))>100 or coalesce(f->>'sort','newest') not in ('newest','oldest')
+  or (matches is not null and jsonb_typeof(matches)<>'array')
+  or (f->>'actor' is not null and f->>'actor'!~uuid_re) then
+  raise exception 'Invalid audit filter' using errcode='22023';end if;
+ since=(f->>'from')::date;until=(f->>'to')::date;acted_by=(f->>'actor')::uuid;
+ with people as (
+  select p.id from public.profiles p where term is not null and (p.name ilike '%'||term||'%' or p.uid::text=term)
+ ), base as (
+  select a.*,case when a.metadata->>'user_id' ~ uuid_re then (a.metadata->>'user_id')::uuid
+    when a.entity='profiles' and a.entity_id ~ uuid_re then a.entity_id::uuid end affected_id
+  from public.audit_log a
+  where (since is null or a.created_at>=(since::timestamp at time zone 'Asia/Karachi'))
+   and (until is null or a.created_at<((until+1)::timestamp at time zone 'Asia/Karachi'))
+   and (acted_by is null or a.actor_id=acted_by)
+   and (matches is null or exists(select 1 from jsonb_array_elements(matches) m
+    where (m->>'action' is null or a.action=m->>'action') and (m->>'prefix' is null or a.action like m->>'prefix'||'%')
+     and (m->>'entity' is null or a.entity=m->>'entity')))
+ ), filtered as (
+  select b.* from base b where term is null or b.actor_id in (select id from people) or b.affected_id in (select id from people)
+ ), page as (
+  select * from filtered order by case when oldest then id end,case when not oldest then id end desc
+  limit p_limit offset (p_page-1)*p_limit
+ )
+ select jsonb_build_object('page',p_page,'limit',p_limit,'count',(select count(*) from filtered),
+  'data',coalesce(jsonb_agg(jsonb_build_object(
+   'id',pg.id,'created_at',pg.created_at,'action',pg.action,'entity',pg.entity,'entity_id',pg.entity_id,
+   'actor_id',pg.actor_id,'request_id',pg.request_id,'metadata',pg.metadata,
+   'actor',case when ac.id is not null then jsonb_build_object('id',ac.id,'name',ac.name,'role',ac.role,'uid',ac.uid,
+    'active',ac.active,'deleted',ac.deleted_at is not null) end,
+   'affected',case when af.id is not null then jsonb_build_object('id',af.id,'name',af.name,'role',af.role,'uid',af.uid,
+    'active',af.active,'deleted',af.deleted_at is not null) end,
+   'agent',case when ag.id is not null then jsonb_build_object('id',ag.id,'name',ag.name,'role',ag.role,'uid',ag.uid,
+    'deleted',ag.deleted_at is not null) end,
+   'lead',case when l.id is not null then jsonb_build_object('number',public.format_lead_no(l.lead_no),'deleted',l.deleted_at is not null) end,
+   'property',case when pr.id is not null then jsonb_build_object('title',pr.title,'number',pr.property_no) end,
+   'document',case when d.id is not null then jsonb_build_object('title',d.title) end,
+   'import',case when li.id is not null then jsonb_build_object('file_name',li.file_name,'deleted',li.deleted_at is not null) end)
+   order by case when oldest then pg.id end,case when not oldest then pg.id end desc),'[]'::jsonb))
+ into result
+ from page pg
+ left join public.profiles ac on ac.id=pg.actor_id
+ left join public.profiles af on af.id=pg.affected_id
+ left join public.profiles ag on ag.id=case when pg.metadata->>'agent_id' ~ uuid_re then (pg.metadata->>'agent_id')::uuid end
+ left join public.calls c on c.id=case when pg.entity='calls' and pg.entity_id ~ uuid_re then pg.entity_id::uuid end
+ left join public.leads l on l.id=case when pg.entity='leads' and pg.entity_id ~ uuid_re then pg.entity_id::uuid
+   when pg.metadata->>'lead_id' ~ uuid_re then (pg.metadata->>'lead_id')::uuid else c.lead_id end
+ left join public.properties pr on pr.id=case when pg.entity='properties' and pg.entity_id ~ uuid_re then pg.entity_id::uuid end
+ left join public.knowledge_documents d on d.id=case when pg.entity='knowledge_documents' and pg.entity_id ~ uuid_re then pg.entity_id::uuid end
+ left join public.lead_imports li on li.id=case when pg.entity='lead_imports' and pg.entity_id ~ uuid_re then pg.entity_id::uuid end;
+ return result;
+end $$;
+
+create or replace function public.audit_actors(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+begin
+ perform public.accounts_admin(p_actor);
+ return (select coalesce(jsonb_agg(jsonb_build_object('id',p.id,'name',p.name,'role',p.role,'uid',p.uid,
+   'active',p.active,'deleted',p.deleted_at is not null) order by p.name,p.id),'[]'::jsonb)
+  from public.profiles p where p.id in (select distinct a.actor_id from public.audit_log a where a.actor_id is not null));
+end $$;
+
+-- Browser roles get nothing; the API calls these for a signed-in admin.
+do $$ declare f record;begin
+ for f in select oid::regprocedure signature from pg_proc where pronamespace='public'::regnamespace and proname in ('audit_page','audit_actors') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  execute format('grant execute on function %s to service_role',f.signature);
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
+
+
+-- Migration: 044_admin_property_promotion.sql
+
+-- Apply after 043. Safe to rerun. Admin property promotion (update 044).
+-- An administrator can add an agent's listing to Admin Properties as an
+-- independent copy: a new company property with its own reference number,
+-- its own pictures (copied in Storage) and the seller's contact for
+-- administrators only. The agent's original is not changed and stays theirs.
+-- property_promotions links the two permanently, so the copy shows who
+-- originally listed it, the overall count counts the pair once, and
+-- administrators are told in the CRM when the agent changes or deletes the
+-- original. Nothing is synchronized between the two records.
+-- Existing properties, pictures, owners and permissions are unchanged. The
+-- picture clean-up queue gains not_before (existing rows stay due at once):
+-- pictures being copied are reserved there and removed later if their
+-- promotion never finishes.
+-- Runs as one transaction in a few seconds; properties and notifications
+-- are locked briefly. If a lock is not available within 5 seconds everything
+-- rolls back unchanged: run it again later.
+
+set local lock_timeout='5s';
+do $$ begin
+ if to_regprocedure('public.inventory_save(uuid,uuid,jsonb,text)') is null or to_regprocedure('public.push_notification(uuid,text,text,text,text,text,uuid,text,text,text)') is null
+  or to_regprocedure('public.audit_page(uuid,jsonb,integer,integer)') is null then
+  raise exception 'Apply CRM updates up to 043 before update 044.';
+ end if;
+end $$;
+
+-- ----------------------------------------------------------- promotions
+-- One row per promotion. Deleting either property clears its id here and
+-- keeps the reference numbers and the agent, so the history stays readable.
+-- The agent's name and UID are also kept as they were, as a fallback.
+create table if not exists public.property_promotions(
+ id uuid primary key default gen_random_uuid(),
+ source_id uuid references public.properties(id) on delete set null,
+ copy_id uuid unique references public.properties(id) on delete set null,
+ source_property_no bigint not null,
+ copy_property_no bigint not null,
+ source_agent_id uuid not null references public.profiles(id),
+ source_agent_uid integer,
+ source_agent_name text not null check(length(source_agent_name) between 1 and 200),
+ promoted_by uuid not null references public.profiles(id),
+ promoted_at timestamptz not null default now(),
+ source_deleted_at timestamptz,
+ copy_deleted_at timestamptz,
+ check(source_id is distinct from copy_id)
+);
+-- At most one copy in Admin Properties per agent listing at a time.
+create unique index if not exists property_promotions_live_source on public.property_promotions(source_id)
+ where source_id is not null and copy_id is not null;
+create index if not exists property_promotions_source on public.property_promotions(source_id);
+alter table public.property_promotions enable row level security;
+revoke all on public.property_promotions from public,anon,authenticated;
+grant all on public.property_promotions to service_role;
+
+-- A queued file is removed only once not_before has passed.
+alter table public.property_photo_cleanup add column if not exists not_before timestamptz not null default now();
+create index if not exists property_photo_cleanup_due on public.property_photo_cleanup(not_before);
+
+-- Notification types for promoted listings.
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check(type in ('lead_assigned','lead_moved_away','lead_kept','first_call_missed',
+ 'missed_calls_review','calls_due_soon','daily_call_summary','followup_due','visit_tomorrow',
+ 'attendance_request','attendance_review','attendance_incomplete','attendance_summary',
+ 'property_source_updated','property_source_removed'));
+
+-- ------------------------------------------------------- shared helpers
+-- What the viewer may know about a property's promotion. Everyone sees who
+-- originally listed a copy (name and UID only); administrators also see the
+-- original's reference, and on an agent's listing whether it can be added
+-- or which copy it has.
+create or replace function public.inventory_promotion(p_actor public.profiles,p_property public.properties) returns jsonb language sql stable security definer set search_path='' as $$
+ select coalesce(case
+  when p_property.owner_agent_id is null then (
+   select jsonb_build_object('promoted_from',jsonb_build_object('agent_name',coalesce(a.name,pp.source_agent_name),
+     'agent_uid',coalesce(a.uid,pp.source_agent_uid),
+     'agent_status',case when a.id is null or a.deleted_at is not null then 'deleted' when a.active then 'active' else 'inactive' end,
+     'promoted_at',pp.promoted_at)
+    ||case when p_actor.role='admin' then jsonb_build_object('source_id',pp.source_id,'source_property_no',pp.source_property_no,
+     'source_removed',pp.source_id is null,'promoted_by_name',(select name from public.profiles where id=pp.promoted_by)) else '{}'::jsonb end)
+   from public.property_promotions pp left join public.profiles a on a.id=pp.source_agent_id where pp.copy_id=p_property.id)
+  when p_actor.role='admin' then jsonb_build_object(
+   'admin_copy',(select jsonb_build_object('id',pp.copy_id,'property_no',pp.copy_property_no) from public.property_promotions pp
+    where pp.source_id=p_property.id and pp.copy_id is not null),
+   'can_promote',p_property.availability in ('available','reserved')
+    and not exists(select 1 from public.property_promotions pp where pp.source_id=p_property.id and pp.copy_id is not null))
+  end,'{}'::jsonb)
+$$;
+-- The agent listing an administrator wants to add, checked (and locked when
+-- p_lock) so a second promotion of it waits, then finds the first.
+create or replace function public.promotion_source(p_property uuid,p_lock boolean) returns public.properties language plpgsql security definer set search_path='' as $$
+declare prop public.properties;copy_no bigint;
+begin
+ if p_lock then select * into prop from public.properties where id=p_property for update;
+ else select * into prop from public.properties where id=p_property;end if;
+ if not found then raise exception 'Property not found' using errcode='HA404';end if;
+ if prop.owner_agent_id is null then raise exception 'This property is already in Admin Properties' using errcode='HA400';end if;
+ select copy_property_no into copy_no from public.property_promotions where source_id=prop.id and copy_id is not null;
+ if found then
+  raise exception 'This property is already in the Admin list as PR-%',lpad(copy_no::text,6,'0') using errcode='HA409';end if;
+ if prop.availability not in ('available','reserved') then
+  raise exception 'Only available or reserved listings can be added to the Admin list' using errcode='HA400';end if;
+ return prop;
+end $$;
+-- What an agent changed, in words. Prices, status, purpose, title and size
+-- are shown before and after; other fields are named only.
+create or replace function public.promotion_change_text(p_old public.properties,p_new public.properties,p_keys text[]) returns text language sql stable set search_path='' as $$
+ with labels(k,label,n) as (values ('title','Title',1),('price','Price',2),('availability','Status',3),('purpose','Purpose',4),
+   ('size','Size',5),('type','Property type',6),('description','Description',7),('price_negotiable','Negotiable price',8),
+   ('price_notes','Price notes',9),('province','Province',10),('city','City',11),('area_society','Area or society',12),
+   ('block_sector','Block or sector',13),('street','Street',14),('plot_number','Plot or house number',15),('address','Full address',16),
+   ('map_url','Map location',17),('bedrooms','Bedrooms',18),('bathrooms','Bathrooms',19),('kitchens','Kitchens',20),('floors','Floors',21),
+   ('parking_spaces','Parking spaces',22),('furnishing','Furnishing',23),('construction_status','Construction',24),
+   ('property_age','Property age',25),('amenities','Utilities and features',26),('owner_contact','Owner contact',27)),
+  status(v,l) as (values ('available','Available'),('reserved','Reserved'),('sold','Sold'),('rented','Rented'),('archived','Inactive')),
+  keys as (select case when k in ('area','area_unit') then 'size' else k end k from unnest(p_keys) k),
+  items as (select l.label,l.n,case l.k
+    when 'price' then 'PKR '||to_char(p_old.price,'FM999,999,999,999,990')||' → PKR '||to_char(p_new.price,'FM999,999,999,999,990')
+    when 'availability' then coalesce((select s.l from status s where s.v=p_old.availability),p_old.availability)
+     ||' → '||coalesce((select s.l from status s where s.v=p_new.availability),p_new.availability)
+    when 'purpose' then case p_old.purpose when 'rent' then 'For rent' else 'For sale' end||' → '||case p_new.purpose when 'rent' then 'For rent' else 'For sale' end
+    when 'title' then '“'||left(p_old.title,60)||'” → “'||left(p_new.title,60)||'”'
+    when 'size' then trim_scale(p_old.area)::text||' '||p_old.area_unit||' → '||trim_scale(p_new.area)::text||' '||p_new.area_unit end detail
+   from labels l where l.k in (select k from keys))
+ select concat_ws(' ',(select string_agg(label||': '||detail||'.',' ' order by n) from items where detail is not null),
+  (select case when exists(select 1 from items where detail is not null) then 'Also changed: ' else 'Changed: ' end
+    ||string_agg(label,', ' order by n)||'.' from items where detail is null having count(*)>0))
+$$;
+-- Tells every active administrator, in the CRM only (no email or push),
+-- that an agent changed or deleted a listing whose copy is in Admin
+-- Properties. p_change: details (p_detail says what changed), photos
+-- (p_detail: what was done), removed.
+create or replace function public.notify_promotion_source(p_actor public.profiles,p_source public.properties,p_change text,p_detail text) returns void language plpgsql security definer set search_path='' as $$
+declare link public.property_promotions;who text;src text;dup text;admin_id uuid;
+begin
+ select * into link from public.property_promotions where source_id=p_source.id and copy_id is not null;
+ if not found then return;end if;
+ who=p_actor.name||coalesce(' (UID '||p_actor.uid||')','');
+ src='PR-'||lpad(p_source.property_no::text,6,'0');dup='PR-'||lpad(link.copy_property_no::text,6,'0');
+ for admin_id in select id from public.profiles where role='admin' and active and deleted_at is null loop
+  if p_change='removed' then
+   perform public.push_notification(admin_id,'property_source_removed','property-removed:'||link.id,
+    'Original listing removed: '||src,
+    who||' deleted '||src||'. Admin copy '||dup||' is unchanged and stays in Admin Properties.',
+    '/inventory?tab=company&property='||link.copy_id,null);
+  elsif p_change='photos' then
+   -- One notice per listing per day, counting the picture changes.
+   perform public.push_notification(admin_id,'property_source_updated',
+    'property-photos:'||link.id||':'||(now() at time zone 'Asia/Karachi')::date,
+    'Original property pictures changed: '||src,
+    who||' '||p_detail||' '||src||'. Admin copy '||dup||' keeps its own pictures.',
+    '/inventory?tab=agents&agent='||p_source.owner_agent_id||'&property='||p_source.id,null,
+    '%s picture changes on original property '||src,
+    who||' changed the pictures of '||src||' several times today. Admin copy '||dup||' keeps its own pictures.',
+    '/inventory?tab=agents&agent='||p_source.owner_agent_id||'&property='||p_source.id);
+  else
+   -- One notice per save.
+   perform public.push_notification(admin_id,'property_source_updated','property-update:'||link.id||':'||gen_random_uuid(),
+    'Original property updated: '||src,
+    who||' updated '||src||'. '||coalesce(p_detail||' ','')||'Admin copy '||dup||' has not been changed.',
+    '/inventory?tab=agents&agent='||p_source.owner_agent_id||'&property='||p_source.id,null);
+  end if;
+ end loop;
+end $$;
+
+-- ---------------------------------------------------------------- reads
+-- As in 041, plus promotion details for each listing.
+create or replace function public.inventory_page(p_actor uuid,p_scope text,p_agent uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);owner_id uuid;f jsonb=coalesce(p_filters,'{}'::jsonb);
+ term text=lower(btrim(coalesce(f->>'search','')));sort_key text=coalesce(f->>'sort','newest');num bigint;total bigint;items jsonb;header jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 then
+  raise exception 'Choose a valid page' using errcode='HA400';end if;
+ if p_scope='mine' then
+  if actor.role<>'agent' then raise exception 'Administrators manage the company inventory' using errcode='HA400';end if;
+  owner_id=actor.id;
+ elsif p_scope='agent' then
+  if actor.role<>'admin' then raise exception 'Administrator access required' using errcode='HA403';end if;
+  select to_jsonb(a) into header from public.inventory_agent_rows() a where a.id=p_agent;
+  if header is null then raise exception 'Agent not found' using errcode='HA404';end if;
+  owner_id=p_agent;
+ elsif p_scope is distinct from 'company' then
+  raise exception 'Choose an inventory' using errcode='HA400';
+ end if;
+ -- A reference such as PR-000012 (or 12) also finds that property.
+ if term ~ '^(pr-?)?[0-9]{1,15}$' then num=regexp_replace(term,'^pr-?','')::bigint;end if;
+ select count(*) into total from public.inventory_rows(p_scope,owner_id,f,num);
+ select coalesce(jsonb_agg(public.inventory_json(p.prop)||public.inventory_promotion(actor,p.prop)
+   ||jsonb_build_object('photo_count',coalesce(ph.n,0),'cover_photo_id',ph.id,'cover_path',ph.storage_path)
+   order by p.k1,p.k2 desc,p.k3,p.k4 desc,p.k5,p.created_at desc,p.id desc),'[]'::jsonb) into items
+ from (select r prop,r.id,r.created_at,case sort_key when 'price_low' then r.price end k1,
+   case sort_key when 'price_high' then r.price end k2,case sort_key when 'title' then lower(r.title) end k3,
+   case sort_key when 'updated' then r.updated_at end k4,case sort_key when 'oldest' then r.created_at end k5
+  from public.inventory_rows(p_scope,owner_id,f,num) r
+  order by k1,k2 desc,k3,k4 desc,k5,r.created_at desc,r.id desc
+  limit p_limit offset (p_page-1)*p_limit) p
+ left join lateral (select x.id,x.storage_path,count(*) over() n from public.property_photos x
+  where x.property_id=p.id order by x.position,x.created_at,x.id limit 1) ph on true;
+ return jsonb_build_object('data',items,'count',total,'page',p_page,'limit',p_limit)
+  ||case when header is null then '{}'::jsonb else jsonb_build_object('agent',header) end;
+end $$;
+create or replace function public.inventory_property(p_actor uuid,p_property uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties=public.inventory_property_for(actor,p_property,false);
+begin
+ return public.inventory_json(prop)||public.inventory_promotion(actor,prop)||jsonb_build_object('owner_contact',public.inventory_contact(actor,prop),
+  'can_edit',case when prop.owner_agent_id is null then actor.role='admin' else actor.role='agent' and prop.owner_agent_id=actor.id end);
+end $$;
+-- p_scope: company, agent (one agent: p_owner), agents (all agents), all
+-- (every record) or unique (every listing once: a copy in Admin Properties
+-- whose agent original still exists is the same listing and is left out).
+create or replace function public.inventory_counts(p_scope text,p_owner uuid) returns jsonb language sql stable set search_path='' as $$
+ select jsonb_build_object('total',count(*),'available',count(*) filter(where p.availability='available'),
+  'reserved',count(*) filter(where p.availability='reserved'),'sold',count(*) filter(where p.availability='sold'),
+  'rented',count(*) filter(where p.availability='rented'),'inactive',count(*) filter(where p.availability='archived'),
+  'last_updated',max(p.updated_at))
+ from public.properties p
+ where case p_scope when 'company' then p.owner_agent_id is null when 'agent' then p.owner_agent_id=p_owner
+  when 'agents' then p.owner_agent_id is not null
+  when 'unique' then not exists(select 1 from public.property_promotions pp where pp.copy_id=p.id and pp.source_id is not null)
+  else true end
+$$;
+create or replace function public.inventory_summary(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);
+begin
+ if actor.role='agent' then
+  return jsonb_build_object('role','agent','mine',public.inventory_counts('agent',actor.id),'company',public.inventory_counts('company',null));
+ end if;
+ return jsonb_build_object('role','admin','company',public.inventory_counts('company',null),
+  'agents',public.inventory_counts('agents',null),'all',public.inventory_counts('all',null),
+  'unique',public.inventory_counts('unique',null),
+  'promoted',(select count(*) from public.property_promotions where copy_id is not null),
+  'agents_with_properties',(select count(distinct owner_agent_id) from public.properties where owner_agent_id is not null));
+end $$;
+
+-- --------------------------------------------------------------- writes
+-- As in 041. When an agent changes a listing that has a copy in Admin
+-- Properties, administrators are told what changed; a save that changes
+-- nothing tells nobody.
+create or replace function public.inventory_save(p_actor uuid,p_property uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties;merged public.properties;before public.properties;
+ fields jsonb;contact jsonb;plot boolean;old_contact jsonb;changes text[];
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['title','description','type','purpose','availability','price',
+  'price_negotiable','price_notes','area','area_unit','province','city','area_society','block_sector','street','plot_number','address',
+  'map_url','bedrooms','bathrooms','kitchens','floors','parking_spaces','furnishing','construction_status','property_age','amenities',
+  'owner_contact','expected_updated_at'])<>'{}'::jsonb then
+  raise exception 'Unsupported property details' using errcode='HA400';end if;
+ if p_data?'type' and coalesce(p_data->>'type','') not in ('House','Apartment','Residential Plot','Portion','Farmhouse','Shop','Office',
+  'Commercial Plot','Warehouse','Building','Land','Other') then
+  raise exception 'Choose a property type from the list' using errcode='HA400';end if;
+ if exists(select 1 from unnest(array['title','type','purpose','price','area','area_unit','city']) k
+  where (p_property is null or p_data?k) and nullif(btrim(coalesce(p_data->>k,'')),'') is null) then
+  raise exception 'Enter the title, type, purpose, price, size and city' using errcode='HA400';end if;
+ fields=p_data-array['owner_contact','expected_updated_at'];
+ if p_property is null then
+  merged=jsonb_populate_record(null::public.properties,
+   jsonb_build_object('description','','availability','available','price_negotiable',false,'amenities','[]'::jsonb)||fields);
+ else
+  prop=public.inventory_property_for(actor,p_property,true);
+  if p_data?'expected_updated_at' and (p_data->>'expected_updated_at')::timestamptz is distinct from prop.updated_at then
+   raise exception 'Someone else changed this property. Close it, open it again and repeat your change.' using errcode='HA409';end if;
+  merged=jsonb_populate_record(prop,fields);
+  before=prop;
+  select to_jsonb(c)-array['property_id','updated_at'] into old_contact from public.property_owner_contacts c where c.property_id=prop.id;
+ end if;
+ if (merged.availability='sold' and merged.purpose='rent') or (merged.availability='rented' and merged.purpose='sale') then
+  raise exception 'Use Sold for sale listings and Rented for rent listings' using errcode='HA400';end if;
+ -- Plots and land have no rooms, furnishing, construction or age.
+ plot=merged.type in ('Residential Plot','Commercial Plot','Land');
+ if merged.city is not null then
+  merged.location=concat_ws(', ',nullif(btrim(merged.block_sector),''),nullif(btrim(merged.area_society),''),btrim(merged.city));
+ end if;
+ if p_property is null then
+  insert into public.properties(title,description,location,price,type,area,area_unit,availability,purpose,province,city,area_society,
+   block_sector,street,plot_number,address,map_url,price_negotiable,price_notes,bedrooms,bathrooms,kitchens,floors,parking_spaces,
+   furnishing,construction_status,property_age,amenities,owner_agent_id,created_by,updated_by)
+  values(merged.title,merged.description,merged.location,merged.price,merged.type,merged.area,merged.area_unit,merged.availability,
+   merged.purpose,merged.province,merged.city,merged.area_society,merged.block_sector,merged.street,merged.plot_number,merged.address,
+   merged.map_url,merged.price_negotiable,merged.price_notes,
+   case when not plot then merged.bedrooms end,case when not plot then merged.bathrooms end,case when not plot then merged.kitchens end,
+   case when not plot then merged.floors end,case when not plot then merged.parking_spaces end,case when not plot then merged.furnishing end,
+   case when not plot then merged.construction_status end,case when not plot then merged.property_age end,merged.amenities,
+   case when actor.role='agent' then actor.id end,actor.id,actor.id)
+  returning * into prop;
+ else
+  update public.properties set title=merged.title,description=merged.description,location=merged.location,price=merged.price,
+   type=merged.type,area=merged.area,area_unit=merged.area_unit,availability=merged.availability,purpose=merged.purpose,
+   province=merged.province,city=merged.city,area_society=merged.area_society,block_sector=merged.block_sector,street=merged.street,
+   plot_number=merged.plot_number,address=merged.address,map_url=merged.map_url,price_negotiable=merged.price_negotiable,
+   price_notes=merged.price_notes,bedrooms=case when not plot then merged.bedrooms end,bathrooms=case when not plot then merged.bathrooms end,
+   kitchens=case when not plot then merged.kitchens end,floors=case when not plot then merged.floors end,
+   parking_spaces=case when not plot then merged.parking_spaces end,furnishing=case when not plot then merged.furnishing end,
+   construction_status=case when not plot then merged.construction_status end,property_age=case when not plot then merged.property_age end,
+   amenities=merged.amenities,updated_by=actor.id
+  where id=prop.id returning * into prop;
+ end if;
+ if p_data?'owner_contact' then
+  contact=p_data->'owner_contact';
+  if jsonb_typeof(contact) not in ('object','null') or (jsonb_typeof(contact)='object'
+   and (contact-array['owner_name','owner_phone','owner_alt_phone','owner_notes','share_with_agents'])<>'{}'::jsonb) then
+   raise exception 'Unsupported owner contact details' using errcode='HA400';end if;
+  if jsonb_typeof(contact)='null' or not exists(select 1 from jsonb_each_text(contact) e
+   where e.key<>'share_with_agents' and nullif(btrim(e.value),'') is not null) then
+   delete from public.property_owner_contacts where property_id=prop.id;
+  else
+   insert into public.property_owner_contacts as c(property_id,owner_name,owner_phone,owner_alt_phone,owner_notes,share_with_agents)
+   values(prop.id,nullif(btrim(contact->>'owner_name'),''),nullif(btrim(contact->>'owner_phone'),''),
+    nullif(btrim(contact->>'owner_alt_phone'),''),nullif(btrim(contact->>'owner_notes'),''),
+    prop.owner_agent_id is null and coalesce((contact->>'share_with_agents')::boolean,false))
+   on conflict(property_id) do update set owner_name=excluded.owner_name,owner_phone=excluded.owner_phone,
+    owner_alt_phone=excluded.owner_alt_phone,owner_notes=excluded.owner_notes,share_with_agents=excluded.share_with_agents,updated_at=now();
+  end if;
+ end if;
+ -- Field names only: never prices, addresses or owner contact values.
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,case when p_property is null then 'create' else 'update' end,'properties',prop.id::text,p_request,
+  jsonb_build_object('fields',to_jsonb(array(select k from jsonb_object_keys(p_data-'expected_updated_at') k order by k)),
+   'ownership',case when prop.owner_agent_id is null then 'company' else 'agent' end));
+ if p_property is not null and actor.role='agent'
+  and exists(select 1 from public.property_promotions where source_id=prop.id and copy_id is not null) then
+  changes=array(select k from unnest(array['title','description','type','purpose','availability','price','price_negotiable','price_notes',
+   'area','area_unit','province','city','area_society','block_sector','street','plot_number','address','map_url','bedrooms','bathrooms',
+   'kitchens','floors','parking_spaces','furnishing','construction_status','property_age','amenities']) k
+   where to_jsonb(before)->k is distinct from to_jsonb(prop)->k);
+  if old_contact is distinct from (select to_jsonb(c)-array['property_id','updated_at'] from public.property_owner_contacts c where c.property_id=prop.id) then
+   changes=changes||'owner_contact'::text;end if;
+  if cardinality(changes)>0 then
+   perform public.notify_promotion_source(actor,prop,'details',public.promotion_change_text(before,prop,changes));end if;
+ end if;
+ return public.inventory_property(p_actor,prop.id);
+end $$;
+
+-- As in 041. Deleting an agent listing that has a copy in Admin Properties
+-- keeps the copy and tells administrators; deleting a copy keeps the
+-- agent's listing. Either way the link keeps both reference numbers.
+create or replace function public.delete_property(p_property uuid,p_actor uuid,p_request text)
+returns void language plpgsql security definer set search_path='' as $$
+declare actor public.profiles;prop public.properties;photo_count integer;kept bigint;
+begin
+ select * into actor from public.profiles where id=p_actor for share;
+ if not found or not actor.active or actor.deleted_at is not null or actor.role not in ('admin','agent') then
+  raise exception 'Your account is not active' using errcode='42501';
+ end if;
+ -- This lock also prevents concurrent new foreign-key references or photos
+ -- from being attached between the checks and deletion.
+ select * into prop from public.properties where id=p_property for update;
+ if not found or (actor.role='agent' and prop.owner_agent_id<>actor.id) then
+  raise exception 'Property not found' using errcode='P0002';end if;
+ if prop.owner_agent_id is null and actor.role<>'admin' then
+  raise exception 'The company inventory is read-only for agents' using errcode='42501';end if;
+ if prop.owner_agent_id is not null and actor.role<>'agent' then
+  raise exception 'Agent inventories are read-only for administrators' using errcode='42501';end if;
+ if exists(select 1 from public.leads where property_id=p_property)
+  or exists(select 1 from public.visits where property_id=p_property)
+  or exists(select 1 from public.deals where property_id=p_property) then
+  raise exception 'Property has linked CRM records' using errcode='23503';
+ end if;
+ if prop.owner_agent_id is not null then
+  select copy_property_no into kept from public.property_promotions where source_id=prop.id and copy_id is not null;
+  if kept is not null then perform public.notify_promotion_source(actor,prop,'removed',null);end if;
+  update public.property_promotions set source_deleted_at=now() where source_id=prop.id;
+ else
+  update public.property_promotions set copy_deleted_at=now() where copy_id=prop.id;
+ end if;
+ insert into public.property_photo_cleanup(property_id,storage_path)
+  select property_id,storage_path from public.property_photos where property_id=p_property;
+ get diagnostics photo_count = row_count;
+ delete from public.property_photos where property_id=p_property;
+ -- Owner contact details are removed with the property (on delete cascade);
+ -- the promotion link keeps its reference numbers (on delete set null).
+ delete from public.properties where id=p_property;
+ insert into public.audit_log(actor_id,action,entity,entity_id,metadata,request_id)
+  values(p_actor,'delete','properties',p_property::text,jsonb_build_object('photo_count',photo_count)
+   ||case when kept is not null then jsonb_build_object('admin_copy_property_no',kept) else '{}'::jsonb end,p_request);
+end $$;
+
+-- --------------------------------------------------------------- photos
+-- As in 041, and administrators hear when an agent changes the pictures of
+-- a listing that has a copy in Admin Properties.
+create or replace function public.inventory_photo_add(p_actor uuid,p_property uuid,p_path text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties=public.inventory_property_for(actor,p_property,true);photo uuid;
+begin
+ if p_path is null or p_path !~ ('^'||prop.id::text||'/[0-9a-f-]{36}$') then
+  raise exception 'Invalid picture' using errcode='HA400';end if;
+ if (select count(*) from public.property_photos where property_id=prop.id)>=20 then
+  raise exception 'A property can have up to 20 pictures' using errcode='HA409';end if;
+ insert into public.property_photos(property_id,storage_path,position)
+  values(prop.id,p_path,coalesce((select max(position)+1 from public.property_photos where property_id=prop.id),0))
+  returning id into photo;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(actor.id,'upload_photo','properties',prop.id::text,p_request,'{}'::jsonb);
+ if actor.role='agent' then perform public.notify_promotion_source(actor,prop,'photos','added a picture to');end if;
+ return jsonb_build_object('id',photo);
+end $$;
+-- The file is queued for Storage removal in the same transaction (013 queue).
+create or replace function public.inventory_photo_remove(p_actor uuid,p_property uuid,p_photo uuid,p_request text) returns void language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties=public.inventory_property_for(actor,p_property,true);removed text;
+begin
+ delete from public.property_photos where id=p_photo and property_id=prop.id returning storage_path into removed;
+ if removed is null then raise exception 'Picture not found' using errcode='HA404';end if;
+ insert into public.property_photo_cleanup(property_id,storage_path) values(prop.id,removed) on conflict(storage_path) do nothing;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(actor.id,'delete_photo','properties',prop.id::text,p_request,'{}'::jsonb);
+ if actor.role='agent' then perform public.notify_promotion_source(actor,prop,'photos','removed a picture from');end if;
+end $$;
+-- p_photos lists every picture of the property once, cover first.
+create or replace function public.inventory_photo_order(p_actor uuid,p_property uuid,p_photos uuid[],p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties=public.inventory_property_for(actor,p_property,true);
+begin
+ if p_photos is null or cardinality(p_photos)<>(select count(*) from public.property_photos where property_id=prop.id)
+  or cardinality(p_photos)<>(select count(distinct x) from unnest(p_photos) x)
+  or exists(select 1 from unnest(p_photos) x where not exists(select 1 from public.property_photos f where f.id=x and f.property_id=prop.id)) then
+  raise exception 'The pictures changed. Close the property, open it again and retry.' using errcode='HA409';end if;
+ update public.property_photos f set position=o.n-1 from unnest(p_photos) with ordinality o(id,n) where f.id=o.id and f.property_id=prop.id;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(actor.id,'reorder_photos','properties',prop.id::text,p_request,'{}'::jsonb);
+ if actor.role='agent' then perform public.notify_promotion_source(actor,prop,'photos','reordered the pictures of');end if;
+ return public.inventory_photos(p_actor,p_property);
+end $$;
+
+-- ------------------------------------------------------------ promotion
+-- Adding an agent listing to Admin Properties takes three calls from the
+-- API, so pictures can be copied in Storage between them:
+-- 1. inventory_promote_prepare checks the request and reserves a new path
+--    for each picture under the new property's id (p_copy, chosen by the
+--    API). Reservations are queued for removal in an hour.
+-- 2. The API copies each picture to its new path.
+-- 3. inventory_promote creates the copy in one transaction and keeps the
+--    reserved pictures that were copied; or, if anything failed,
+--    inventory_promote_release makes the reservations due at once.
+create or replace function public.inventory_promote_prepare(p_actor uuid,p_property uuid,p_copy uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties;photos jsonb;
+begin
+ if actor.role<>'admin' then raise exception 'Only administrators can add properties to the Admin list' using errcode='HA403';end if;
+ prop=public.promotion_source(p_property,false);
+ if p_copy is null or exists(select 1 from public.properties where id=p_copy)
+  or exists(select 1 from public.property_photo_cleanup where property_id=p_copy) then
+  raise exception 'Invalid request' using errcode='HA400';end if;
+ select coalesce(jsonb_agg(jsonb_build_object('from',x.storage_path,'to',p_copy::text||'/'||gen_random_uuid()::text)
+   order by x.position,x.created_at,x.id),'[]'::jsonb) into photos
+ from public.property_photos x where x.property_id=prop.id;
+ insert into public.property_photo_cleanup(property_id,storage_path,not_before)
+  select p_copy,e->>'to',now()+interval '1 hour' from jsonb_array_elements(photos) e;
+ return jsonb_build_object('photos',photos);
+end $$;
+-- p_paths: the reserved pictures that were copied, in the original's order.
+create or replace function public.inventory_promote(p_actor uuid,p_property uuid,p_copy uuid,p_paths text[],p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties;made public.properties;agent public.profiles;
+ planned integer;kept integer;
+begin
+ if actor.role<>'admin' then raise exception 'Only administrators can add properties to the Admin list' using errcode='HA403';end if;
+ prop=public.promotion_source(p_property,true);
+ p_paths=coalesce(p_paths,'{}'::text[]);
+ if p_copy is null or cardinality(p_paths)>20 or cardinality(p_paths)<>(select count(distinct x) from unnest(p_paths) x)
+  or exists(select 1 from unnest(p_paths) x where x is null or x !~ ('^'||p_copy::text||'/[0-9a-f-]{36}$')) then
+  raise exception 'Invalid picture' using errcode='HA400';end if;
+ select count(*) into planned from public.property_photo_cleanup where property_id=p_copy and not_before>now();
+ -- Every copied picture must still be reserved. A reservation that was
+ -- released or already processed may mean its file is gone.
+ delete from public.property_photo_cleanup where property_id=p_copy and storage_path=any(p_paths) and not_before>now();
+ get diagnostics kept=row_count;
+ if kept<>cardinality(p_paths) then
+  raise exception 'The pictures changed while they were being copied. Please try again.' using errcode='HA409';end if;
+ -- Pictures that could not be copied were never written; let the queue
+ -- clear their reservations.
+ update public.property_photo_cleanup set not_before=now() where property_id=p_copy;
+ select * into agent from public.profiles where id=prop.owner_agent_id;
+ insert into public.properties(id,title,description,location,price,type,area,area_unit,availability,purpose,province,city,area_society,
+  block_sector,street,plot_number,address,map_url,price_negotiable,price_notes,bedrooms,bathrooms,kitchens,floors,parking_spaces,
+  furnishing,construction_status,property_age,amenities,owner_agent_id,created_by,updated_by)
+ values(p_copy,prop.title,prop.description,prop.location,prop.price,prop.type,prop.area,prop.area_unit,prop.availability,prop.purpose,
+  prop.province,prop.city,prop.area_society,prop.block_sector,prop.street,prop.plot_number,prop.address,prop.map_url,prop.price_negotiable,
+  prop.price_notes,prop.bedrooms,prop.bathrooms,prop.kitchens,prop.floors,prop.parking_spaces,prop.furnishing,prop.construction_status,
+  prop.property_age,prop.amenities,null,actor.id,actor.id)
+ returning * into made;
+ -- The seller's contact is kept for administrators only, as on the
+ -- agent's listing; it is not shared with agents unless an administrator
+ -- later chooses to.
+ insert into public.property_owner_contacts(property_id,owner_name,owner_phone,owner_alt_phone,owner_notes,share_with_agents)
+  select made.id,c.owner_name,c.owner_phone,c.owner_alt_phone,c.owner_notes,false from public.property_owner_contacts c where c.property_id=prop.id;
+ insert into public.property_photos(property_id,storage_path,position)
+  select made.id,u.x,(u.n-1)::integer from unnest(p_paths) with ordinality u(x,n);
+ insert into public.property_promotions(source_id,copy_id,source_property_no,copy_property_no,source_agent_id,source_agent_uid,source_agent_name,promoted_by)
+  values(prop.id,made.id,prop.property_no,made.property_no,agent.id,agent.uid,left(coalesce(nullif(btrim(agent.name),''),'Agent'),200),actor.id);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(actor.id,'promote','properties',made.id::text,p_request,jsonb_build_object('agent_id',agent.id,'source_id',prop.id,
+   'source_property_no',prop.property_no,'copy_property_no',made.property_no,'photo_count',kept,'photos_missing',greatest(planned-kept,0)));
+ return public.inventory_property(p_actor,made.id);
+end $$;
+-- After a failed promotion: if the copy was not created, its reservations
+-- become due so the clean-up removes any copied pictures.
+create or replace function public.inventory_promote_release(p_actor uuid,p_copy uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);
+begin
+ if actor.role<>'admin' then raise exception 'Only administrators can add properties to the Admin list' using errcode='HA403';end if;
+ -- Release first: this waits for a promotion still saving, so the check
+ -- below then sees whether it finished.
+ update public.property_photo_cleanup set not_before=now() where property_id=p_copy and not_before>now();
+ return jsonb_build_object('committed',exists(select 1 from public.properties where id=p_copy));
+end $$;
+
+-- ---------------------------------------------------------------- grants
+do $$ declare f record; begin
+ for f in select p.oid::regprocedure signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname in ('inventory_promotion','promotion_source','promotion_change_text','notify_promotion_source',
+  'inventory_page','inventory_property','inventory_counts','inventory_summary','inventory_save','delete_property','inventory_photo_add',
+  'inventory_photo_remove','inventory_photo_order','inventory_promote_prepare','inventory_promote','inventory_promote_release') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  -- Helpers run only inside these functions.
+  if f.proname not in ('inventory_promotion','promotion_source','promotion_change_text','notify_promotion_source','inventory_counts') then
+   execute format('grant execute on function %s to service_role',f.signature);
+  end if;
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
+
+
+-- Migration: 045_daily_task_management.sql
+
+-- Apply after 044. Safe to rerun. Daily tasks, end-of-day reports and
+-- checkout approvals (update 045).
+-- * Administrators assign tasks to one agent or to several at once; every
+--   agent gets an assignment of their own, tracked independently. A task is
+--   measurable (a target quantity such as 50 calls) or simple (pending, in
+--   progress, completed).
+-- * Agents report progress and submit one daily work report per day, with a
+--   snapshot of that day's tasks. Administrators verify tasks and review
+--   reports; agents can't change either afterwards.
+-- * Agents can ask to check out early (every task due today done and the
+--   report submitted) or, in an emergency, at any time. An administrator
+--   approves or rejects; an approval lets that agent use the normal
+--   check-out, for that workday only. Nobody is checked out automatically.
+--   After a rejection the agent may ask again with a new explanation (never a
+--   repeat of an earlier one; early requests wait 15 minutes), up to 3
+--   requests of each kind a day, cancelled ones included.
+-- * Reports for earlier days can be submitted for 7 days; administrators see
+--   every overdue report (task_missing_reports).
+-- * Checkout rules: from crm_settings.task_rules_from (empty = off, as
+--   installed), an agent's check-out needs the daily report, and checking out
+--   before the shift ends needs an approved request. The rules sit in
+--   attendance_check_out_at itself, so no route can skip them. Days before the
+--   start date and administrators are never affected.
+-- Nothing here changes existing attendance, leave, corrections, notifications
+-- or audit entries. Progress changes and earlier report versions are kept in
+-- the append-only audit_log.
+-- Errors use SQLSTATE HA<http status> with messages safe to show the user.
+
+set local lock_timeout='5s';
+do $$ begin
+ if to_regprocedure('public.attendance_check_out_at(uuid,timestamp with time zone,text)') is null
+  or to_regprocedure('public.inventory_promote(uuid,uuid,uuid,text[],text)') is null then
+  raise exception 'Apply CRM updates up to 044 before update 045.';
+ end if;
+end $$;
+
+-- ----------------------------------------------------------------- tables
+-- The date from which the checkout rules apply; empty means off.
+alter table public.crm_settings add column if not exists task_rules_from date;
+
+create table if not exists public.tasks(
+ id uuid primary key default gen_random_uuid(),
+ scope text not null check(scope in ('team','individual')),
+ title text not null check(length(btrim(title)) between 3 and 120),
+ description text check(length(description)<=1000),
+ instructions text check(length(instructions)<=1000),
+ category text check(category in ('calls','follow_ups','site_visits','listings','meetings','documents','other')),
+ priority text not null default 'normal' check(priority in ('low','normal','high','urgent')),
+ kind text not null check(kind in ('measurable','simple')),
+ target_quantity integer check(target_quantity between 1 and 100000),
+ unit text check(length(btrim(unit)) between 1 and 30),
+ task_date date not null,
+ due_on date not null,
+ client_key uuid not null,
+ created_by uuid not null references public.profiles(id),
+ updated_by uuid references public.profiles(id),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ cancelled_at timestamptz,
+ cancelled_by uuid references public.profiles(id),
+ cancel_reason text check(length(cancel_reason)<=300),
+ -- A repeated click sends the same key and gets the same task back.
+ unique(created_by,client_key),
+ check(due_on between task_date and task_date+31),
+ check((kind='measurable')=(target_quantity is not null) and (kind='measurable')=(unit is not null)),
+ check((cancelled_at is null)=(cancelled_by is null))
+);
+create index if not exists tasks_dates on public.tasks(due_on,task_date);
+
+-- One row per agent per task. Progress is what the agent reported;
+-- verified_* is the administrator's check and never changes the report.
+create table if not exists public.task_assignments(
+ id uuid primary key default gen_random_uuid(),
+ task_id uuid not null references public.tasks(id),
+ user_id uuid not null references public.profiles(id),
+ status text not null default 'pending' check(status in ('pending','in_progress','completed','cancelled')),
+ completed_quantity integer not null default 0 check(completed_quantity between 0 and 1000000),
+ employee_note text check(length(employee_note)<=500),
+ progress_at timestamptz,
+ completed_at timestamptz,
+ verified_status text check(verified_status in ('confirmed','adjusted','not_done')),
+ verified_quantity integer check(verified_quantity between 0 and 1000000),
+ verified_by uuid references public.profiles(id),
+ verified_at timestamptz,
+ review_note text check(length(review_note)<=500),
+ cancelled_at timestamptz,
+ cancelled_by uuid references public.profiles(id),
+ cancel_reason text check(length(cancel_reason)<=300),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now(),
+ unique(task_id,user_id),
+ check((verified_status is null)=(verified_by is null)),
+ check((status='cancelled')=(cancelled_at is not null))
+);
+create index if not exists task_assignments_user on public.task_assignments(user_id,status);
+
+-- One report per agent per workday. tasks is the snapshot submitted; an
+-- amendment replaces it and the audit entry keeps the earlier version.
+create table if not exists public.task_daily_reports(
+ id uuid primary key default gen_random_uuid(),
+ user_id uuid not null references public.profiles(id),
+ work_date date not null,
+ status text not null default 'submitted' check(status in ('submitted','reviewed')),
+ remarks text check(length(remarks)<=1000),
+ tasks jsonb not null default '[]'::jsonb check(jsonb_typeof(tasks)='array'),
+ task_count integer not null check(task_count>=0),
+ completion_percent numeric(5,1) check(completion_percent between 0 and 100),
+ submitted_at timestamptz not null default now(),
+ amended_at timestamptz,
+ amendment_count integer not null default 0 check(amendment_count>=0),
+ reviewed_by uuid references public.profiles(id),
+ reviewed_at timestamptz,
+ review_note text check(length(review_note)<=500),
+ unique(user_id,work_date),
+ check((status='reviewed')=(reviewed_by is not null))
+);
+create index if not exists task_daily_reports_day on public.task_daily_reports(work_date);
+
+create table if not exists public.task_checkout_requests(
+ id uuid primary key default gen_random_uuid(),
+ user_id uuid not null references public.profiles(id),
+ work_date date not null,
+ kind text not null check(kind in ('early','emergency')),
+ status text not null default 'pending' check(status in ('pending','approved','rejected','cancelled')),
+ reason text check(length(reason)<=500),
+ requested_at timestamptz not null default now(),
+ shift_end time not null,
+ completion_percent numeric(5,1),
+ report_submitted boolean not null,
+ waive_report boolean not null default false,
+ decided_by uuid references public.profiles(id),
+ decided_at timestamptz,
+ decision_note text check(length(decision_note)<=300),
+ used_at timestamptz,
+ check((status in ('approved','rejected'))=(decided_by is not null)),
+ check(kind='emergency' or not waive_report),
+ check(kind='early' or length(btrim(coalesce(reason,'')))>=5),
+ check(used_at is null or status='approved')
+);
+-- One waiting request, and at most one approval, per agent per workday.
+create unique index if not exists task_checkout_one_pending on public.task_checkout_requests(user_id,work_date) where status='pending';
+create unique index if not exists task_checkout_one_approved on public.task_checkout_requests(user_id,work_date) where status='approved';
+create index if not exists task_checkout_queue on public.task_checkout_requests(status,requested_at desc);
+
+do $$ declare t text; begin
+ foreach t in array array['tasks','task_assignments','task_daily_reports','task_checkout_requests'] loop
+  execute format('alter table public.%I enable row level security',t);
+  execute format('revoke all on public.%I from public,anon,authenticated',t);
+  execute format('grant all on public.%I to service_role',t);
+ end loop;
+end $$;
+-- The touch_updated trigger (010) keeps updated_at current.
+drop trigger if exists touch_updated on public.tasks;
+create trigger touch_updated before update on public.tasks for each row execute function public.touch_updated();
+drop trigger if exists touch_updated on public.task_assignments;
+create trigger touch_updated before update on public.task_assignments for each row execute function public.touch_updated();
+
+-- Notification types for tasks and checkout requests.
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check(type in ('lead_assigned','lead_moved_away','lead_kept','first_call_missed',
+ 'missed_calls_review','calls_due_soon','daily_call_summary','followup_due','visit_tomorrow',
+ 'attendance_request','attendance_review','attendance_incomplete','attendance_summary',
+ 'property_source_updated','property_source_removed',
+ 'task_assigned','task_updated','task_cancelled','task_report','task_report_reviewed','checkout_request','checkout_decision'));
+
+-- ------------------------------------------------------- shared helpers
+create or replace function public.task_rules_on(p_day date) returns boolean language sql stable security definer set search_path='' as $$
+ select coalesce((select task_rules_from<=p_day from public.crm_settings where id),false)
+$$;
+create or replace function public.task_day_text(p_day date) returns text language sql immutable set search_path='' as $$
+ select to_char(p_day,'FMMonth FMDD, YYYY')
+$$;
+create or replace function public.task_time_text(p_at timestamptz) returns text language sql stable set search_path='' as $$
+ select to_char(p_at at time zone 'Asia/Karachi','FMHH12:MI AM')
+$$;
+-- A task's completion: measurable tasks by quantity (shown up to 100%),
+-- simple tasks 100% when completed and 0% otherwise. Cancelled: none.
+create or replace function public.task_percent(p_kind text,p_target integer,p_quantity integer,p_status text) returns numeric language sql immutable set search_path='' as $$
+ select case when p_status='cancelled' then null
+  when p_kind='measurable' then least(100,round(p_quantity*100.0/p_target,1))
+  when p_status='completed' then 100.0 else 0.0 end
+$$;
+-- Status follows the quantity for measurable tasks.
+create or replace function public.task_status_for(p_target integer,p_quantity integer) returns text language sql immutable set search_path='' as $$
+ select case when p_quantity>=p_target then 'completed' when p_quantity>0 then 'in_progress' else 'pending' end
+$$;
+create or replace function public.task_assignment_json(p_id uuid) returns jsonb language sql stable security definer set search_path='' as $$
+ select jsonb_build_object('id',a.id,'task_id',t.id,'scope',t.scope,'title',t.title,'description',t.description,'instructions',t.instructions,
+  'category',t.category,'priority',t.priority,'kind',t.kind,'target_quantity',t.target_quantity,'unit',t.unit,'task_date',t.task_date,'due_on',t.due_on,
+  'assigned_by',(select name from public.profiles where id=t.created_by),'assigned_at',t.created_at,
+  'status',a.status,'completed_quantity',a.completed_quantity,
+  'remaining_quantity',case when t.kind='measurable' then greatest(t.target_quantity-a.completed_quantity,0) end,
+  'excess_quantity',case when t.kind='measurable' then greatest(a.completed_quantity-t.target_quantity,0) end,
+  'percent',public.task_percent(t.kind,t.target_quantity,a.completed_quantity,a.status),
+  'employee_note',a.employee_note,'progress_at',a.progress_at,'completed_at',a.completed_at,
+  'verified_status',a.verified_status,'verified_quantity',a.verified_quantity,
+  'verified_percent',case when a.verified_status is null then null when a.verified_status='not_done' then 0.0
+   when t.kind='measurable' then least(100,round(coalesce(a.verified_quantity,a.completed_quantity)*100.0/t.target_quantity,1)) else 100.0 end,
+  'verified_by_name',(select name from public.profiles where id=a.verified_by),'verified_at',a.verified_at,'review_note',a.review_note,
+  'cancel_reason',coalesce(a.cancel_reason,t.cancel_reason),
+  'user_id',a.user_id,'user_name',p.name,'user_uid',p.uid,'user_active',p.active and p.deleted_at is null)
+ from public.task_assignments a join public.tasks t on t.id=a.task_id join public.profiles p on p.id=a.user_id where a.id=p_id
+$$;
+-- One agent's tasks on a day: those running that day (task date to due
+-- date), plus earlier tasks still open (overdue).
+create or replace function public.task_day(p_user uuid,p_day date) returns jsonb language sql stable security definer set search_path='' as $$
+ with a as (select x.status,t.kind,t.target_quantity,x.completed_quantity,t.due_on from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.user_id=p_user and x.status<>'cancelled' and t.task_date<=p_day and t.due_on>=p_day),
+  o as (select count(*) n from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.user_id=p_user and x.status not in ('completed','cancelled') and t.due_on<p_day)
+ select jsonb_build_object('task_count',(select count(*) from a),'completed',(select count(*) from a where status='completed'),
+  'due_count',(select count(*) from a where due_on=p_day),'due_completed',(select count(*) from a where due_on=p_day and status='completed'),
+  'overdue',(select n from o),
+  'completion_percent',(select round(avg(public.task_percent(kind,target_quantity,completed_quantity,status)),1) from a),
+  'all_due_completed',coalesce((select count(*)>0 and bool_and(status='completed') from a where due_on=p_day),false) and (select n from o)=0)
+$$;
+create or replace function public.task_report_json(p_report public.task_daily_reports) returns jsonb language sql stable security definer set search_path='' as $$
+ select to_jsonb(p_report)||jsonb_build_object('user_name',p.name,'user_uid',p.uid,
+  'reviewed_by_name',(select name from public.profiles where id=p_report.reviewed_by))
+ from public.profiles p where p.id=p_report.user_id
+$$;
+create or replace function public.task_request_json(p_req public.task_checkout_requests,p_today date) returns jsonb language sql stable security definer set search_path='' as $$
+ select to_jsonb(p_req)||jsonb_build_object('user_name',p.name,'user_uid',p.uid,
+  'decided_by_name',(select name from public.profiles where id=p_req.decided_by),
+  -- A waiting request from an earlier day can no longer be used.
+  'expired',p_req.status='pending' and p_req.work_date<p_today)
+ from public.profiles p where p.id=p_req.user_id
+$$;
+-- Every active administrator except p_except, in the CRM only.
+create or replace function public.task_notify_admins(p_except uuid,p_type text,p_group text,p_title text,p_body text,p_link text,p_many_title text,p_many_body text)
+returns void language plpgsql security definer set search_path='' as $$
+declare a uuid;
+begin
+ for a in select id from public.profiles where role='admin' and active and deleted_at is null and id is distinct from p_except loop
+  perform public.push_notification(a,p_type,p_group,p_title,p_body,p_link,null,p_many_title,p_many_body,p_link);
+ end loop;
+end $$;
+-- The active agents named, or every active agent; anyone else is refused.
+create or replace function public.task_agents(p_ids jsonb,p_all boolean) returns uuid[] language plpgsql stable security definer set search_path='' as $$
+declare ids uuid[];bad text;
+begin
+ if p_all then
+  return array(select id from public.profiles where role='agent' and active and deleted_at is null order by name,id);
+ end if;
+ if jsonb_typeof(p_ids) is distinct from 'array' or jsonb_array_length(p_ids) not between 1 and 200 then
+  raise exception 'Choose at least one agent' using errcode='HA400';end if;
+ select array_agg(distinct x::uuid) into ids from jsonb_array_elements_text(p_ids) x;
+ select coalesce(p.name,'An account') into bad from unnest(ids) i left join public.profiles p on p.id=i
+  where p.id is null or p.role<>'agent' or not p.active or p.deleted_at is not null limit 1;
+ if bad is not null then raise exception '% is not an active agent and can''t be given tasks',bad using errcode='HA400';end if;
+ return ids;
+end $$;
+
+-- Requests after a rejection: at most 3 of each kind a day (cancelled ones
+-- count, so cancelling and asking again can't flood administrators); a new
+-- explanation, different from every earlier one that day; and, for early
+-- checkout, 15 minutes after the last rejection.
+create or replace function public.task_request_limits(p_user uuid,p_kind text,p_day date,p_at timestamptz) returns jsonb language sql stable security definer set search_path='' as $$
+ with q as (select * from public.task_checkout_requests where user_id=p_user and kind=p_kind and work_date=p_day),
+  last_rejected as (select * from q where status='rejected' order by decided_at desc limit 1)
+ select jsonb_build_object('count',(select count(*) from q),'limit',3,'limit_reached',(select count(*)>=3 from q),
+  'rejected',(select count(*) from q where status='rejected'),
+  'explanation_required',exists(select 1 from q where status='rejected'),
+  'last_rejected_at',(select decided_at from last_rejected),
+  'last_rejected_by',(select name from public.profiles where id=(select decided_by from last_rejected)),
+  'last_rejection_note',(select decision_note from last_rejected),
+  'retry_at',case when p_kind='early' then (select decided_at+interval '15 minutes' from last_rejected) end,
+  'waiting',coalesce(p_kind='early' and p_at<(select decided_at+interval '15 minutes' from last_rejected),false),
+  'reasons',(select coalesce(jsonb_agg(lower(regexp_replace(btrim(reason),'\s+',' ','g'))),'[]'::jsonb) from q where reason is not null))
+$$;
+
+-- ---------------------------------------------------------- the checkout check
+-- Whether this agent may check out at p_at, and which approved request that
+-- uses. Read by the attendance screen and enforced by attendance_check_out_at.
+create or replace function public.task_checkout_check(p_actor public.profiles,p_rec public.attendance_records,p_at timestamptz,p_lock boolean)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare day date=p_rec.attendance_date;report boolean;req public.task_checkout_requests;
+ ends timestamptz=public.attendance_moment(p_rec.attendance_date,p_rec.shift_end);
+begin
+ if p_actor.role<>'agent' or not public.task_rules_on(day) then
+  return jsonb_build_object('allowed',true,'required',false);end if;
+ report=exists(select 1 from public.task_daily_reports where user_id=p_actor.id and work_date=day);
+ if p_lock then
+  select * into req from public.task_checkout_requests where user_id=p_actor.id and work_date=day and status='approved' and used_at is null for update;
+ else
+  select * into req from public.task_checkout_requests where user_id=p_actor.id and work_date=day and status='approved' and used_at is null;
+ end if;
+ if req.id is not null and req.kind='emergency' then
+  return case when report or req.waive_report then jsonb_build_object('allowed',true,'required',true,'request_id',req.id,'kind','emergency')
+   else jsonb_build_object('allowed',false,'required',true,'reason','Submit your daily work report before checking out. Your emergency approval did not waive the report.') end;
+ end if;
+ if p_at<ends then
+  if req.id is not null and report then
+   return jsonb_build_object('allowed',true,'required',true,'request_id',req.id,'kind','early');end if;
+  return jsonb_build_object('allowed',false,'required',true,'reason',
+   format('Checking out before your shift ends at %s needs an approved early or emergency checkout request.',to_char(p_rec.shift_end,'FMHH12:MI AM')));
+ end if;
+ if not report then
+  return jsonb_build_object('allowed',false,'required',true,'reason','Please submit your daily work report before checking out.');end if;
+ return jsonb_build_object('allowed',true,'required',true)||case when req.id is null then '{}'::jsonb else jsonb_build_object('request_id',req.id,'kind',req.kind) end;
+end $$;
+
+-- As in 040, plus the task checkout rules. A used approval is marked so it
+-- can't be reused, and the audit entry names it.
+create or replace function public.attendance_check_out_at(p_actor uuid,p_at timestamptz,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);day date=public.attendance_local_date(p_at);rec public.attendance_records;calc record;gate jsonb;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ select * into rec from public.attendance_records where user_id=p_actor and attendance_date=day for update;
+ if not found then
+  if exists(select 1 from public.attendance_records where user_id=p_actor and state='checked_in' and attendance_date<day) then
+   raise exception 'Your last check-in was never closed. Request a correction for that day, then check in for today.' using errcode='HA409';end if;
+  raise exception 'You have not checked in today' using errcode='HA409';
+ end if;
+ if rec.state<>'checked_in' then raise exception 'You have already checked out today' using errcode='HA409';end if;
+ if p_at<=rec.check_in_at then raise exception 'Check-out must be after check-in' using errcode='HA409';end if;
+ gate=public.task_checkout_check(actor,rec,p_at,true);
+ if not (gate->>'allowed')::boolean then raise exception '%',gate->>'reason' using errcode='HA409';end if;
+ select * into calc from public.attendance_compute(rec.attendance_date,rec.shift_start,rec.shift_end,rec.grace_minutes,rec.check_in_at,p_at);
+ update public.attendance_records set check_out_at=p_at,state='checked_out',worked_minutes=calc.worked_minutes,
+  early_departure_minutes=calc.early_departure_minutes,overtime_minutes=calc.overtime_minutes
+ where id=rec.id returning * into rec;
+ if gate?'request_id' then
+  update public.task_checkout_requests set used_at=p_at where id=(gate->>'request_id')::uuid;end if;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'attendance.check_out','attendance_records',rec.id::text,p_request,
+   jsonb_build_object('date',rec.attendance_date,'worked_minutes',calc.worked_minutes,'early_departure_minutes',calc.early_departure_minutes,'overtime_minutes',calc.overtime_minutes)
+   ||case when gate?'request_id' then jsonb_build_object('checkout_request_id',gate->>'request_id','checkout_kind',gate->>'kind') else '{}'::jsonb end);
+ return public.attendance_record_json(rec);
+end $$;
+
+-- What the agent can do about checking out now, for the screens.
+create or replace function public.task_checkout_state_at(p_actor uuid,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);rec public.attendance_records;
+ summary jsonb=public.task_day(p_actor,today);report boolean;pending public.task_checkout_requests;approved public.task_checkout_requests;
+ early text[]='{}';gate jsonb;limits jsonb=public.task_request_limits(p_actor,'early',today,p_at);
+ urgent jsonb=public.task_request_limits(p_actor,'emergency',today,p_at);
+begin
+ select * into rec from public.attendance_records where user_id=p_actor and attendance_date=today;
+ report=exists(select 1 from public.task_daily_reports where user_id=p_actor and work_date=today);
+ select * into pending from public.task_checkout_requests where user_id=p_actor and work_date=today and status='pending';
+ select * into approved from public.task_checkout_requests where user_id=p_actor and work_date=today and status='approved';
+ if rec.id is not null and rec.state='checked_in' then gate=public.task_checkout_check(actor,rec,p_at,false);end if;
+ -- Reasons an early request isn't available yet, in the order to fix them.
+ if actor.role<>'agent' then early=early||'Only agents request early checkout.'::text;
+ elsif not public.task_rules_on(today) then early=early||'Checkout rules are off, so no approval is needed.'::text;
+ elsif rec.id is null then early=early||'Check in first.'::text;
+ elsif rec.state<>'checked_in' then early=early||'You have already checked out today.'::text;
+ elsif p_at>=public.attendance_moment(today,rec.shift_end) then early=early||'Your shift has ended; check out normally.'::text;
+ else
+  if (summary->>'due_count')::integer=0 then early=early||'You have no tasks due today. Check out at the end of your shift, or ask for an emergency checkout.'::text;
+  elsif not (summary->>'all_due_completed')::boolean then
+   early=early||case when (summary->>'overdue')::integer>0 then format('Finish your %s overdue task(s) first.',summary->>'overdue')
+    else format('Complete every task due today first (%s of %s done).',summary->>'due_completed',summary->>'due_count') end;
+  end if;
+  if not report then early=early||'Submit your daily report first.'::text;end if;
+  if pending.id is not null then early=early||'You already have a request waiting for an administrator.'::text;end if;
+  if approved.id is not null then early=early||'Your checkout request is already approved.'::text;end if;
+  if (limits->>'limit_reached')::boolean then early=early||'You have reached today''s limit of 3 early checkout requests.'::text;
+  elsif (limits->>'waiting')::boolean then
+   early=early||format('You can ask again from %s, 15 minutes after your last request was rejected.',public.task_time_text((limits->>'retry_at')::timestamptz));
+  end if;
+ end if;
+ return jsonb_build_object('date',today,'rules_active',public.task_rules_on(today),'required',actor.role='agent' and public.task_rules_on(today),
+  'attendance_state',rec.state,'shift_end',to_char(coalesce(rec.shift_end,(public.attendance_policy_on(today)).shift_end),'HH24:MI'),
+  'before_shift_end',rec.id is not null and p_at<public.attendance_moment(today,rec.shift_end),
+  'report_submitted',report,'tasks',summary,
+  'pending_request',case when pending.id is null then null else public.task_request_json(pending,today) end,
+  'approved_request',case when approved.id is null then null else public.task_request_json(approved,today) end,
+  'can_check_out',coalesce((gate->>'allowed')::boolean,false),'blocked_reason',case when gate is not null and not (gate->>'allowed')::boolean then gate->>'reason' end,
+  'can_request_early',cardinality(early)=0,'early_blockers',to_jsonb(early),
+  'can_request_emergency',coalesce(actor.role='agent' and public.task_rules_on(today) and rec.state='checked_in' and pending.id is null and approved.id is null
+   and not (urgent->>'limit_reached')::boolean,false),
+  'early_resubmission',limits-'reasons','emergency_resubmission',urgent-'reasons');
+end $$;
+create or replace function public.task_checkout_state(p_actor uuid) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_checkout_state_at(p_actor,now())
+$$;
+
+-- ---------------------------------------------------------- administrators
+create or replace function public.task_create_at(p_actor uuid,p_data jsonb,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(p_at);t public.tasks;
+ ids uuid[];key uuid;day date;due date;kind text;dup text;u uuid;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['scope','title','description','instructions','category','priority','kind',
+  'target_quantity','unit','task_date','due_on','assignees','all_agents','client_key','allow_duplicate'])<>'{}'::jsonb then
+  raise exception 'Unsupported task details' using errcode='HA400';end if;
+ key=(p_data->>'client_key')::uuid;
+ if key is null then raise exception 'Invalid request' using errcode='HA400';end if;
+ -- The same submission again (a double click or a retry) returns the task.
+ select * into t from public.tasks where created_by=actor.id and client_key=key;
+ if found then return public.task_detail(p_actor,t.id);end if;
+ if length(btrim(coalesce(p_data->>'title','')))<3 then raise exception 'Enter a task title' using errcode='HA400';end if;
+ kind=p_data->>'kind';day=coalesce((p_data->>'task_date')::date,today);due=coalesce((p_data->>'due_on')::date,day);
+ if p_data->>'scope' not in ('team','individual') or kind not in ('measurable','simple') then
+  raise exception 'Choose a team or individual task, measurable or simple' using errcode='HA400';end if;
+ if day<today or day>today+60 then raise exception 'Choose today or a date up to 60 days ahead' using errcode='HA400';end if;
+ if due<day or due>day+31 then raise exception 'The due date must be on or after the task date, within 31 days' using errcode='HA400';end if;
+ if kind='measurable' and (p_data->>'target_quantity' is null or nullif(btrim(p_data->>'unit'),'') is null) then
+  raise exception 'A measurable task needs a target and a unit, for example 50 calls' using errcode='HA400';end if;
+ ids=public.task_agents(p_data->'assignees',coalesce((p_data->>'all_agents')::boolean,false));
+ if cardinality(ids)=0 then raise exception 'There are no active agents to assign' using errcode='HA400';end if;
+ if p_data->>'scope'='individual' and cardinality(ids)<>1 then raise exception 'An individual task is for one agent' using errcode='HA400';end if;
+ if not coalesce((p_data->>'allow_duplicate')::boolean,false) then
+  select p.name into dup from public.task_assignments x join public.tasks o on o.id=x.task_id join public.profiles p on p.id=x.user_id
+   where x.user_id=any(ids) and x.status<>'cancelled' and o.task_date=day and lower(btrim(o.title))=lower(btrim(p_data->>'title')) limit 1;
+  if dup is not null then
+   raise exception '% already has “%” on %. Choose Assign anyway to add it again.',dup,btrim(p_data->>'title'),public.task_day_text(day) using errcode='HA409';end if;
+ end if;
+ insert into public.tasks(scope,title,description,instructions,category,priority,kind,target_quantity,unit,task_date,due_on,client_key,created_by,updated_by)
+ values(p_data->>'scope',btrim(p_data->>'title'),nullif(btrim(p_data->>'description'),''),nullif(btrim(p_data->>'instructions'),''),
+  nullif(p_data->>'category',''),coalesce(p_data->>'priority','normal'),kind,
+  case when kind='measurable' then (p_data->>'target_quantity')::integer end,case when kind='measurable' then btrim(p_data->>'unit') end,
+  day,due,key,actor.id,actor.id) returning * into t;
+ insert into public.task_assignments(task_id,user_id) select t.id,i from unnest(ids) i;
+ foreach u in array ids loop
+  perform public.push_notification(u,'task_assigned','task:'||t.id,'New task: '||left(t.title,180),
+   format('%s assigned this for %s%s.',actor.name,public.task_day_text(t.task_date),
+    case when t.kind='measurable' then format(': target %s %s',t.target_quantity,t.unit) else '' end),'/my-tasks',null);
+ end loop;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.create','tasks',t.id::text,p_request,jsonb_build_object('scope',t.scope,'title',t.title,'kind',t.kind,
+  'target_quantity',t.target_quantity,'unit',t.unit,'date',t.task_date,'due_on',t.due_on,'priority',t.priority,'assignee_count',cardinality(ids))
+  ||case when cardinality(ids)=1 then jsonb_build_object('user_id',ids[1]) else '{}'::jsonb end);
+ return public.task_detail(p_actor,t.id);
+end $$;
+create or replace function public.task_create(p_actor uuid,p_data jsonb,p_request text) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_create_at(p_actor,p_data,p_request,now())
+$$;
+
+-- Changes to a task apply to every agent who has it. A new target
+-- recalculates each open, unverified assignment from its reported quantity.
+-- Reports already submitted keep the values they were submitted with.
+create or replace function public.task_update_at(p_actor uuid,p_task uuid,p_data jsonb,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(p_at);t public.tasks;n public.tasks;
+ fields text[];added uuid[]='{}';u uuid;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['title','description','instructions','category','priority','target_quantity',
+  'unit','due_on','add_assignees','expected_updated_at'])<>'{}'::jsonb then
+  raise exception 'Unsupported task details' using errcode='HA400';end if;
+ select * into t from public.tasks where id=p_task for update;
+ if not found then raise exception 'Task not found' using errcode='HA404';end if;
+ if t.cancelled_at is not null then raise exception 'This task was cancelled' using errcode='HA409';end if;
+ if p_data?'expected_updated_at' and (p_data->>'expected_updated_at')::timestamptz is distinct from t.updated_at then
+  raise exception 'Someone else changed this task. Reload it and repeat your change.' using errcode='HA409';end if;
+ if t.kind='simple' and (p_data?'target_quantity' or p_data?'unit') then
+  raise exception 'A simple task has no target' using errcode='HA400';end if;
+ n=t;
+ if p_data?'title' then n.title=btrim(p_data->>'title');end if;
+ if p_data?'description' then n.description=nullif(btrim(p_data->>'description'),'');end if;
+ if p_data?'instructions' then n.instructions=nullif(btrim(p_data->>'instructions'),'');end if;
+ if p_data?'category' then n.category=nullif(p_data->>'category','');end if;
+ if p_data?'priority' then n.priority=p_data->>'priority';end if;
+ if p_data?'target_quantity' then n.target_quantity=(p_data->>'target_quantity')::integer;end if;
+ if p_data?'unit' then n.unit=btrim(p_data->>'unit');end if;
+ if p_data?'due_on' then n.due_on=(p_data->>'due_on')::date;
+  if n.due_on<>t.due_on and (n.due_on<greatest(t.task_date,today) or n.due_on>t.task_date+31) then
+   raise exception 'Choose a due date from today, within 31 days of the task date' using errcode='HA400';end if;
+ end if;
+ fields=array(select k from unnest(array['title','description','instructions','category','priority','target_quantity','unit','due_on']) k
+  where to_jsonb(t)->k is distinct from to_jsonb(n)->k);
+ if p_data?'add_assignees' then
+  if t.scope='individual' then raise exception 'An individual task is for one agent' using errcode='HA400';end if;
+  added=array(select i from unnest(public.task_agents(p_data->'add_assignees',false)) i
+   where not exists(select 1 from public.task_assignments x where x.task_id=t.id and x.user_id=i and x.status<>'cancelled'));
+ end if;
+ if cardinality(fields)=0 and cardinality(added)=0 then return public.task_detail(p_actor,t.id);end if;
+ update public.tasks set title=n.title,description=n.description,instructions=n.instructions,category=n.category,priority=n.priority,
+  target_quantity=n.target_quantity,unit=n.unit,due_on=n.due_on,updated_by=actor.id where id=t.id returning * into n;
+ if 'target_quantity'=any(fields) then
+  update public.task_assignments set status=public.task_status_for(n.target_quantity,completed_quantity),
+   completed_at=case when public.task_status_for(n.target_quantity,completed_quantity)='completed' then coalesce(completed_at,p_at) end
+  where task_id=t.id and status<>'cancelled' and verified_status is null;
+ end if;
+ -- Someone removed earlier gets the task back as new.
+ foreach u in array added loop
+  insert into public.task_assignments as x(task_id,user_id) values(t.id,u)
+  on conflict(task_id,user_id) do update set status='pending',completed_quantity=0,employee_note=null,progress_at=null,completed_at=null,
+   cancelled_at=null,cancelled_by=null,cancel_reason=null,verified_status=null,verified_quantity=null,verified_by=null,verified_at=null,review_note=null;
+  perform public.push_notification(u,'task_assigned','task:'||t.id||':'||gen_random_uuid(),'New task: '||left(n.title,180),
+   format('%s assigned this for %s.',actor.name,public.task_day_text(n.task_date)),'/my-tasks',null);
+ end loop;
+ if cardinality(fields)>0 then
+  for u in select user_id from public.task_assignments where task_id=t.id and status<>'cancelled' and not (user_id=any(added)) loop
+   perform public.push_notification(u,'task_updated','task-update:'||t.id||':'||gen_random_uuid(),'Task updated: '||left(n.title,180),
+    format('%s changed this task (%s).',actor.name,array_to_string(array(select replace(f,'_',' ') from unnest(fields) f),', ')),'/my-tasks',null);
+  end loop;
+ end if;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.update','tasks',t.id::text,p_request,jsonb_build_object('title',n.title,'fields',to_jsonb(fields),'added_count',cardinality(added),
+  'before',jsonb_build_object('target_quantity',t.target_quantity,'due_on',t.due_on,'title',t.title),
+  'after',jsonb_build_object('target_quantity',n.target_quantity,'due_on',n.due_on,'title',n.title)));
+ return public.task_detail(p_actor,t.id);
+end $$;
+create or replace function public.task_update(p_actor uuid,p_task uuid,p_data jsonb,p_request text) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_update_at(p_actor,p_task,p_data,p_request,now())
+$$;
+
+-- Cancelling keeps every assignment and its progress, marked cancelled.
+create or replace function public.task_cancel(p_actor uuid,p_task uuid,p_reason text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);t public.tasks;u uuid;n integer;
+begin
+ if length(p_reason)>300 then raise exception 'Keep the reason under 300 characters' using errcode='HA400';end if;
+ select * into t from public.tasks where id=p_task for update;
+ if not found then raise exception 'Task not found' using errcode='HA404';end if;
+ if t.cancelled_at is not null then raise exception 'This task was already cancelled' using errcode='HA409';end if;
+ update public.tasks set cancelled_at=now(),cancelled_by=actor.id,cancel_reason=nullif(btrim(p_reason),''),updated_by=actor.id where id=t.id;
+ n=0;
+ for u in update public.task_assignments set status='cancelled',cancelled_at=now(),cancelled_by=actor.id
+  where task_id=t.id and status<>'cancelled' returning user_id loop
+  n=n+1;
+  perform public.push_notification(u,'task_cancelled','task-cancel:'||t.id,'Task cancelled: '||left(t.title,180),
+   format('%s cancelled this task.%s',actor.name,coalesce(' '||nullif(btrim(p_reason),''),'')),'/my-tasks',null);
+ end loop;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.cancel','tasks',t.id::text,p_request,jsonb_build_object('title',t.title,'date',t.task_date,'assignee_count',n,
+  'reason_given',nullif(btrim(p_reason),'') is not null));
+ return public.task_detail(p_actor,t.id);
+end $$;
+-- Takes one agent off a team task; their progress stays on record.
+create or replace function public.task_assignment_cancel(p_actor uuid,p_assignment uuid,p_reason text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);a public.task_assignments;t public.tasks;
+begin
+ if length(p_reason)>300 then raise exception 'Keep the reason under 300 characters' using errcode='HA400';end if;
+ select * into a from public.task_assignments where id=p_assignment for update;
+ if not found then raise exception 'Assignment not found' using errcode='HA404';end if;
+ if a.status='cancelled' then raise exception 'This assignment was already cancelled' using errcode='HA409';end if;
+ select * into t from public.tasks where id=a.task_id;
+ update public.task_assignments set status='cancelled',cancelled_at=now(),cancelled_by=actor.id,cancel_reason=nullif(btrim(p_reason),'') where id=a.id;
+ perform public.push_notification(a.user_id,'task_cancelled','task-cancel:'||t.id,'Task cancelled: '||left(t.title,180),
+  format('%s took you off this task.%s',actor.name,coalesce(' '||nullif(btrim(p_reason),''),'')),'/my-tasks',null);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.unassign','task_assignments',a.id::text,p_request,jsonb_build_object('user_id',a.user_id,'title',t.title,'date',t.task_date));
+ return public.task_detail(p_actor,t.id);
+end $$;
+-- An administrator's check of one agent's task. The reported values stay.
+create or replace function public.task_verify(p_actor uuid,p_assignment uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);a public.task_assignments;t public.tasks;v text=p_data->>'status';q integer;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['status','quantity','note'])<>'{}'::jsonb or v not in ('confirmed','adjusted','not_done') then
+  raise exception 'Choose confirmed, adjusted or not done' using errcode='HA400';end if;
+ select * into a from public.task_assignments where id=p_assignment for update;
+ if not found then raise exception 'Assignment not found' using errcode='HA404';end if;
+ if a.status='cancelled' then raise exception 'This assignment was cancelled' using errcode='HA409';end if;
+ if a.user_id=actor.id then raise exception 'Another administrator must verify your own task' using errcode='HA403';end if;
+ select * into t from public.tasks where id=a.task_id;
+ if v='adjusted' then
+  if t.kind<>'measurable' then raise exception 'Only a measurable task can be adjusted; choose confirmed or not done' using errcode='HA400';end if;
+  q=(p_data->>'quantity')::integer;
+  if q is null or q<0 or q>1000000 then raise exception 'Enter the verified quantity' using errcode='HA400';end if;
+ end if;
+ update public.task_assignments set verified_status=v,verified_quantity=case when v='adjusted' then q when v='confirmed' and t.kind='measurable' then a.completed_quantity when v='not_done' and t.kind='measurable' then 0 end,
+  verified_by=actor.id,verified_at=now(),review_note=nullif(btrim(p_data->>'note'),'') where id=a.id;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.verify','task_assignments',a.id::text,p_request,jsonb_build_object('user_id',a.user_id,'title',t.title,'date',t.task_date,
+  'kind',t.kind,'unit',t.unit,'reported_quantity',a.completed_quantity,'reported_status',a.status,'verified_status',v,
+  'verified_quantity',case when v='adjusted' then q when t.kind='measurable' and v='confirmed' then a.completed_quantity when t.kind='measurable' then 0 end));
+ return public.task_assignment_json(a.id);
+end $$;
+create or replace function public.task_report_review(p_actor uuid,p_report uuid,p_note text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);r public.task_daily_reports;
+begin
+ if length(p_note)>500 then raise exception 'Keep the note under 500 characters' using errcode='HA400';end if;
+ select * into r from public.task_daily_reports where id=p_report for update;
+ if not found then raise exception 'Report not found' using errcode='HA404';end if;
+ if r.status='reviewed' then raise exception 'This report was already reviewed' using errcode='HA409';end if;
+ if r.user_id=actor.id then raise exception 'Another administrator must review your own report' using errcode='HA403';end if;
+ update public.task_daily_reports set status='reviewed',reviewed_by=actor.id,reviewed_at=now(),review_note=nullif(btrim(p_note),'') where id=r.id returning * into r;
+ perform public.push_notification(r.user_id,'task_report_reviewed','report-review:'||r.id,'Daily report reviewed',
+  format('%s reviewed your daily report for %s.',actor.name,public.task_day_text(r.work_date)),'/my-tasks?tab=reports',null);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.report_review','task_daily_reports',r.id::text,p_request,jsonb_build_object('user_id',r.user_id,'date',r.work_date,
+  'completion_percent',r.completion_percent,'note_given',r.review_note is not null));
+ return public.task_report_json(r);
+end $$;
+
+-- Early requests are decided on their own workday while the agent is still
+-- checked in; an approval re-checks that every task due is still done.
+-- Emergency requests can also be approved afterwards, to record the
+-- exception; the departure time is then fixed through a correction.
+create or replace function public.task_checkout_decide_at(p_actor uuid,p_id uuid,p_decision text,p_note text,p_waive boolean,p_request text,p_at timestamptz)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(p_at);emp_id uuid;req public.task_checkout_requests;
+ rec public.attendance_records;summary jsonb;emp public.profiles;
+begin
+ if p_decision not in ('approve','reject') then raise exception 'Choose approve or reject' using errcode='HA400';end if;
+ if length(p_note)>300 then raise exception 'Keep the note under 300 characters' using errcode='HA400';end if;
+ select user_id into emp_id from public.task_checkout_requests where id=p_id;
+ if emp_id is null then raise exception 'Request not found' using errcode='HA404';end if;
+ -- The same lock as check-out: a decision and a check-out never interleave.
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||emp_id,40));
+ select * into req from public.task_checkout_requests where id=p_id for update;
+ if req.status<>'pending' then
+  raise exception 'This request was already %',case req.status when 'approved' then 'approved' when 'rejected' then 'rejected' else 'cancelled' end using errcode='HA409';end if;
+ if req.user_id=actor.id then raise exception 'Another administrator must decide your own request' using errcode='HA403';end if;
+ select * into emp from public.profiles where id=req.user_id;
+ select * into rec from public.attendance_records where user_id=req.user_id and attendance_date=req.work_date;
+ if p_decision='approve' and req.kind='early' then
+  if req.work_date<>today then raise exception 'This early checkout request has expired; it was for %',public.task_day_text(req.work_date) using errcode='HA409';end if;
+  if rec.state is distinct from 'checked_in' then raise exception '% has already checked out today',emp.name using errcode='HA409';end if;
+  summary=public.task_day(req.user_id,req.work_date);
+  if not (summary->>'all_due_completed')::boolean then
+   raise exception 'Tasks changed since the request: % of % tasks due today are now done. Reject it, or ask % to update their tasks.',
+    summary->>'due_completed',summary->>'due_count',emp.name using errcode='HA409';end if;
+  if not exists(select 1 from public.task_daily_reports where user_id=req.user_id and work_date=req.work_date) then
+   raise exception 'The daily report is missing' using errcode='HA409';end if;
+ end if;
+ if p_decision='approve' and req.kind='emergency' and req.work_date>today then
+  raise exception 'This request is for a later day' using errcode='HA409';end if;
+ update public.task_checkout_requests set status=case when p_decision='approve' then 'approved' else 'rejected' end,decided_by=actor.id,decided_at=p_at,
+  decision_note=nullif(btrim(p_note),''),waive_report=p_decision='approve' and req.kind='emergency' and coalesce(p_waive,false)
+ where id=req.id returning * into req;
+ perform public.push_notification(req.user_id,'checkout_decision','checkout-decision:'||req.id,
+  format('%s checkout %s',case req.kind when 'early' then 'Early' else 'Emergency' end,req.status),
+  format('%s %s your %s checkout request for %s.%s%s',actor.name,req.status,req.kind,public.task_day_text(req.work_date),
+   case when req.status='approved' and rec.state='checked_in' and req.work_date=today then ' You can check out now from My attendance.'
+    when req.status='approved' then ' If you left without checking out, request a check-out correction for the time you left.'
+    else ' Your normal checkout rules still apply.' end,
+   case when req.waive_report then ' Your daily report was waived for this checkout.' else '' end),'/attendance',null);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,case req.status when 'approved' then 'checkout.approve' else 'checkout.reject' end,'task_checkout_requests',req.id::text,p_request,
+  jsonb_build_object('user_id',req.user_id,'kind',req.kind,'date',req.work_date,'waive_report',req.waive_report,'note_given',req.decision_note is not null,
+   'retrospective',req.work_date<today));
+ return public.task_request_json(req,today);
+end $$;
+create or replace function public.task_checkout_decide(p_actor uuid,p_id uuid,p_decision text,p_note text,p_waive boolean,p_request text) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_checkout_decide_at(p_actor,p_id,p_decision,p_note,p_waive,p_request,now())
+$$;
+create or replace function public.task_settings(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);
+begin
+ return (select jsonb_build_object('rules_from',task_rules_from,'rules_active_today',public.task_rules_on(public.attendance_local_date(now())),
+  'today',public.attendance_local_date(now())) from public.crm_settings where id);
+end $$;
+-- The checkout rules start on a chosen day (today or later) or stop now.
+create or replace function public.task_settings_save(p_actor uuid,p_from date,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);before date;today date=public.attendance_local_date(now());
+begin
+ if p_from is not null and (p_from<today or p_from>today+366) then
+  raise exception 'Choose today or a later date, within a year' using errcode='HA400';end if;
+ select task_rules_from into before from public.crm_settings where id for update;
+ if before is not distinct from p_from then return public.task_settings(p_actor);end if;
+ update public.crm_settings set task_rules_from=p_from,updated_by=actor.id,updated_at=now() where id;
+ insert into public.audit_log(actor_id,action,entity,request_id,metadata)
+ values(actor.id,'task.rules_changed','crm_settings',p_request,jsonb_build_object('from',before,'to',p_from));
+ return public.task_settings(p_actor);
+end $$;
+
+-- ------------------------------------------------------- administrator reads
+create or replace function public.task_detail(p_actor uuid,p_task uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);t public.tasks;
+begin
+ select * into t from public.tasks where id=p_task;
+ if not found then raise exception 'Task not found' using errcode='HA404';end if;
+ return to_jsonb(t)-'client_key'||jsonb_build_object('created_by_name',(select name from public.profiles where id=t.created_by),
+  'cancelled_by_name',(select name from public.profiles where id=t.cancelled_by),
+  'assignments',(select coalesce(jsonb_agg(public.task_assignment_json(x.id) order by p.name,x.id),'[]'::jsonb)
+   from public.task_assignments x join public.profiles p on p.id=x.user_id where x.task_id=t.id));
+end $$;
+-- p_filters: scope, from, to (task days), status (open|cancelled), user, search.
+create or replace function public.task_admin_tasks(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);f jsonb=coalesce(p_filters,'{}'::jsonb);term text=nullif(lower(btrim(f->>'search')),'');result jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 then raise exception 'Choose a valid page' using errcode='HA400';end if;
+ with s as (
+  select t.* from public.tasks t
+  where (f->>'scope' is null or t.scope=f->>'scope')
+   and (f->>'from' is null or t.due_on>=(f->>'from')::date) and (f->>'to' is null or t.task_date<=(f->>'to')::date)
+   and (f->>'status' is null or (f->>'status'='open' and t.cancelled_at is null) or (f->>'status'='cancelled' and t.cancelled_at is not null))
+   and (f->>'user' is null or exists(select 1 from public.task_assignments x where x.task_id=t.id and x.user_id=(f->>'user')::uuid))
+   and (term is null or position(term in lower(t.title))>0)
+ ), page as (select * from s order by task_date desc,created_at desc,id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('count',(select count(*) from s),'page',p_page,'limit',p_limit,'data',coalesce(jsonb_agg(
+  to_jsonb(p)-'client_key'||jsonb_build_object('created_by_name',(select name from public.profiles where id=p.created_by),
+   'assignees',(select count(*) from public.task_assignments x where x.task_id=p.id and x.status<>'cancelled'),
+   'completed',(select count(*) from public.task_assignments x where x.task_id=p.id and x.status='completed'),
+   'verified',(select count(*) from public.task_assignments x where x.task_id=p.id and x.verified_status is not null),
+   'average_percent',(select round(avg(public.task_percent(p.kind,p.target_quantity,x.completed_quantity,x.status)),1) from public.task_assignments x where x.task_id=p.id and x.status<>'cancelled'),
+   'assignee_names',(select coalesce(jsonb_agg(pr.name order by pr.name),'[]'::jsonb) from (select pr.name from public.task_assignments x join public.profiles pr on pr.id=x.user_id
+     where x.task_id=p.id and x.status<>'cancelled' order by pr.name limit 3) pr))
+  order by p.task_date desc,p.created_at desc,p.id),'[]'::jsonb)) into result from page p;
+ return result;
+end $$;
+create or replace function public.task_admin_overview(p_actor uuid,p_day date) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);day date=coalesce(p_day,public.attendance_local_date(now()));
+begin
+ return (with a as (select x.*,t.kind,t.target_quantity,t.task_date,t.due_on from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.status<>'cancelled' and t.task_date<=day and t.due_on>=day),
+  agents as (select p.id,p.name,p.uid from public.profiles p where p.role='agent' and p.active and p.deleted_at is null),
+  r as (select * from public.task_daily_reports where work_date=day)
+ select jsonb_build_object('date',day,'rules_active',public.task_rules_on(day),
+  'active_tasks',(select count(distinct task_id) from a),'assigned_today',(select count(*) from public.tasks t where t.task_date=day and t.cancelled_at is null),
+  'assignments',(select count(*) from a),'completed',(select count(*) from a where status='completed'),
+  'pending',(select count(*) from a where status<>'completed'),'average_percent',(select round(avg(public.task_percent(kind,target_quantity,completed_quantity,status)),1) from a),
+  'reports_submitted',(select count(*) from r),'reports_to_review',(select count(*) from public.task_daily_reports where status='submitted'),
+  'missing_reports',(select coalesce(jsonb_agg(jsonb_build_object('id',g.id,'name',g.name,'uid',g.uid) order by g.name),'[]'::jsonb) from agents g
+   where exists(select 1 from a where a.user_id=g.id) and not exists(select 1 from r where r.user_id=g.id)),
+  'agents_with_tasks',(select count(distinct user_id) from a),
+  'pending_early',(select count(*) from public.task_checkout_requests where status='pending' and kind='early' and work_date=day),
+  'pending_emergency',(select count(*) from public.task_checkout_requests where status='pending' and kind='emergency'),
+  'overdue_reports',(select jsonb_array_length(public.task_missing_reports(p_actor,day-7,day-1)->'data')),
+  'people',(select coalesce(jsonb_agg(jsonb_build_object('id',g.id,'name',g.name,'uid',g.uid,
+    'tasks',(select count(*) from a where a.user_id=g.id),'completed',(select count(*) from a where a.user_id=g.id and status='completed'),
+    'percent',(select round(avg(public.task_percent(kind,target_quantity,completed_quantity,status)),1) from a where a.user_id=g.id),
+    'report',(select jsonb_build_object('id',r.id,'status',r.status,'completion_percent',r.completion_percent) from r where r.user_id=g.id)) order by g.name),'[]'::jsonb)
+   from agents g)));
+end $$;
+-- p_filters: date, from, to, user, status (submitted|reviewed).
+create or replace function public.task_reports(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);f jsonb=coalesce(p_filters,'{}'::jsonb);result jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 then raise exception 'Choose a valid page' using errcode='HA400';end if;
+ with s as (select r.* from public.task_daily_reports r where (f->>'from' is null or r.work_date>=(f->>'from')::date)
+   and (f->>'to' is null or r.work_date<=(f->>'to')::date) and (f->>'user' is null or r.user_id=(f->>'user')::uuid)
+   and (f->>'status' is null or r.status=f->>'status')),
+  page as (select * from s order by work_date desc,submitted_at desc,id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('count',(select count(*) from s),'page',p_page,'limit',p_limit,
+  'data',coalesce(jsonb_agg(public.task_report_json(p) order by p.work_date desc,p.submitted_at desc,p.id),'[]'::jsonb)) into result from page p;
+ return result;
+end $$;
+-- The administrators' queue, newest first; p_filters: status, kind, user, from, to.
+create or replace function public.task_checkout_requests_page(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);f jsonb=coalesce(p_filters,'{}'::jsonb);today date=public.attendance_local_date(now());result jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 then raise exception 'Choose a valid page' using errcode='HA400';end if;
+ with s as (select q.* from public.task_checkout_requests q where (f->>'status' is null or q.status=f->>'status')
+   and (f->>'kind' is null or q.kind=f->>'kind') and (f->>'user' is null or q.user_id=(f->>'user')::uuid)
+   and (f->>'from' is null or q.work_date>=(f->>'from')::date) and (f->>'to' is null or q.work_date<=(f->>'to')::date)),
+  page as (select * from s order by (status='pending') desc,requested_at desc,id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('count',(select count(*) from s),'page',p_page,'limit',p_limit,
+  'data',coalesce(jsonb_agg(public.task_request_json(p,today)||jsonb_build_object(
+   'report_id',(select id from public.task_daily_reports r where r.user_id=p.user_id and r.work_date=p.work_date),
+   'attendance_state',(select state from public.attendance_records a where a.user_id=p.user_id and a.attendance_date=p.work_date),
+   'tasks_now',public.task_day(p.user_id,p.work_date))
+   order by (p.status='pending') desc,p.requested_at desc,p.id),'[]'::jsonb)) into result from page p;
+ return result;
+end $$;
+-- Daily reports still owed: earlier days on which an agent had tasks due and
+-- sent no report, newest first. Agents can submit them for 7 days.
+create or replace function public.task_missing_reports_at(p_actor uuid,p_from date,p_to date,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(p_at);result jsonb;
+begin
+ if p_from is null or p_to is null or p_to<p_from or p_to-p_from>92 then raise exception 'Choose a range of up to 93 days' using errcode='HA400';end if;
+ with d as (select x.user_id,t.due_on work_day,count(*) tasks,round(avg(public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status)),1) pct
+   from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.status<>'cancelled' and t.due_on between p_from and least(p_to,today-1) group by x.user_id,t.due_on)
+ select jsonb_build_object('count',count(*),'data',coalesce(jsonb_agg(jsonb_build_object('user_id',p.id,'name',p.name,'uid',p.uid,
+   'active',p.active and p.deleted_at is null,'work_date',d.work_day,'tasks',d.tasks,'completion_percent',d.pct,
+   'can_still_submit',d.work_day>=today-7,'submit_until',d.work_day+7,
+   'report_waived',exists(select 1 from public.task_checkout_requests q where q.user_id=d.user_id and q.work_date=d.work_day and q.status='approved' and q.waive_report))
+   order by d.work_day desc,p.name,p.id),'[]'::jsonb)) into result
+ from d join public.profiles p on p.id=d.user_id
+ where not exists(select 1 from public.task_daily_reports r where r.user_id=d.user_id and r.work_date=d.work_day);
+ return result;
+end $$;
+create or replace function public.task_missing_reports(p_actor uuid,p_from date,p_to date) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_missing_reports_at(p_actor,p_from,p_to,now())
+$$;
+
+-- Performance from the actual assignments, reports and requests, by agent and by day.
+create or replace function public.task_performance(p_actor uuid,p_from date,p_to date,p_user uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);
+begin
+ if p_from is null or p_to is null or p_to<p_from or p_to-p_from>92 then raise exception 'Choose a range of up to 93 days' using errcode='HA400';end if;
+ return (with a as (select x.user_id,t.due_on,t.kind,t.target_quantity,x.completed_quantity,x.status,x.verified_status,x.verified_quantity,
+    public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status) pct,
+    case when x.verified_status is null then null when x.verified_status='not_done' then 0.0 when t.kind='measurable'
+     then least(100,round(coalesce(x.verified_quantity,x.completed_quantity)*100.0/t.target_quantity,1)) else 100.0 end vpct
+   from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.status<>'cancelled' and t.due_on between p_from and p_to and (p_user is null or x.user_id=p_user)),
+  r as (select * from public.task_daily_reports where work_date between p_from and p_to and (p_user is null or user_id=p_user)),
+  q as (select * from public.task_checkout_requests where work_date between p_from and p_to and (p_user is null or user_id=p_user)),
+  people as (select p.* from public.profiles p where p.id in (select user_id from a union select user_id from r union select user_id from q)
+   or (p_user is null and p.role='agent' and p.active and p.deleted_at is null) or p.id=p_user)
+ select jsonb_build_object('from',p_from,'to',p_to,
+  'totals',jsonb_build_object('assignments',(select count(*) from a),'completed',(select count(*) from a where status='completed'),
+   'average_percent',(select round(avg(pct),1) from a),'verified',(select count(*) from a where verified_status is not null),
+   'verified_average_percent',(select round(avg(vpct),1) from a),'reports',(select count(*) from r),
+   'early_approved',(select count(*) from q where kind='early' and status='approved'),'emergency_approved',(select count(*) from q where kind='emergency' and status='approved')),
+  'employees',(select coalesce(jsonb_agg(jsonb_build_object('id',p.id,'name',p.name,'uid',p.uid,'active',p.active and p.deleted_at is null,
+    'assignments',(select count(*) from a where user_id=p.id),'completed',(select count(*) from a where user_id=p.id and status='completed'),
+    'average_percent',(select round(avg(pct),1) from a where user_id=p.id),
+    'verified',(select count(*) from a where user_id=p.id and verified_status is not null),
+    'verified_average_percent',(select round(avg(vpct),1) from a where user_id=p.id),
+    'task_days',(select count(distinct due_on) from a where user_id=p.id),
+    'reports',(select count(*) from r where user_id=p.id),'reports_reviewed',(select count(*) from r where user_id=p.id and status='reviewed'),
+    'missing_reports',(select count(*) from (select distinct due_on from a where user_id=p.id and due_on<public.attendance_local_date(now())) d
+     where not exists(select 1 from r where r.user_id=p.id and r.work_date=d.due_on)),
+    'early',(select jsonb_build_object('approved',count(*) filter(where status='approved'),'rejected',count(*) filter(where status='rejected'),
+      'pending',count(*) filter(where status='pending')) from q where user_id=p.id and kind='early'),
+    'emergency',(select jsonb_build_object('approved',count(*) filter(where status='approved'),'rejected',count(*) filter(where status='rejected'),
+      'pending',count(*) filter(where status='pending')) from q where user_id=p.id and kind='emergency'))
+   order by p.name,p.id),'[]'::jsonb) from people p),
+  'days',(select coalesce(jsonb_agg(jsonb_build_object('date',d,'assignments',(select count(*) from a where due_on=d),
+    'completed',(select count(*) from a where due_on=d and status='completed'),'average_percent',(select round(avg(pct),1) from a where due_on=d),
+    'reports',(select count(*) from r where work_date=d)) order by d),'[]'::jsonb)
+   from generate_series(p_from,p_to,interval '1 day') g(dd),lateral (select g.dd::date d) x)));
+end $$;
+
+-- ----------------------------------------------------------------- agents
+create or replace function public.task_my_at(p_actor uuid,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);
+begin
+ return (with mine as (select x.id,x.status,x.completed_at,t.task_date,t.due_on,t.priority from public.task_assignments x join public.tasks t on t.id=x.task_id where x.user_id=p_actor)
+ select jsonb_build_object('date',today,'role',actor.role,'rules_active',public.task_rules_on(today),
+  'today',(select coalesce(jsonb_agg(public.task_assignment_json(m.id) order by m.status='completed',array_position(array['urgent','high','normal','low'],m.priority),m.due_on,m.id),'[]'::jsonb)
+   from mine m where m.status<>'cancelled' and m.task_date<=today and m.due_on>=today),
+  'overdue',(select coalesce(jsonb_agg(public.task_assignment_json(m.id) order by m.due_on,m.id),'[]'::jsonb)
+   from mine m where m.status not in ('completed','cancelled') and m.due_on<today),
+  'upcoming',(select coalesce(jsonb_agg(public.task_assignment_json(m.id) order by m.task_date,m.id),'[]'::jsonb)
+   from mine m where m.status<>'cancelled' and m.task_date>today and m.task_date<=today+14),
+  'completed',(select coalesce(jsonb_agg(public.task_assignment_json(m.id) order by m.completed_at desc,m.id),'[]'::jsonb)
+   from (select * from mine m where m.status='completed' and m.due_on<today and m.due_on>=today-14 order by m.completed_at desc limit 30) m),
+  'summary',public.task_day(p_actor,today),
+  'report',(select public.task_report_json(r) from public.task_daily_reports r where r.user_id=p_actor and r.work_date=today),
+  -- Earlier days with tasks and no report (for example after an emergency).
+  'missing_reports',(select coalesce(jsonb_agg(d order by d desc),'[]'::jsonb) from (select distinct m.due_on d from mine m
+   where m.status<>'cancelled' and m.due_on between today-7 and today-1
+    and not exists(select 1 from public.task_daily_reports r where r.user_id=p_actor and r.work_date=m.due_on)) x),
+  'reports',(select coalesce(jsonb_agg(public.task_report_json(r) order by r.work_date desc),'[]'::jsonb)
+   from (select * from public.task_daily_reports where user_id=p_actor order by work_date desc limit 30) r),
+  'requests',(select coalesce(jsonb_agg(public.task_request_json(q,today) order by q.requested_at desc),'[]'::jsonb)
+   from (select * from public.task_checkout_requests where user_id=p_actor order by requested_at desc limit 20) q),
+  'checkout',public.task_checkout_state_at(p_actor,p_at)));
+end $$;
+create or replace function public.task_my(p_actor uuid) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_my_at(p_actor,now())
+$$;
+-- An agent's own progress. Measurable tasks take a quantity (the status
+-- follows it); simple tasks take a status.
+create or replace function public.task_progress_at(p_actor uuid,p_assignment uuid,p_data jsonb,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);a public.task_assignments;t public.tasks;
+ q integer;s text;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['quantity','status','note'])<>'{}'::jsonb then
+  raise exception 'Unsupported progress details' using errcode='HA400';end if;
+ select * into a from public.task_assignments where id=p_assignment for update;
+ -- Someone else's task is reported as missing, never as forbidden.
+ if not found or a.user_id<>p_actor then raise exception 'Task not found' using errcode='HA404';end if;
+ select * into t from public.tasks where id=a.task_id;
+ if a.status='cancelled' then raise exception 'This task was cancelled' using errcode='HA409';end if;
+ if a.verified_status is not null then raise exception 'An administrator has verified this task, so it can no longer be changed' using errcode='HA409';end if;
+ if t.task_date>today then raise exception 'This task starts on %',public.task_day_text(t.task_date) using errcode='HA409';end if;
+ if exists(select 1 from public.task_daily_reports r where r.user_id=p_actor and r.work_date=t.due_on and r.status='reviewed') then
+  raise exception 'Your report for % was reviewed, so this task can no longer be changed',public.task_day_text(t.due_on) using errcode='HA409';end if;
+ if length(p_data->>'note')>500 then raise exception 'Keep the note under 500 characters' using errcode='HA400';end if;
+ if t.kind='measurable' then
+  q=(p_data->>'quantity')::integer;
+  if q is null or q<0 or q>1000000 then raise exception 'Enter how many you completed' using errcode='HA400';end if;
+  s=public.task_status_for(t.target_quantity,q);
+ else
+  s=p_data->>'status';q=0;
+  if s not in ('pending','in_progress','completed') then raise exception 'Choose pending, in progress or completed' using errcode='HA400';end if;
+ end if;
+ update public.task_assignments set completed_quantity=q,status=s,employee_note=case when p_data?'note' then nullif(btrim(p_data->>'note'),'') else employee_note end,
+  progress_at=p_at,completed_at=case when s='completed' then coalesce(completed_at,p_at) end where id=a.id;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(p_actor,'task.progress','task_assignments',a.id::text,p_request,jsonb_build_object('user_id',p_actor,'title',t.title,'date',t.task_date,
+  'kind',t.kind,'unit',t.unit,'target_quantity',t.target_quantity,'before',jsonb_build_object('quantity',a.completed_quantity,'status',a.status),
+  'after',jsonb_build_object('quantity',q,'status',s)));
+ return public.task_assignment_json(a.id);
+end $$;
+create or replace function public.task_progress(p_actor uuid,p_assignment uuid,p_data jsonb,p_request text) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_progress_at(p_actor,p_assignment,p_data,p_request,now())
+$$;
+-- One report per workday: today, or one of the last seven days (a day
+-- missed after an emergency). A second submission must say it amends the
+-- first; a reviewed report can't change.
+create or replace function public.task_report_submit_at(p_actor uuid,p_day date,p_remarks text,p_amend boolean,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);day date=coalesce(p_day,today);
+ r public.task_daily_reports;snap jsonb;pct numeric;n integer;
+begin
+ if actor.role<>'agent' then raise exception 'Daily reports are for agents' using errcode='HA403';end if;
+ if day>today or day<today-7 then raise exception 'Choose today or one of the last seven days' using errcode='HA400';end if;
+ if length(p_remarks)>1000 then raise exception 'Keep the remarks under 1000 characters' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ select * into r from public.task_daily_reports where user_id=p_actor and work_date=day for update;
+ if r.id is not null and r.status='reviewed' then
+  raise exception 'This report was reviewed by an administrator and can''t be changed' using errcode='HA409';end if;
+ if r.id is not null and not coalesce(p_amend,false) then
+  raise exception 'You already submitted the report for %. Choose Amend report to change it.',public.task_day_text(day) using errcode='HA409';end if;
+ select coalesce(jsonb_agg(jsonb_build_object('assignment_id',x.id,'title',t.title,'kind',t.kind,'target_quantity',t.target_quantity,'unit',t.unit,
+   'completed_quantity',x.completed_quantity,'status',x.status,'due_on',t.due_on,'percent',public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status))
+   order by t.due_on,t.title,x.id),'[]'::jsonb),round(avg(public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status)),1),count(*)
+ into snap,pct,n from public.task_assignments x join public.tasks t on t.id=x.task_id
+ where x.user_id=p_actor and x.status<>'cancelled' and t.task_date<=day and t.due_on>=day;
+ if r.id is null then
+  insert into public.task_daily_reports(user_id,work_date,remarks,tasks,task_count,completion_percent,submitted_at)
+  values(p_actor,day,nullif(btrim(p_remarks),''),snap,n,pct,p_at) returning * into r;
+  insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'task.report_submit','task_daily_reports',r.id::text,p_request,jsonb_build_object('user_id',p_actor,'date',day,'task_count',n,
+   'completion_percent',pct,'late',day<today));
+  perform public.task_notify_admins(p_actor,'task_report','task-reports:'||day,'Daily report: '||left(actor.name,150),
+   format('%s submitted the report for %s: %s.',actor.name,public.task_day_text(day),
+    case when n=0 then 'no tasks that day' else format('%s%% across %s task(s)',pct,n) end),
+   '/task-management?tab=reports&date='||day,'%s daily reports for '||public.task_day_text(day),'Open Daily reports to review them.');
+ else
+  insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'task.report_amend','task_daily_reports',r.id::text,p_request,jsonb_build_object('user_id',p_actor,'date',day,
+   'before',jsonb_build_object('completion_percent',r.completion_percent,'task_count',r.task_count,'remarks_changed',r.remarks is distinct from nullif(btrim(p_remarks),''),
+    'tasks',(select coalesce(jsonb_agg(jsonb_build_object('title',e->>'title','completed_quantity',e->'completed_quantity','status',e->>'status')),'[]'::jsonb) from jsonb_array_elements(r.tasks) e)),
+   'after',jsonb_build_object('completion_percent',pct,'task_count',n)));
+  update public.task_daily_reports set remarks=nullif(btrim(p_remarks),''),tasks=snap,task_count=n,completion_percent=pct,amended_at=p_at,
+   amendment_count=amendment_count+1 where id=r.id returning * into r;
+ end if;
+ return public.task_report_json(r);
+end $$;
+create or replace function public.task_report_submit(p_actor uuid,p_day date,p_remarks text,p_amend boolean,p_request text) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_report_submit_at(p_actor,p_day,p_remarks,p_amend,p_request,now())
+$$;
+-- An agent's own report, or any report for an administrator.
+create or replace function public.task_report_detail(p_actor uuid,p_report uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);r public.task_daily_reports;
+begin
+ select * into r from public.task_daily_reports where id=p_report;
+ if not found or (actor.role<>'admin' and r.user_id<>p_actor) then raise exception 'Report not found' using errcode='HA404';end if;
+ return public.task_report_json(r)||jsonb_build_object('assignments',(select coalesce(jsonb_agg(public.task_assignment_json((e->>'assignment_id')::uuid)),'[]'::jsonb)
+  from jsonb_array_elements(r.tasks) e where actor.role='admin'));
+end $$;
+create or replace function public.task_checkout_request_at(p_actor uuid,p_kind text,p_reason text,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);rec public.attendance_records;
+ state jsonb;summary jsonb;req public.task_checkout_requests;report boolean;limits jsonb;
+begin
+ if actor.role<>'agent' then raise exception 'Only agents request checkout approval' using errcode='HA403';end if;
+ if p_kind not in ('early','emergency') then raise exception 'Choose early or emergency checkout' using errcode='HA400';end if;
+ if length(p_reason)>500 then raise exception 'Keep the reason under 500 characters' using errcode='HA400';end if;
+ if p_kind='emergency' and length(btrim(coalesce(p_reason,'')))<5 then raise exception 'Tell the administrator briefly what happened' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ if not public.task_rules_on(today) then raise exception 'Checkout rules are off, so you can check out without approval' using errcode='HA409';end if;
+ select * into rec from public.attendance_records where user_id=p_actor and attendance_date=today;
+ if rec.id is null then raise exception 'Check in first' using errcode='HA409';end if;
+ if rec.state<>'checked_in' then raise exception 'You have already checked out today' using errcode='HA409';end if;
+ if exists(select 1 from public.task_checkout_requests where user_id=p_actor and work_date=today and status='pending') then
+  raise exception 'You already have a request waiting for an administrator' using errcode='HA409';end if;
+ if exists(select 1 from public.task_checkout_requests where user_id=p_actor and work_date=today and status='approved') then
+  raise exception 'Your checkout request is already approved' using errcode='HA409';end if;
+ limits=public.task_request_limits(p_actor,p_kind,today,p_at);
+ if (limits->>'limit_reached')::boolean then
+  raise exception 'You have reached today''s limit of 3 % checkout requests. Please speak to an administrator.',p_kind using errcode='HA429';end if;
+ if (limits->>'explanation_required')::boolean then
+  if length(btrim(coalesce(p_reason,'')))<10 then
+   raise exception 'Your last % checkout request was rejected. Explain what has changed (at least 10 characters).',p_kind using errcode='HA400';end if;
+  if limits->'reasons' ? lower(regexp_replace(btrim(p_reason),'\s+',' ','g')) then
+   raise exception 'This explanation repeats an earlier request. Explain what has changed since then.' using errcode='HA409';end if;
+  if (limits->>'waiting')::boolean then
+   raise exception 'You can ask again from %, 15 minutes after your last request was rejected.',public.task_time_text((limits->>'retry_at')::timestamptz) using errcode='HA429';end if;
+ end if;
+ if p_kind='early' then
+  state=public.task_checkout_state_at(p_actor,p_at);
+  if not (state->>'can_request_early')::boolean then raise exception '%',state->'early_blockers'->>0 using errcode='HA409';end if;
+ end if;
+ summary=public.task_day(p_actor,today);
+ report=exists(select 1 from public.task_daily_reports where user_id=p_actor and work_date=today);
+ insert into public.task_checkout_requests(user_id,work_date,kind,reason,requested_at,shift_end,completion_percent,report_submitted)
+ values(p_actor,today,p_kind,nullif(btrim(p_reason),''),p_at,rec.shift_end,(summary->>'completion_percent')::numeric,report) returning * into req;
+ -- The emergency reason stays in the request, not in notifications or the audit.
+ perform public.task_notify_admins(p_actor,'checkout_request','checkout:'||req.id,
+  format('%s checkout request: %s',case p_kind when 'early' then 'Early' else 'Emergency' end,left(actor.name,150)),
+  case p_kind when 'early' then format('%s has completed all required daily tasks and requested checkout at %s. Normal shift end: %s. Task completion: %s%%. Report: submitted.',
+    actor.name,public.task_time_text(p_at),to_char(rec.shift_end,'FMHH12:MI AM'),coalesce(req.completion_percent::text,'0'))
+   else format('%s requested an emergency checkout at %s. Task completion: %s. Report: %s. Open the request to read the reason.',
+    actor.name,public.task_time_text(p_at),coalesce(req.completion_percent::text||'%','no tasks'),case when report then 'submitted' else 'not submitted' end) end,
+  '/task-management?tab=requests',null,null);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(p_actor,'checkout.request','task_checkout_requests',req.id::text,p_request,jsonb_build_object('user_id',p_actor,'kind',p_kind,'date',today,
+  'completion_percent',req.completion_percent,'report_submitted',report,'shift_end',to_char(rec.shift_end,'HH24:MI'),
+  'attempt',(limits->>'count')::integer+1));
+ return public.task_request_json(req,today);
+end $$;
+create or replace function public.task_checkout_request(p_actor uuid,p_kind text,p_reason text,p_request text) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_checkout_request_at(p_actor,p_kind,p_reason,p_request,now())
+$$;
+create or replace function public.task_checkout_cancel(p_actor uuid,p_id uuid,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);req public.task_checkout_requests;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ select * into req from public.task_checkout_requests where id=p_id for update;
+ if not found or req.user_id<>p_actor then raise exception 'Request not found' using errcode='HA404';end if;
+ if req.status<>'pending' then raise exception 'Only a waiting request can be cancelled' using errcode='HA409';end if;
+ update public.task_checkout_requests set status='cancelled' where id=req.id returning * into req;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(p_actor,'checkout.cancel','task_checkout_requests',req.id::text,p_request,jsonb_build_object('user_id',p_actor,'kind',req.kind,'date',req.work_date));
+ return public.task_request_json(req,public.attendance_local_date(now()));
+end $$;
+
+-- ---------------------------------------------------------------- grants
+-- Browser roles get nothing. The API calls the service-role functions; the
+-- explicit-time forms and helpers are for the database owner and tests only.
+do $$ declare f record; begin
+ for f in select p.oid::regprocedure signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and (p.proname like 'task\_%' or p.proname='attendance_check_out_at') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  if f.proname in ('task_create','task_update','task_cancel','task_assignment_cancel','task_verify','task_report_review','task_checkout_decide',
+   'task_settings','task_settings_save','task_detail','task_admin_tasks','task_admin_overview','task_reports','task_checkout_requests_page',
+   'task_performance','task_missing_reports','task_my','task_progress','task_report_submit','task_report_detail','task_checkout_request','task_checkout_cancel',
+   'task_checkout_state') then
+   execute format('grant execute on function %s to service_role',f.signature);
+  else
+   execute format('revoke all on function %s from service_role',f.signature);
+  end if;
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
+
+
+-- Migration: 046_building_property_categories.sql
+
+-- Apply after 045. Safe to rerun. Building categories (update 046).
+-- A property or building can offer several kinds of units or spaces at
+-- once: residential and hotel apartments with 1, 2 or 3 bedrooms, commercial
+-- outlets and workspaces. properties.building_categories keeps every kind
+-- ticked, in one standard order, each once; older properties have none.
+-- The categories describe what the building offers; bedrooms still describes
+-- the listed unit. Like the other building details, plots and land have none.
+-- * The column's type (a domain) accepts only the listed categories, in the
+--   standard order, without repeats. The check sits on the type rather than
+--   the table, so updates 041 and 044 can still be applied again.
+-- * Saves (inventory_save) accept, check and order the selection, and record
+--   in the audit which fields actually changed and the categories before and
+--   after. Administrators are told about category changes on a promoted
+--   agent listing, as for its other details.
+-- * Adding a listing to Admin Properties (inventory_promote) copies its
+--   categories; afterwards the two records change independently.
+-- Existing properties, owners, pictures, promotions and permissions are
+-- unchanged. If 041 or 044 is ever applied again, apply this update after it.
+-- Runs as one transaction in a few seconds. properties is rewritten once to
+-- add the column (it is small) and is locked meanwhile; if a lock is not
+-- available within 5 seconds everything rolls back unchanged: run it again.
+
+set local lock_timeout='5s';
+do $$ begin
+ if to_regprocedure('public.inventory_promote(uuid,uuid,uuid,text[],text)') is null
+  or to_regprocedure('public.promotion_change_text(public.properties,public.properties,text[])') is null
+  or to_regclass('public.task_daily_reports') is null then
+  raise exception 'Apply CRM updates up to 045 before update 046.';
+ end if;
+end $$;
+
+-- ------------------------------------------------------------ categories
+-- Identifiers, order and labels match the API (server/src/utils/validators.js)
+-- and the screens (client/src/lib/inventory.js); a test keeps them equal.
+create or replace function public.property_category_list() returns text[] language sql immutable parallel safe set search_path='' as $$
+ select array['residential_1_bed','residential_2_bed','residential_3_bed','hotel_apartment_1_bed','hotel_apartment_2_bed',
+  'hotel_apartment_3_bed','commercial_outlet','workspace']::text[]
+$$;
+-- The listed categories in p, in the standard order, each once.
+create or replace function public.property_categories_sorted(p text[]) returns text[] language sql immutable parallel safe set search_path='' as $$
+ select array(select c from unnest(public.property_category_list()) with ordinality a(c,n) where c=any(p) order by n)
+$$;
+create or replace function public.property_category_label(p text) returns text language sql immutable parallel safe set search_path='' as $$
+ select case p when 'residential_1_bed' then 'Residential — 1 Bedroom' when 'residential_2_bed' then 'Residential — 2 Bedrooms'
+  when 'residential_3_bed' then 'Residential — 3 Bedrooms' when 'hotel_apartment_1_bed' then 'Hotel Apartments — 1 Bedroom'
+  when 'hotel_apartment_2_bed' then 'Hotel Apartments — 2 Bedrooms' when 'hotel_apartment_3_bed' then 'Hotel Apartments — 3 Bedrooms'
+  when 'commercial_outlet' then 'Commercial Outlets / Retail Shops' when 'workspace' then 'Office Spaces / Workspaces' end
+$$;
+-- A list equal to its own standard ordering has only listed categories and
+-- no repeats. Not null is on the column, so older save functions that do not
+-- name it still get the empty default.
+do $$ begin
+ if to_regtype('public.property_building_categories') is null then
+  create domain public.property_building_categories as text[] check(value=public.property_categories_sorted(value));
+ end if;
+end $$;
+alter table public.properties add column if not exists building_categories public.property_building_categories not null default '{}';
+
+-- ---------------------------------------------------------- notifications
+-- As in 044, plus building categories: what was added and removed.
+create or replace function public.promotion_change_text(p_old public.properties,p_new public.properties,p_keys text[]) returns text language sql stable set search_path='' as $$
+ with labels(k,label,n) as (values ('title','Title',1),('price','Price',2),('availability','Status',3),('purpose','Purpose',4),
+   ('size','Size',5),('type','Property type',6),('description','Description',7),('price_negotiable','Negotiable price',8),
+   ('price_notes','Price notes',9),('province','Province',10),('city','City',11),('area_society','Area or society',12),
+   ('block_sector','Block or sector',13),('street','Street',14),('plot_number','Plot or house number',15),('address','Full address',16),
+   ('map_url','Map location',17),('bedrooms','Bedrooms',18),('bathrooms','Bathrooms',19),('kitchens','Kitchens',20),('floors','Floors',21),
+   ('parking_spaces','Parking spaces',22),('furnishing','Furnishing',23),('construction_status','Construction',24),
+   ('property_age','Property age',25),('building_categories','Building categories',26),('amenities','Utilities and features',27),
+   ('owner_contact','Owner contact',28)),
+  status(v,l) as (values ('available','Available'),('reserved','Reserved'),('sold','Sold'),('rented','Rented'),('archived','Inactive')),
+  keys as (select case when k in ('area','area_unit') then 'size' else k end k from unnest(p_keys) k),
+  cats as (select c,n,c=any(p_old.building_categories) was,c=any(p_new.building_categories) now
+   from unnest(public.property_category_list()) with ordinality a(c,n)),
+  cat_change as (select (select count(*) from cats where now and not was) added,(select count(*) from cats where was and not now) removed,
+   concat_ws('; ','added '||(select string_agg(public.property_category_label(c),', ' order by n) from cats where now and not was),
+    'removed '||(select string_agg(public.property_category_label(c),', ' order by n) from cats where was and not now)) words),
+  items as (select l.label,l.n,case l.k
+    when 'price' then 'PKR '||to_char(p_old.price,'FM999,999,999,999,990')||' → PKR '||to_char(p_new.price,'FM999,999,999,999,990')
+    when 'availability' then coalesce((select s.l from status s where s.v=p_old.availability),p_old.availability)
+     ||' → '||coalesce((select s.l from status s where s.v=p_new.availability),p_new.availability)
+    when 'purpose' then case p_old.purpose when 'rent' then 'For rent' else 'For sale' end||' → '||case p_new.purpose when 'rent' then 'For rent' else 'For sale' end
+    when 'title' then '“'||left(p_old.title,60)||'” → “'||left(p_new.title,60)||'”'
+    when 'size' then trim_scale(p_old.area)::text||' '||p_old.area_unit||' → '||trim_scale(p_new.area)::text||' '||p_new.area_unit
+    -- Short enough to leave room for the rest of the notice (500 characters).
+    when 'building_categories' then (select case when length(words)<=220 then words
+     else concat_ws(', ','added '||nullif(added,0),'removed '||nullif(removed,0)) end from cat_change) end detail
+   from labels l where l.k in (select k from keys))
+ select concat_ws(' ',(select string_agg(label||': '||detail||'.',' ' order by n) from items where detail is not null),
+  (select case when exists(select 1 from items where detail is not null) then 'Also changed: ' else 'Changed: ' end
+    ||string_agg(label,', ' order by n)||'.' from items where detail is null having count(*)>0))
+$$;
+
+-- --------------------------------------------------------------- writes
+-- As in 044, plus building categories: checked, put in the standard order
+-- and cleared for plots and land like the other building details. The audit
+-- also records which fields actually changed (names only) and, when they
+-- changed, the categories before and after.
+create or replace function public.inventory_save(p_actor uuid,p_property uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties;merged public.properties;before public.properties;
+ fields jsonb;contact jsonb;plot boolean;old_contact jsonb;changes text[];cats_before text[];meta jsonb;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['title','description','type','purpose','availability','price',
+  'price_negotiable','price_notes','area','area_unit','province','city','area_society','block_sector','street','plot_number','address',
+  'map_url','bedrooms','bathrooms','kitchens','floors','parking_spaces','furnishing','construction_status','property_age','amenities',
+  'building_categories','owner_contact','expected_updated_at'])<>'{}'::jsonb then
+  raise exception 'Unsupported property details' using errcode='HA400';end if;
+ if p_data?'type' and coalesce(p_data->>'type','') not in ('House','Apartment','Residential Plot','Portion','Farmhouse','Shop','Office',
+  'Commercial Plot','Warehouse','Building','Land','Other') then
+  raise exception 'Choose a property type from the list' using errcode='HA400';end if;
+ if exists(select 1 from unnest(array['title','type','purpose','price','area','area_unit','city']) k
+  where (p_property is null or p_data?k) and nullif(btrim(coalesce(p_data->>k,'')),'') is null) then
+  raise exception 'Enter the title, type, purpose, price, size and city' using errcode='HA400';end if;
+ if p_data?'building_categories' then
+  if jsonb_typeof(p_data->'building_categories') is distinct from 'array' or exists(select 1 from jsonb_array_elements(p_data->'building_categories') e
+   where jsonb_typeof(e)<>'string' or not (e#>>'{}')=any(public.property_category_list())) then
+   raise exception 'Choose building categories from the list' using errcode='HA400';end if;
+  if (select count(*)<>count(distinct e) from jsonb_array_elements(p_data->'building_categories') e) then
+   raise exception 'Choose each building category once' using errcode='HA400';end if;
+ end if;
+ fields=p_data-array['owner_contact','expected_updated_at'];
+ if fields?'building_categories' then
+  fields=fields||jsonb_build_object('building_categories',to_jsonb(public.property_categories_sorted(
+   array(select jsonb_array_elements_text(fields->'building_categories')))));
+ end if;
+ if p_property is null then
+  merged=jsonb_populate_record(null::public.properties,
+   jsonb_build_object('description','','availability','available','price_negotiable',false,'amenities','[]'::jsonb,
+    'building_categories','[]'::jsonb)||fields);
+  cats_before='{}';
+ else
+  prop=public.inventory_property_for(actor,p_property,true);
+  if p_data?'expected_updated_at' and (p_data->>'expected_updated_at')::timestamptz is distinct from prop.updated_at then
+   raise exception 'Someone else changed this property. Close it, open it again and repeat your change.' using errcode='HA409';end if;
+  merged=jsonb_populate_record(prop,fields);
+  before=prop;cats_before=prop.building_categories;
+  select to_jsonb(c)-array['property_id','updated_at'] into old_contact from public.property_owner_contacts c where c.property_id=prop.id;
+ end if;
+ if (merged.availability='sold' and merged.purpose='rent') or (merged.availability='rented' and merged.purpose='sale') then
+  raise exception 'Use Sold for sale listings and Rented for rent listings' using errcode='HA400';end if;
+ -- Plots and land have no rooms, furnishing, construction, age or building
+ -- categories.
+ plot=merged.type in ('Residential Plot','Commercial Plot','Land');
+ if merged.city is not null then
+  merged.location=concat_ws(', ',nullif(btrim(merged.block_sector),''),nullif(btrim(merged.area_society),''),btrim(merged.city));
+ end if;
+ if p_property is null then
+  insert into public.properties(title,description,location,price,type,area,area_unit,availability,purpose,province,city,area_society,
+   block_sector,street,plot_number,address,map_url,price_negotiable,price_notes,bedrooms,bathrooms,kitchens,floors,parking_spaces,
+   furnishing,construction_status,property_age,amenities,building_categories,owner_agent_id,created_by,updated_by)
+  values(merged.title,merged.description,merged.location,merged.price,merged.type,merged.area,merged.area_unit,merged.availability,
+   merged.purpose,merged.province,merged.city,merged.area_society,merged.block_sector,merged.street,merged.plot_number,merged.address,
+   merged.map_url,merged.price_negotiable,merged.price_notes,
+   case when not plot then merged.bedrooms end,case when not plot then merged.bathrooms end,case when not plot then merged.kitchens end,
+   case when not plot then merged.floors end,case when not plot then merged.parking_spaces end,case when not plot then merged.furnishing end,
+   case when not plot then merged.construction_status end,case when not plot then merged.property_age end,merged.amenities,
+   case when not plot then merged.building_categories else '{}' end,
+   case when actor.role='agent' then actor.id end,actor.id,actor.id)
+  returning * into prop;
+ else
+  update public.properties set title=merged.title,description=merged.description,location=merged.location,price=merged.price,
+   type=merged.type,area=merged.area,area_unit=merged.area_unit,availability=merged.availability,purpose=merged.purpose,
+   province=merged.province,city=merged.city,area_society=merged.area_society,block_sector=merged.block_sector,street=merged.street,
+   plot_number=merged.plot_number,address=merged.address,map_url=merged.map_url,price_negotiable=merged.price_negotiable,
+   price_notes=merged.price_notes,bedrooms=case when not plot then merged.bedrooms end,bathrooms=case when not plot then merged.bathrooms end,
+   kitchens=case when not plot then merged.kitchens end,floors=case when not plot then merged.floors end,
+   parking_spaces=case when not plot then merged.parking_spaces end,furnishing=case when not plot then merged.furnishing end,
+   construction_status=case when not plot then merged.construction_status end,property_age=case when not plot then merged.property_age end,
+   amenities=merged.amenities,building_categories=case when not plot then merged.building_categories else '{}' end,updated_by=actor.id
+  where id=prop.id returning * into prop;
+ end if;
+ if p_data?'owner_contact' then
+  contact=p_data->'owner_contact';
+  if jsonb_typeof(contact) not in ('object','null') or (jsonb_typeof(contact)='object'
+   and (contact-array['owner_name','owner_phone','owner_alt_phone','owner_notes','share_with_agents'])<>'{}'::jsonb) then
+   raise exception 'Unsupported owner contact details' using errcode='HA400';end if;
+  if jsonb_typeof(contact)='null' or not exists(select 1 from jsonb_each_text(contact) e
+   where e.key<>'share_with_agents' and nullif(btrim(e.value),'') is not null) then
+   delete from public.property_owner_contacts where property_id=prop.id;
+  else
+   insert into public.property_owner_contacts as c(property_id,owner_name,owner_phone,owner_alt_phone,owner_notes,share_with_agents)
+   values(prop.id,nullif(btrim(contact->>'owner_name'),''),nullif(btrim(contact->>'owner_phone'),''),
+    nullif(btrim(contact->>'owner_alt_phone'),''),nullif(btrim(contact->>'owner_notes'),''),
+    prop.owner_agent_id is null and coalesce((contact->>'share_with_agents')::boolean,false))
+   on conflict(property_id) do update set owner_name=excluded.owner_name,owner_phone=excluded.owner_phone,
+    owner_alt_phone=excluded.owner_alt_phone,owner_notes=excluded.owner_notes,share_with_agents=excluded.share_with_agents,updated_at=now();
+  end if;
+ end if;
+ -- What actually changed, by field name.
+ if p_property is not null then
+  changes=array(select k from unnest(array['title','description','type','purpose','availability','price','price_negotiable','price_notes',
+   'area','area_unit','province','city','area_society','block_sector','street','plot_number','address','map_url','bedrooms','bathrooms',
+   'kitchens','floors','parking_spaces','furnishing','construction_status','property_age','building_categories','amenities']) k
+   where to_jsonb(before)->k is distinct from to_jsonb(prop)->k);
+  if old_contact is distinct from (select to_jsonb(c)-array['property_id','updated_at'] from public.property_owner_contacts c where c.property_id=prop.id) then
+   changes=changes||'owner_contact'::text;end if;
+ end if;
+ -- Field names only: never prices, addresses or owner contact values. The
+ -- building categories are not private and are kept before and after.
+ meta=jsonb_build_object('fields',to_jsonb(array(select k from jsonb_object_keys(p_data-'expected_updated_at') k order by k)),
+  'ownership',case when prop.owner_agent_id is null then 'company' else 'agent' end)
+  ||case when p_property is not null then jsonb_build_object('changed',to_jsonb(changes)) else '{}'::jsonb end
+  ||case when prop.building_categories is distinct from cats_before then jsonb_build_object('building_categories',
+   jsonb_build_object('before',to_jsonb(cats_before),'after',to_jsonb(prop.building_categories))) else '{}'::jsonb end;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,case when p_property is null then 'create' else 'update' end,'properties',prop.id::text,p_request,meta);
+ if p_property is not null and actor.role='agent' and cardinality(changes)>0
+  and exists(select 1 from public.property_promotions where source_id=prop.id and copy_id is not null) then
+  perform public.notify_promotion_source(actor,prop,'details',public.promotion_change_text(before,prop,changes));
+ end if;
+ return public.inventory_property(p_actor,prop.id);
+end $$;
+
+-- ------------------------------------------------------------ promotion
+-- As in 044, and the copy starts with the original's building categories.
+create or replace function public.inventory_promote(p_actor uuid,p_property uuid,p_copy uuid,p_paths text[],p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.inventory_member(p_actor);prop public.properties;made public.properties;agent public.profiles;
+ planned integer;kept integer;
+begin
+ if actor.role<>'admin' then raise exception 'Only administrators can add properties to the Admin list' using errcode='HA403';end if;
+ prop=public.promotion_source(p_property,true);
+ p_paths=coalesce(p_paths,'{}'::text[]);
+ if p_copy is null or cardinality(p_paths)>20 or cardinality(p_paths)<>(select count(distinct x) from unnest(p_paths) x)
+  or exists(select 1 from unnest(p_paths) x where x is null or x !~ ('^'||p_copy::text||'/[0-9a-f-]{36}$')) then
+  raise exception 'Invalid picture' using errcode='HA400';end if;
+ select count(*) into planned from public.property_photo_cleanup where property_id=p_copy and not_before>now();
+ -- Every copied picture must still be reserved. A reservation that was
+ -- released or already processed may mean its file is gone.
+ delete from public.property_photo_cleanup where property_id=p_copy and storage_path=any(p_paths) and not_before>now();
+ get diagnostics kept=row_count;
+ if kept<>cardinality(p_paths) then
+  raise exception 'The pictures changed while they were being copied. Please try again.' using errcode='HA409';end if;
+ -- Pictures that could not be copied were never written; let the queue
+ -- clear their reservations.
+ update public.property_photo_cleanup set not_before=now() where property_id=p_copy;
+ select * into agent from public.profiles where id=prop.owner_agent_id;
+ insert into public.properties(id,title,description,location,price,type,area,area_unit,availability,purpose,province,city,area_society,
+  block_sector,street,plot_number,address,map_url,price_negotiable,price_notes,bedrooms,bathrooms,kitchens,floors,parking_spaces,
+  furnishing,construction_status,property_age,amenities,building_categories,owner_agent_id,created_by,updated_by)
+ values(p_copy,prop.title,prop.description,prop.location,prop.price,prop.type,prop.area,prop.area_unit,prop.availability,prop.purpose,
+  prop.province,prop.city,prop.area_society,prop.block_sector,prop.street,prop.plot_number,prop.address,prop.map_url,prop.price_negotiable,
+  prop.price_notes,prop.bedrooms,prop.bathrooms,prop.kitchens,prop.floors,prop.parking_spaces,prop.furnishing,prop.construction_status,
+  prop.property_age,prop.amenities,prop.building_categories,null,actor.id,actor.id)
+ returning * into made;
+ -- The seller's contact is kept for administrators only, as on the
+ -- agent's listing; it is not shared with agents unless an administrator
+ -- later chooses to.
+ insert into public.property_owner_contacts(property_id,owner_name,owner_phone,owner_alt_phone,owner_notes,share_with_agents)
+  select made.id,c.owner_name,c.owner_phone,c.owner_alt_phone,c.owner_notes,false from public.property_owner_contacts c where c.property_id=prop.id;
+ insert into public.property_photos(property_id,storage_path,position)
+  select made.id,u.x,(u.n-1)::integer from unnest(p_paths) with ordinality u(x,n);
+ insert into public.property_promotions(source_id,copy_id,source_property_no,copy_property_no,source_agent_id,source_agent_uid,source_agent_name,promoted_by)
+  values(prop.id,made.id,prop.property_no,made.property_no,agent.id,agent.uid,left(coalesce(nullif(btrim(agent.name),''),'Agent'),200),actor.id);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(actor.id,'promote','properties',made.id::text,p_request,jsonb_build_object('agent_id',agent.id,'source_id',prop.id,
+   'source_property_no',prop.property_no,'copy_property_no',made.property_no,'photo_count',kept,'photos_missing',greatest(planned-kept,0)));
+ return public.inventory_property(p_actor,made.id);
+end $$;
+
+-- ---------------------------------------------------------------- grants
+-- The browser gets nothing. The category helpers stay callable by the API
+-- role because the column's type uses them to check every write.
+do $$ declare f record; begin
+ for f in select p.oid::regprocedure signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname in ('property_category_list','property_categories_sorted','property_category_label',
+  'promotion_change_text','inventory_save','inventory_promote') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  if f.proname<>'promotion_change_text' then
+   execute format('grant execute on function %s to service_role',f.signature);
+  end if;
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
+
+
+-- Migration: 047_staff_management.sql
+
+-- Apply after 046. Safe to rerun. Staff accounts, departments and shifts
+-- (update 047).
+-- * A third role, staff, for office employees who are not sales agents
+--   (video editors, designers, developers, IT support and others). Staff
+--   check in and out, request leave, receive daily tasks, submit daily
+--   reports and use the checkout approvals of 045, exactly like agents. They
+--   get no leads, calls, inventory, documents or reports: the API refuses
+--   every other request from a staff account.
+-- * Departments (Sales, Media, Technical, Operations / Other, and any an
+--   administrator adds later) are separate from roles. Every account can
+--   have a department, a job title and a joining date.
+-- * Shifts per employee: from a chosen date (today or later) an employee can
+--   follow their own shift instead of the company policy. Each attendance
+--   record keeps the shift it was recorded with, and earlier days keep the
+--   rules they had, so nothing already recorded or reported changes.
+-- * Tasks can go to chosen people, all agents, all staff or whole
+--   departments; each person gets their own assignment, decided when the task
+--   is assigned. Performance can be filtered by department.
+-- Existing accounts, UIDs, attendance, leave, tasks and reports are
+-- unchanged; existing accounts have no department until one is chosen.
+-- Functions keep their names and arguments. Two get a further version with a
+-- department filter (task_performance, attendance_leave_page); the earlier
+-- versions still work. Never apply an older update again after this one.
+-- Runs as one transaction in a few seconds; profiles, tasks and a few small
+-- tables are locked briefly. If a lock is not available within 5 seconds
+-- everything rolls back unchanged: run it again later.
+
+set local lock_timeout='5s';
+do $$ begin
+ if to_regprocedure('public.property_category_list()') is null
+  or to_regprocedure('public.task_missing_reports_at(uuid,date,date,timestamp with time zone)') is null
+  or to_regprocedure('public.attendance_admin_rules(date)') is null then
+  raise exception 'Apply CRM updates up to 046 before update 047.';
+ end if;
+end $$;
+
+-- ----------------------------------------------------------------- roles
+alter table public.profiles drop constraint if exists profiles_role_check;
+alter table public.profiles add constraint profiles_role_check check(role in ('admin','agent','staff'));
+alter table public.account_provisioning drop constraint if exists account_provisioning_requested_role_check;
+alter table public.account_provisioning add constraint account_provisioning_requested_role_check check(requested_role in ('admin','agent','staff'));
+-- The sign-in history grows; its rows are checked without blocking sign-ins.
+alter table public.login_events drop constraint if exists login_events_portal_check;
+alter table public.login_events add constraint login_events_portal_check check(portal in ('admin','agent','staff')) not valid;
+alter table public.login_events validate constraint login_events_portal_check;
+
+-- ----------------------------------------------------------- departments
+-- Never deleted (profiles keep their link); an inactive department gets no
+-- new members or tasks.
+create table if not exists public.departments(
+ id uuid primary key default gen_random_uuid(),
+ name text not null check(name=btrim(name) and length(name) between 2 and 60),
+ sort_order integer not null default 100 check(sort_order between 0 and 10000),
+ active boolean not null default true,
+ created_by uuid references public.profiles(id),
+ created_at timestamptz not null default now(),
+ updated_at timestamptz not null default now()
+);
+create unique index if not exists departments_name on public.departments(lower(name));
+do $$ begin
+ if not exists(select 1 from pg_trigger where tgrelid='public.departments'::regclass and tgname='touch_updated') then
+  create trigger touch_updated before update on public.departments for each row execute function public.touch_updated();
+ end if;
+end $$;
+insert into public.departments(name,sort_order)
+select v.name,v.n from (values ('Sales',10),('Media',20),('Technical',30),('Operations / Other',40)) v(name,n)
+where not exists(select 1 from public.departments d where lower(d.name)=lower(v.name));
+
+alter table public.profiles
+ add column if not exists department_id uuid references public.departments(id),
+ add column if not exists job_title text,
+ add column if not exists joined_on date;
+alter table public.profiles drop constraint if exists profiles_employee_details;
+alter table public.profiles add constraint profiles_employee_details check(
+ (job_title is null or (job_title=btrim(job_title) and length(job_title) between 1 and 80))
+ and (joined_on is null or joined_on>='1990-01-01'));
+create index if not exists profiles_department on public.profiles(department_id) where department_id is not null;
+
+-- Chosen when an account is created and saved with its profile.
+alter table public.account_provisioning
+ add column if not exists requested_department_id uuid references public.departments(id),
+ add column if not exists requested_job_title text;
+alter table public.account_provisioning drop constraint if exists account_provisioning_requested_job_title;
+alter table public.account_provisioning add constraint account_provisioning_requested_job_title check(
+ requested_job_title is null or (requested_job_title=btrim(requested_job_title) and length(requested_job_title) between 1 and 80));
+
+-- ---------------------------------------------------------------- shifts
+-- From effective_from until the next row, the employee follows either the
+-- company policy (follows_company) or this shift. No row: the company policy.
+create table if not exists public.employee_shifts(
+ id uuid primary key default gen_random_uuid(),
+ user_id uuid not null references public.profiles(id),
+ effective_from date not null,
+ follows_company boolean not null default false,
+ label text,
+ shift_start time,
+ shift_end time,
+ work_days smallint[],
+ grace_minutes integer,
+ created_by uuid references public.profiles(id),
+ created_at timestamptz not null default now(),
+ unique(user_id,effective_from),
+ constraint employee_shifts_times check(
+  (follows_company and label is null and shift_start is null and shift_end is null and work_days is null and grace_minutes is null)
+  or (not follows_company and label=btrim(label) and length(label) between 1 and 60
+   and shift_end>shift_start and cardinality(work_days) between 1 and 7 and work_days<@'{1,2,3,4,5,6,7}'::smallint[]
+   and grace_minutes between 0 and 120 and make_interval(mins=>grace_minutes)<shift_end-shift_start))
+);
+
+do $$ declare t text; begin
+ foreach t in array array['departments','employee_shifts'] loop
+  execute format('alter table public.%I enable row level security',t);
+  execute format('revoke all on public.%I from public,anon,authenticated',t);
+  execute format('grant all on public.%I to service_role',t);
+ end loop;
+end $$;
+
+-- ----------------------------------------------------------------- tasks
+-- Who a task was for, in words, as it was when assigned.
+alter table public.tasks add column if not exists audience jsonb;
+alter table public.tasks drop constraint if exists tasks_category_check;
+alter table public.tasks add constraint tasks_category_check check(category in ('calls','follow_ups','site_visits','listings','meetings',
+ 'documents','media','technical','operations','other'));
+
+-- ---------------------------------------------------------------- helpers
+create or replace function public.department_name(p_id uuid) returns text language sql stable security definer set search_path='' as $$
+ select name from public.departments where id=p_id
+$$;
+-- The rules for an employee on a day: p_base (the company rules for that
+-- day) with the employee's own shift in force that day, if they have one.
+create or replace function public.attendance_shift_apply(p_base public.attendance_policies,p_user uuid,p_day date) returns public.attendance_policies language plpgsql stable security definer set search_path='' as $$
+declare s public.employee_shifts;result public.attendance_policies=p_base;
+begin
+ if p_base.id is null then return p_base;end if;
+ select * into s from public.employee_shifts where user_id=p_user and effective_from<=p_day order by effective_from desc limit 1;
+ if found and not s.follows_company then
+  result.name=s.label;result.shift_start=s.shift_start;result.shift_end=s.shift_end;
+  result.work_days=s.work_days;result.grace_minutes=s.grace_minutes;
+ end if;
+ return result;
+end $$;
+create or replace function public.attendance_policy_for(p_user uuid,p_day date) returns public.attendance_policies language sql stable security definer set search_path='' as $$
+ select public.attendance_shift_apply(public.attendance_policy_on(p_day),p_user,p_day)
+$$;
+create or replace function public.attendance_admin_rules_for(p_user uuid,p_day date) returns public.attendance_policies language sql stable security definer set search_path='' as $$
+ select public.attendance_shift_apply(public.attendance_admin_rules(p_day),p_user,p_day)
+$$;
+-- The shift an employee follows on a day, and the next change if one is set.
+create or replace function public.employee_shift_info(p_user uuid,p_day date) returns jsonb language sql stable security definer set search_path='' as $$
+ with s as (select * from public.employee_shifts where user_id=p_user and effective_from<=p_day order by effective_from desc limit 1),
+  pol as (select * from public.attendance_policy_for(p_user,p_day)),
+  nxt as (select * from public.employee_shifts where user_id=p_user and effective_from>p_day order by effective_from limit 1)
+ select jsonb_build_object('source',case when exists(select 1 from s where not follows_company) then 'assigned' else 'company' end,
+  'label',(select name from pol),'shift_start',(select to_char(shift_start,'HH24:MI') from pol),
+  'shift_end',(select to_char(shift_end,'HH24:MI') from pol),'work_days',(select to_jsonb(work_days) from pol),
+  'grace_minutes',(select grace_minutes from pol),'effective_from',(select effective_from from s),
+  'upcoming',(select jsonb_build_object('effective_from',n.effective_from,'source',case when n.follows_company then 'company' else 'assigned' end,
+    'label',n.label,'shift_start',to_char(n.shift_start,'HH24:MI'),'shift_end',to_char(n.shift_end,'HH24:MI'),
+    'work_days',to_jsonb(n.work_days),'grace_minutes',n.grace_minutes) from nxt n))
+$$;
+
+-- Chosen people for a task: active agents and staff only.
+create or replace function public.task_agents(p_ids jsonb,p_all boolean) returns uuid[] language plpgsql stable security definer set search_path='' as $$
+declare ids uuid[];bad public.profiles;
+begin
+ if p_all then
+  return array(select id from public.profiles where role='agent' and active and deleted_at is null order by name,id);
+ end if;
+ if jsonb_typeof(p_ids) is distinct from 'array' or jsonb_array_length(p_ids) not between 1 and 200 then
+  raise exception 'Choose at least one person' using errcode='HA400';end if;
+ select array_agg(distinct x::uuid) into ids from jsonb_array_elements_text(p_ids) x;
+ select p.* into bad from unnest(ids) i left join public.profiles p on p.id=i
+  where p.id is null or p.role not in ('agent','staff') or not p.active or p.deleted_at is not null limit 1;
+ if found then
+  raise exception '% is not an active % and can''t be given tasks',coalesce(bad.name,'An account'),
+   case bad.role when 'agent' then 'agent' when 'staff' then 'staff member' else 'agent or staff member' end using errcode='HA400';end if;
+ return ids;
+end $$;
+-- Everyone a new task goes to: chosen people, all active agents, all active
+-- staff and the active agents and staff of chosen departments, as they are
+-- now. Someone who joins a department later is not added.
+create or replace function public.task_recipients(p_data jsonb) returns uuid[] language plpgsql stable security definer set search_path='' as $$
+declare ids uuid[]='{}';deps uuid[];bad text;any_group boolean=false;
+begin
+ if jsonb_typeof(p_data->'assignees') not in ('array','null') then raise exception 'Choose at least one person' using errcode='HA400';end if;
+ if jsonb_typeof(p_data->'departments') not in ('array','null') or jsonb_array_length(coalesce(nullif(p_data->'departments','null'::jsonb),'[]'::jsonb))>20 then
+  raise exception 'Choose departments from the list' using errcode='HA400';end if;
+ if jsonb_array_length(coalesce(nullif(p_data->'assignees','null'::jsonb),'[]'::jsonb))>0 then
+  ids=ids||public.task_agents(p_data->'assignees',false);end if;
+ if coalesce((p_data->>'all_agents')::boolean,false) then any_group=true;ids=ids||public.task_agents(null,true);end if;
+ if coalesce((p_data->>'all_staff')::boolean,false) then
+  any_group=true;ids=ids||array(select id from public.profiles where role='staff' and active and deleted_at is null);end if;
+ if jsonb_array_length(coalesce(nullif(p_data->'departments','null'::jsonb),'[]'::jsonb))>0 then
+  any_group=true;
+  select array_agg(distinct x::uuid) into deps from jsonb_array_elements_text(p_data->'departments') x;
+  select coalesce(d.name,'A department') into bad from unnest(deps) i left join public.departments d on d.id=i where d.id is null or not d.active limit 1;
+  if bad is not null then raise exception '% is not an active department',bad using errcode='HA400';end if;
+  ids=ids||array(select id from public.profiles where department_id=any(deps) and role in ('agent','staff') and active and deleted_at is null);
+ end if;
+ if cardinality(ids)=0 and not any_group then raise exception 'Choose at least one person' using errcode='HA400';end if;
+ return array(select distinct x from unnest(ids) x);
+end $$;
+-- The groups a task was assigned to, in words, kept with the task.
+create or replace function public.task_audience(p_data jsonb) returns jsonb language sql stable security definer set search_path='' as $$
+ select nullif(jsonb_strip_nulls(jsonb_build_object(
+  'all_agents',case when coalesce((p_data->>'all_agents')::boolean,false) then true end,
+  'all_staff',case when coalesce((p_data->>'all_staff')::boolean,false) then true end,
+  'departments',case when jsonb_typeof(p_data->'departments')='array' and jsonb_array_length(p_data->'departments')>0 then
+   (select jsonb_agg(d.name order by d.sort_order,lower(d.name)) from public.departments d
+    where d.id::text in (select jsonb_array_elements_text(p_data->'departments'))) end,
+  'people',case when jsonb_typeof(p_data->'assignees')='array' and jsonb_array_length(p_data->'assignees')>0 then
+   jsonb_array_length(p_data->'assignees') end)),'{}'::jsonb)
+$$;
+
+
+-- ------------------------------------------- restated for staff and shifts
+
+-- As in 040, for staff too.
+create or replace function public.attendance_member(p_actor uuid) returns public.profiles language plpgsql security definer set search_path='' as $$
+declare actor public.profiles;
+begin
+ select * into actor from public.profiles where id=p_actor and active and deleted_at is null and role in ('admin','agent','staff') for share;
+ if not found then raise exception 'Your account is not active' using errcode='HA403';end if;
+ return actor;
+end $$;
+
+-- As in 040, for staff too, with each employee's own shift for the day.
+create or replace function public.attendance_days(p_from date,p_to date,p_user uuid,p_now timestamptz)
+returns table(user_id uuid,day date,tracked boolean,eligible boolean,scheduled boolean,holiday text,leave_type text,record_id uuid,
+ check_in_at timestamptz,check_out_at timestamptz,state text,punctuality text,late_minutes integer,beyond_grace_minutes integer,
+ worked_minutes integer,early_departure_minutes integer,overtime_minutes integer,corrected boolean,shift_start time,shift_end time,
+ pending_correction boolean)
+language sql stable security definer set search_path='' as $$
+ with today as (select public.attendance_local_date(p_now) d),
+ people as (
+  select p.id from public.profiles p
+  where (p_user is null or p.id=p_user) and p.role in ('admin','agent','staff')
+   and (exists(select 1 from public.attendance_periods e where e.user_id=p.id and e.starts_on<=p_to and (e.ends_on is null or e.ends_on>=p_from))
+    or exists(select 1 from public.attendance_records r where r.user_id=p.id and r.attendance_date between p_from and p_to))
+ ),
+ days as (select g::date d from generate_series(p_from::timestamp,p_to::timestamp,interval '1 day') g),
+ base as (
+  select pe.id uid,dd.d,pol.id pol_id,pol.work_days,pol.shift_start pol_start,pol.shift_end pol_end,
+   exists(select 1 from public.attendance_periods e where e.user_id=pe.id and e.starts_on<=dd.d and (e.ends_on is null or e.ends_on>=dd.d)) ok,
+   (select h.name from public.attendance_holidays h where h.holiday_date=dd.d) hol,
+   (select l.leave_type from public.attendance_leave_requests l where l.user_id=pe.id and l.status='approved' and dd.d between l.start_date and l.end_date limit 1) lv,
+   r.*
+  from people pe cross join days dd
+  left join lateral public.attendance_policy_for(pe.id,dd.d) pol on true
+  left join public.attendance_records r on r.user_id=pe.id and r.attendance_date=dd.d
+ )
+ select b.uid,b.d,b.pol_id is not null,b.ok,
+  b.pol_id is not null and b.ok and extract(isodow from b.d)::smallint=any(b.work_days),
+  b.hol,b.lv,b.id,b.check_in_at,b.check_out_at,
+  case
+   when b.id is not null then case when b.state='checked_in' and b.d<t.d then 'incomplete' else b.state end
+   when b.pol_id is null then 'not_tracked'
+   when not b.ok then 'not_employed'
+   when not (extract(isodow from b.d)::smallint=any(b.work_days)) then 'day_off'
+   when b.hol is not null then 'holiday'
+   when b.lv is not null then 'leave'
+   when b.d>t.d then 'upcoming'
+   when b.d=t.d and p_now<public.attendance_moment(b.d,b.pol_end) then 'not_checked_in'
+   else 'absent'
+  end,
+  b.punctuality,b.late_minutes,b.beyond_grace_minutes,b.worked_minutes,b.early_departure_minutes,b.overtime_minutes,
+  coalesce(b.corrected,false),coalesce(b.shift_start,b.pol_start),coalesce(b.shift_end,b.pol_end),
+  exists(select 1 from public.attendance_corrections c where c.user_id=b.uid and c.attendance_date=b.d and c.status='pending')
+ from base b cross join today t
+$$;
+
+-- As in 040, with the employee's own shift, department and job title.
+create or replace function public.attendance_me(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(now());pol public.attendance_policies=public.attendance_policy_for(p_actor,today);
+ month_start date=date_trunc('month',today)::date;result jsonb;
+begin
+ select jsonb_build_object(
+  'server_now',now(),'date',today,
+  'employee',jsonb_build_object('id',actor.id,'name',actor.name,'uid',actor.uid,'role',actor.role,
+   'department',public.department_name(actor.department_id),'job_title',actor.job_title),
+  'policy',case when pol.id is null then null else jsonb_build_object('name',pol.name,'shift_start',to_char(pol.shift_start,'HH24:MI'),'shift_end',to_char(pol.shift_end,'HH24:MI'),
+   'work_days',to_jsonb(pol.work_days),'grace_minutes',pol.grace_minutes,'timezone',pol.timezone,
+   'assigned',exists(select 1 from public.employee_shifts s where s.user_id=p_actor and s.effective_from<=today and not s.follows_company
+    and s.effective_from=(select max(x.effective_from) from public.employee_shifts x where x.user_id=p_actor and x.effective_from<=today))) end,
+  'today',(select to_jsonb(d) from public.attendance_days(today,today,p_actor,now()) d),
+  'month',(select to_jsonb(t)-'user_id' from public.attendance_totals(month_start,today,p_actor,now()) t),
+  'recent',(select coalesce(jsonb_agg(to_jsonb(d)-'user_id' order by d.day desc),'[]'::jsonb) from public.attendance_days(today-13,today,p_actor,now()) d where d.state not in ('not_tracked','not_employed')),
+  'incomplete',(select coalesce(jsonb_agg(jsonb_build_object('date',d.day,'check_in_at',d.check_in_at,'pending_correction',d.pending_correction) order by d.day desc),'[]'::jsonb)
+   from public.attendance_days(today-45,today-1,p_actor,now()) d where d.state='incomplete'),
+  'pending_leave',(select count(*) from public.attendance_leave_requests where user_id=p_actor and status='pending'),
+  'pending_corrections',(select count(*) from public.attendance_corrections where user_id=p_actor and status='pending')) into result;
+ return result;
+end $$;
+
+-- As in 040, recording the employee's own shift for the day.
+create or replace function public.attendance_check_in_at(p_actor uuid,p_at timestamptz,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);day date=public.attendance_local_date(p_at);pol public.attendance_policies;
+ holiday text;result public.attendance_records;calc record;closed integer;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ pol=public.attendance_policy_for(p_actor,day);
+ if pol.id is null then raise exception 'Attendance tracking has not started yet' using errcode='HA409';end if;
+ if not exists(select 1 from public.attendance_periods e where e.user_id=p_actor and e.starts_on<=day and (e.ends_on is null or e.ends_on>=day)) then
+  raise exception 'Attendance is not enabled for your account today' using errcode='HA409';end if;
+ if not (extract(isodow from day)::smallint=any(pol.work_days)) then
+  raise exception 'Today is a scheduled day off. No check-in is needed.' using errcode='HA409';end if;
+ select name into holiday from public.attendance_holidays where holiday_date=day;
+ if holiday is not null then raise exception 'Today is a company holiday (%). No check-in is needed.',holiday using errcode='HA409';end if;
+ if exists(select 1 from public.attendance_leave_requests where user_id=p_actor and status='approved' and day between start_date and end_date) then
+  raise exception 'You are on approved leave today. Ask an administrator if you need to work.' using errcode='HA409';end if;
+ if exists(select 1 from public.attendance_records where user_id=p_actor and attendance_date=day) then
+  raise exception 'You have already checked in today' using errcode='HA409';end if;
+ -- A session left open on an earlier day is closed as incomplete (never
+ -- given an invented check-out) so the new day can start.
+ update public.attendance_records set state='incomplete' where user_id=p_actor and state='checked_in' and attendance_date<day;
+ get diagnostics closed=row_count;
+ select * into calc from public.attendance_compute(day,pol.shift_start,pol.shift_end,pol.grace_minutes,p_at,null);
+ insert into public.attendance_records(user_id,attendance_date,policy_id,shift_start,shift_end,grace_minutes,check_in_at,state,
+  punctuality,late_minutes,beyond_grace_minutes)
+ values(p_actor,day,pol.id,pol.shift_start,pol.shift_end,pol.grace_minutes,p_at,'checked_in',calc.punctuality,calc.late_minutes,calc.beyond_grace_minutes)
+ returning * into result;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'attendance.check_in','attendance_records',result.id::text,p_request,
+   jsonb_build_object('date',day,'punctuality',calc.punctuality,'late_minutes',calc.late_minutes,'closed_incomplete',closed));
+ return public.attendance_record_json(result)||jsonb_build_object('closed_incomplete',closed);
+end $$;
+
+-- As in 040, counting staff too. The times shown are the company shift.
+create or replace function public.attendance_overview(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(now());pol public.attendance_policies=public.attendance_policy_on(today);result jsonb;
+begin
+ with d as (select * from public.attendance_days(today,today,null,now()) where eligible or record_id is not null)
+ select jsonb_build_object('date',today,'server_now',now(),
+  'is_workday',pol.id is not null and extract(isodow from today)::smallint=any(pol.work_days),
+  'holiday',(select name from public.attendance_holidays where holiday_date=today),
+  'shift_start',to_char(pol.shift_start,'HH24:MI'),'shift_end',to_char(pol.shift_end,'HH24:MI'),'grace_minutes',pol.grace_minutes,
+  'employees',jsonb_build_object(
+   'active',(select count(*) from public.profiles where active and deleted_at is null and role in ('admin','agent','staff')),
+   'agents',(select count(*) from public.profiles where active and deleted_at is null and role='agent'),
+   'admins',(select count(*) from public.profiles where active and deleted_at is null and role='admin'),
+   'staff',(select count(*) from public.profiles where active and deleted_at is null and role='staff')),
+  -- Each employee has exactly one state today; punctuality is a separate view
+  -- of those who checked in.
+  'states',(select coalesce(jsonb_object_agg(state,n),'{}'::jsonb) from (select state,count(*) n from d group by state) s),
+  'punctuality',(select coalesce(jsonb_object_agg(punctuality,n),'{}'::jsonb) from (select punctuality,count(*) n from d where punctuality is not null group by punctuality) s),
+  'incomplete_30_days',(select count(*) from public.attendance_records where attendance_date between today-30 and today-1 and state in ('checked_in','incomplete')),
+  'pending_leave',(select count(*) from public.attendance_leave_requests where status='pending'),
+  'pending_corrections',(select count(*) from public.attendance_corrections where status='pending'),
+  'on_leave_today',(select count(*) from d where leave_type is not null)) into result;
+ return result;
+end $$;
+
+-- As in 040, for staff too, with each employee's department.
+create or replace function public.attendance_daily(p_actor uuid,p_date date,p_search text,p_role text,p_state text,p_punctuality text,p_account text,p_page integer,p_limit integer)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);term text=nullif(btrim(coalesce(p_search,'')),'');result jsonb;
+begin
+ if p_date is null or p_page not between 1 and 100000 or p_limit not between 1 and 1000 or length(coalesce(p_search,''))>100
+  or (p_role is not null and p_role not in ('admin','agent','staff')) or (p_account is not null and p_account not in ('active','inactive')) then
+  raise exception 'Invalid register filter' using errcode='HA400';end if;
+ with rows as (
+  select d.*,p.name,p.uid,p.role,public.department_name(p.department_id) department,(p.active and p.deleted_at is null) account_active
+  from public.attendance_days(p_date,p_date,null,now()) d join public.profiles p on p.id=d.user_id
+  where (d.eligible or d.record_id is not null)
+ ), filtered as (
+  select * from rows r
+  where (term is null or r.name ilike '%'||term||'%' or r.uid::text=term)
+   and (p_role is null or r.role=p_role) and (p_state is null or r.state=p_state) and (p_punctuality is null or r.punctuality=p_punctuality)
+   and (p_account is null or r.account_active=(p_account='active'))
+ ), page as (select * from filtered order by name,user_id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('date',p_date,
+  'data',coalesce((select jsonb_agg(to_jsonb(page) order by name,user_id) from page),'[]'::jsonb),
+  'count',(select count(*) from filtered),'page',p_page,'limit',p_limit,
+  'summary',jsonb_build_object('total',(select count(*) from rows),
+   'states',(select coalesce(jsonb_object_agg(state,n),'{}'::jsonb) from (select state,count(*) n from rows group by state) s),
+   'punctuality',(select coalesce(jsonb_object_agg(punctuality,n),'{}'::jsonb) from (select punctuality,count(*) n from rows where punctuality is not null group by punctuality) s)))
+ into result;
+ return result;
+end $$;
+
+-- As in 040, for staff too, with each employee's department.
+create or replace function public.attendance_period(p_actor uuid,p_from date,p_to date,p_search text,p_role text,p_account text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);term text=nullif(btrim(coalesce(p_search,'')),'');result jsonb;
+begin
+ if p_from is null or p_to is null or p_from>p_to or p_to-p_from>30 or length(coalesce(p_search,''))>100
+  or (p_role is not null and p_role not in ('admin','agent','staff')) or (p_account is not null and p_account not in ('active','inactive')) then
+  raise exception 'Choose a range of up to 31 days' using errcode='HA400';end if;
+ with people as (
+  select p.id,p.name,p.uid,p.role,public.department_name(p.department_id) department,(p.active and p.deleted_at is null) account_active from public.profiles p
+  where p.role in ('admin','agent','staff') and (term is null or p.name ilike '%'||term||'%' or p.uid::text=term)
+   and (p_role is null or p.role=p_role) and (p_account is null or (p.active and p.deleted_at is null)=(p_account='active'))
+ ), days as (select d.* from public.attendance_days(p_from,p_to,null,now()) d join people pe on pe.id=d.user_id),
+ totals as (select t.* from public.attendance_totals(p_from,p_to,null,now()) t join people pe on pe.id=t.user_id)
+ select jsonb_build_object('from',p_from,'to',p_to,
+  'employees',coalesce((select jsonb_agg(jsonb_build_object('user_id',pe.id,'name',pe.name,'uid',pe.uid,'role',pe.role,'department',pe.department,'active',pe.account_active)
+    ||(to_jsonb(t)-'user_id')
+    ||jsonb_build_object('days',(select jsonb_agg(jsonb_build_object('date',d.day,'state',d.state,'punctuality',d.punctuality,'late_minutes',d.late_minutes,
+      'worked_minutes',d.worked_minutes,'check_in_at',d.check_in_at,'check_out_at',d.check_out_at) order by d.day) from days d where d.user_id=pe.id))
+    order by pe.name,pe.id)
+   from people pe join totals t on t.user_id=pe.id),'[]'::jsonb),
+  'trend',coalesce((select jsonb_agg(jsonb_build_object('date',x.day,'present',x.present,'late',x.late,'absent',x.absent,'leave',x.leave,'incomplete',x.incomplete) order by x.day)
+   from (select day,count(*) filter(where state in ('checked_out','checked_in')) present,count(*) filter(where punctuality='late') late,
+    count(*) filter(where state='absent') absent,count(*) filter(where state='leave') leave,count(*) filter(where state='incomplete') incomplete
+    from days group by day) x),'[]'::jsonb))
+ into result;
+ return result;
+end $$;
+
+-- As in 040, for staff too, with each employee's department.
+create or replace function public.attendance_employees(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);
+begin
+ return (select coalesce(jsonb_agg(jsonb_build_object('id',p.id,'name',p.name,'uid',p.uid,'role',p.role,'department',public.department_name(p.department_id),'active',p.active and p.deleted_at is null) order by p.name,p.id),'[]'::jsonb)
+  from public.profiles p where p.role in ('admin','agent','staff')
+   and (exists(select 1 from public.attendance_periods e where e.user_id=p.id) or exists(select 1 from public.attendance_records r where r.user_id=p.id)));
+end $$;
+
+-- As in 040, for staff too, with the department, job title and shift.
+create or replace function public.attendance_employee(p_actor uuid,p_user uuid,p_from date,p_to date) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);person public.profiles;result jsonb;
+begin
+ if actor.role<>'admin' and p_user is distinct from p_actor then raise exception 'You can only view your own attendance' using errcode='HA403';end if;
+ if p_from is null or p_to is null or p_from>p_to or p_to-p_from>400 then raise exception 'Choose a date range of up to 400 days' using errcode='HA400';end if;
+ select * into person from public.profiles where id=p_user and role in ('admin','agent','staff');
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ select jsonb_build_object(
+  'employee',jsonb_build_object('id',person.id,'name',person.name,'uid',person.uid,'role',person.role,'active',person.active and person.deleted_at is null,
+   'department',public.department_name(person.department_id),'job_title',person.job_title,
+   'shift',public.employee_shift_info(person.id,public.attendance_local_date(now())),
+   'periods',(select coalesce(jsonb_agg(jsonb_build_object('starts_on',starts_on,'ends_on',ends_on) order by starts_on),'[]'::jsonb) from public.attendance_periods where user_id=person.id)),
+  'from',p_from,'to',p_to,
+  'totals',(select to_jsonb(t)-'user_id' from public.attendance_totals(p_from,p_to,p_user,now()) t),
+  'days',(select coalesce(jsonb_agg(to_jsonb(d)-'user_id' order by d.day desc),'[]'::jsonb) from public.attendance_days(p_from,p_to,p_user,now()) d where d.state not in ('not_tracked','upcoming')),
+  'leave',(select coalesce(jsonb_agg(to_jsonb(l) order by l.created_at desc),'[]'::jsonb) from (select * from public.attendance_leave_requests where user_id=p_user order by created_at desc limit 50) l),
+  'corrections',(select coalesce(jsonb_agg(to_jsonb(c) order by c.created_at desc),'[]'::jsonb) from (select * from public.attendance_corrections where user_id=p_user order by created_at desc limit 50) c))
+ into result;
+ return result;
+end $$;
+
+-- As in 040, checking the day against the employee's own shift.
+create or replace function public.attendance_correction_request(p_actor uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(now());day date;kind text;pol public.attendance_policies;
+ rec public.attendance_records;want_in timestamptz;want_out timestamptz;result public.attendance_corrections;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['attendance_date','correction_type','requested_check_in_at','requested_check_out_at','reason'])<>'{}'::jsonb then
+  raise exception 'Invalid correction request' using errcode='HA400';end if;
+ day=(p_data->>'attendance_date')::date;kind=p_data->>'correction_type';
+ want_in=(p_data->>'requested_check_in_at')::timestamptz;want_out=(p_data->>'requested_check_out_at')::timestamptz;
+ if day is null or day>today or day<today-45 then raise exception 'Choose a date from the last 45 days' using errcode='HA400';end if;
+ if kind is null or kind not in ('missing_check_in','missing_check_out','incorrect_check_in','incorrect_check_out') then
+  raise exception 'Choose a correction type' using errcode='HA400';end if;
+ pol=public.attendance_policy_for(p_actor,day);
+ if pol.id is null or not exists(select 1 from public.attendance_periods e where e.user_id=p_actor and e.starts_on<=day and (e.ends_on is null or e.ends_on>=day)) then
+  raise exception 'Attendance was not tracked for you on that date' using errcode='HA400';end if;
+ if not (extract(isodow from day)::smallint=any(pol.work_days)) or exists(select 1 from public.attendance_holidays where holiday_date=day) then
+  raise exception 'That date was a day off or holiday' using errcode='HA400';end if;
+ if (want_in is not null and public.attendance_local_date(want_in)<>day) or (want_out is not null and public.attendance_local_date(want_out)<>day) then
+  raise exception 'Requested times must be on the selected date' using errcode='HA400';end if;
+ if (want_in is not null and want_in>now()) or (want_out is not null and want_out>now()) then
+  raise exception 'Requested times cannot be in the future' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ select * into rec from public.attendance_records where user_id=p_actor and attendance_date=day;
+ if kind='missing_check_in' then
+  if rec.id is not null then raise exception 'A check-in already exists for that date. Choose Incorrect check-in instead.' using errcode='HA409';end if;
+  if want_in is null then raise exception 'Enter the time you started work' using errcode='HA400';end if;
+ elsif rec.id is null then raise exception 'There is no check-in for that date. Choose Missing check-in instead.' using errcode='HA409';
+ elsif kind='missing_check_out' then
+  if rec.check_out_at is not null then raise exception 'A check-out already exists for that date. Choose Incorrect check-out instead.' using errcode='HA409';end if;
+  if day=today and rec.state='checked_in' then raise exception 'You can still check out today with the Check out button' using errcode='HA409';end if;
+  if want_out is null then raise exception 'Enter the time you finished work' using errcode='HA400';end if;
+ elsif kind='incorrect_check_in' then
+  if want_in is null then raise exception 'Enter the correct check-in time' using errcode='HA400';end if;
+ else
+  if rec.check_out_at is null then raise exception 'There is no check-out to correct. Choose Missing check-out instead.' using errcode='HA409';end if;
+  if want_out is null then raise exception 'Enter the correct check-out time' using errcode='HA400';end if;
+ end if;
+ if coalesce(want_out,rec.check_out_at) is not null and coalesce(want_out,rec.check_out_at)<=coalesce(want_in,rec.check_in_at) then
+  raise exception 'Check-out must be after check-in' using errcode='HA400';end if;
+ if exists(select 1 from public.attendance_corrections where user_id=p_actor and attendance_date=day and status='pending') then
+  raise exception 'You already have a pending correction for that date' using errcode='HA409';end if;
+ insert into public.attendance_corrections(user_id,attendance_date,record_id,correction_type,original_check_in_at,original_check_out_at,
+  requested_check_in_at,requested_check_out_at,reason)
+ values(p_actor,day,rec.id,kind,rec.check_in_at,rec.check_out_at,want_in,want_out,btrim(p_data->>'reason')) returning * into result;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'attendance.correction_requested','attendance_corrections',result.id::text,p_request,
+   jsonb_build_object('date',day,'correction_type',kind));
+ perform public.attendance_notify_admins(p_actor,'attendance_request','correction:'||result.id,'Attendance correction: '||actor.name,
+  case kind when 'missing_check_in' then 'Missing check-in' when 'missing_check_out' then 'Missing check-out' when 'incorrect_check_in' then 'Incorrect check-in' else 'Incorrect check-out' end
+   ||' on '||to_char(day,'DD Mon')||'. Review it in Attendance management.','/attendance-management?tab=corrections');
+ return to_jsonb(result);
+end $$;
+
+-- As in 040, creating a missing day with the employee's own shift.
+create or replace function public.attendance_correction_review(p_actor uuid,p_id uuid,p_decision text,p_note text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);item public.attendance_corrections;rec public.attendance_records;pol public.attendance_policies;
+ new_in timestamptz;new_out timestamptz;calc record;today date=public.attendance_local_date(now());before jsonb;
+begin
+ if p_decision is null or p_decision not in ('approved','rejected') then raise exception 'Choose approve or reject' using errcode='HA400';end if;
+ if p_note is not null and length(p_note)>300 then raise exception 'Use a review note of 300 characters or fewer' using errcode='HA400';end if;
+ select * into item from public.attendance_corrections where id=p_id for update;
+ if not found then raise exception 'Correction request not found' using errcode='HA404';end if;
+ if item.user_id=p_actor then raise exception 'You cannot review your own correction. Another administrator must review it.' using errcode='HA403';end if;
+ if item.status<>'pending' then raise exception 'This request has already been reviewed' using errcode='HA409';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||item.user_id,40));
+ if p_decision='approved' then
+  select * into rec from public.attendance_records where user_id=item.user_id and attendance_date=item.attendance_date for update;
+  -- The record must still be what the employee saw when they asked.
+  if (item.record_id is null and rec.id is not null) or (item.record_id is not null and (rec.id is distinct from item.record_id
+   or rec.check_in_at is distinct from item.original_check_in_at or rec.check_out_at is distinct from item.original_check_out_at)) then
+   raise exception 'This attendance changed after the request was made. Reject it and ask for a new request.' using errcode='HA409';end if;
+  new_in=coalesce(item.requested_check_in_at,rec.check_in_at);
+  new_out=coalesce(item.requested_check_out_at,rec.check_out_at);
+  if new_out is not null and new_out<=new_in then raise exception 'Check-out must be after check-in' using errcode='HA400';end if;
+  if rec.id is null then
+   pol=public.attendance_policy_for(item.user_id,item.attendance_date);
+   if pol.id is null then raise exception 'Attendance was not tracked on that date' using errcode='HA409';end if;
+   select * into calc from public.attendance_compute(item.attendance_date,pol.shift_start,pol.shift_end,pol.grace_minutes,new_in,new_out);
+   insert into public.attendance_records(user_id,attendance_date,policy_id,shift_start,shift_end,grace_minutes,check_in_at,check_out_at,state,
+    punctuality,late_minutes,beyond_grace_minutes,worked_minutes,early_departure_minutes,overtime_minutes,corrected)
+   values(item.user_id,item.attendance_date,pol.id,pol.shift_start,pol.shift_end,pol.grace_minutes,new_in,new_out,
+    case when new_out is not null then 'checked_out' when item.attendance_date<today then 'incomplete' else 'checked_in' end,
+    calc.punctuality,calc.late_minutes,calc.beyond_grace_minutes,calc.worked_minutes,calc.early_departure_minutes,calc.overtime_minutes,true)
+   returning * into rec;
+   before=null;
+  else
+   before=jsonb_build_object('check_in_at',rec.check_in_at,'check_out_at',rec.check_out_at,'state',rec.state,'punctuality',rec.punctuality,'worked_minutes',rec.worked_minutes);
+   select * into calc from public.attendance_compute(rec.attendance_date,rec.shift_start,rec.shift_end,rec.grace_minutes,new_in,new_out);
+   update public.attendance_records set check_in_at=new_in,check_out_at=new_out,
+    state=case when new_out is not null then 'checked_out' when attendance_date<today then 'incomplete' else 'checked_in' end,
+    punctuality=calc.punctuality,late_minutes=calc.late_minutes,beyond_grace_minutes=calc.beyond_grace_minutes,worked_minutes=calc.worked_minutes,
+    early_departure_minutes=calc.early_departure_minutes,overtime_minutes=calc.overtime_minutes,corrected=true
+   where id=rec.id returning * into rec;
+  end if;
+  update public.attendance_corrections set record_id=rec.id where id=p_id;
+ end if;
+ update public.attendance_corrections set status=p_decision,reviewer_id=p_actor,review_note=nullif(btrim(p_note),''),reviewed_at=now()
+ where id=p_id returning * into item;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'attendance.correction_'||p_decision,'attendance_corrections',p_id::text,p_request,
+   jsonb_build_object('user_id',item.user_id,'date',item.attendance_date,'correction_type',item.correction_type,'record_id',item.record_id,
+    'before',before,'after',case when p_decision='approved' then jsonb_build_object('check_in_at',rec.check_in_at,'check_out_at',rec.check_out_at,
+     'state',rec.state,'punctuality',rec.punctuality,'worked_minutes',rec.worked_minutes) end));
+ perform public.push_notification(item.user_id,'attendance_review','correction:'||item.id,
+  case when p_decision='approved' then 'Attendance correction approved' else 'Attendance correction not approved' end,
+  'Your correction for '||to_char(item.attendance_date,'DD Mon')||case when p_decision='approved' then ' has been applied' else ' was not approved' end||
+  coalesce('. Note: '||item.review_note,'.'),'/attendance',null);
+ return to_jsonb(item);
+end $$;
+
+-- As in 042, with the employee's own working days.
+create or replace function public.attendance_admin_tidy(p_user uuid) returns void language plpgsql security definer set search_path='' as $$
+declare a public.attendance_periods;b public.attendance_periods;changed boolean;
+begin
+ delete from public.attendance_periods e where e.user_id=p_user and e.recorded_by is not null and not exists(
+  select 1 from generate_series(e.starts_on::timestamp,e.ends_on::timestamp,interval '1 day') g
+  where extract(isodow from g::date)::smallint=any((public.attendance_admin_rules_for(p_user,g::date)).work_days)
+   and not exists(select 1 from public.attendance_holidays h where h.holiday_date=g::date));
+ loop
+  changed=false;a=null;
+  for b in select * from public.attendance_periods where user_id=p_user order by starts_on loop
+   if a.recorded_by is not null and b.starts_on>a.ends_on and not exists(
+    select 1 from generate_series((a.ends_on+1)::timestamp,(b.starts_on-1)::timestamp,interval '1 day') g
+    where extract(isodow from g::date)::smallint=any((public.attendance_admin_rules_for(p_user,g::date)).work_days)
+     and not exists(select 1 from public.attendance_holidays h where h.holiday_date=g::date)) then
+    if b.recorded_by is not null then
+     delete from public.attendance_periods where id=b.id;
+     update public.attendance_periods set ends_on=b.ends_on where id=a.id;
+     changed=true;exit;
+    elsif a.ends_on<b.starts_on-1 then
+     update public.attendance_periods set ends_on=b.starts_on-1 where id=a.id;
+    end if;
+   end if;
+   a=b;
+  end loop;
+  exit when not changed;
+ end loop;
+end $$;
+
+-- As in 042, for staff too, with the employee's own shift.
+create or replace function public.attendance_admin_day_at(p_actor uuid,p_user uuid,p_day date,p_now timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);person public.profiles;rules public.attendance_policies;
+ rec public.attendance_records;lv public.attendance_leave_requests;d record;
+begin
+ if p_day is null then raise exception 'Choose a date' using errcode='HA400';end if;
+ select * into person from public.profiles where id=p_user and role in ('admin','agent','staff') and deleted_at is null;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ rules=public.attendance_admin_rules_for(p_user,p_day);
+ select * into rec from public.attendance_records where user_id=p_user and attendance_date=p_day;
+ select * into lv from public.attendance_leave_requests where user_id=p_user and status='approved' and p_day between start_date and end_date order by created_at limit 1;
+ select * into d from public.attendance_days(p_day,p_day,p_user,p_now) limit 1;
+ return jsonb_build_object('date',p_day,'today',public.attendance_local_date(p_now),'self',p_user=p_actor,
+  'employee',jsonb_build_object('id',person.id,'name',person.name,'uid',person.uid,'role',person.role,'active',person.active),
+  'state',coalesce(d.state,case when rules.id is null then 'not_tracked' else 'not_employed' end),
+  'record',case when rec.id is not null then jsonb_build_object('id',rec.id,'check_in_at',rec.check_in_at,'check_out_at',rec.check_out_at,
+   'state',rec.state,'punctuality',rec.punctuality,'late_minutes',rec.late_minutes,'worked_minutes',rec.worked_minutes,
+   'early_departure_minutes',rec.early_departure_minutes,'corrected',rec.corrected) end,
+  'leave',case when lv.id is not null then jsonb_build_object('id',lv.id,'leave_type',lv.leave_type,'start_date',lv.start_date,'end_date',lv.end_date,
+   'recorded_by_admin',lv.recorded_by is not null) end,
+  'rules',case when rules.id is not null then jsonb_build_object('shift_start',to_char(rules.shift_start,'HH24:MI'),'shift_end',to_char(rules.shift_end,'HH24:MI'),
+   'grace_minutes',rules.grace_minutes,'work_days',to_jsonb(rules.work_days)) end,
+  'holiday',(select name from public.attendance_holidays where holiday_date=p_day),
+  'pending_correction',exists(select 1 from public.attendance_corrections where user_id=p_user and attendance_date=p_day and status='pending'),
+  'attendance_start',(select min(starts_on) from public.attendance_periods where user_id=p_user and recorded_by is null),
+  'counted',exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.starts_on<=p_day and (e.ends_on is null or e.ends_on>=p_day)),
+  'entered',not exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.recorded_by is null and e.starts_on<=p_day and (e.ends_on is null or e.ends_on>=p_day))
+   and exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.recorded_by is not null and e.starts_on<=p_day and e.ends_on>=p_day),
+  'tracking_started',(select min(effective_from) from public.attendance_policies),
+  'history',(select coalesce(jsonb_agg(jsonb_build_object('at',a.created_at,'action',a.action,'by',coalesce(p.name,'System'),
+    'before',a.metadata->'before','after',a.metadata->'after','reason',a.metadata->>'reason') order by a.created_at desc),'[]'::jsonb)
+   from (select * from public.audit_log a where a.action like 'attendance.%' and a.metadata->>'date'=p_day::text
+    and (a.metadata->>'user_id'=p_user::text or (a.actor_id=p_user and a.action in ('attendance.check_in','attendance.check_out')))
+    order by a.created_at desc limit 50) a left join public.profiles p on p.id=a.actor_id));
+end $$;
+
+-- As in 042, for staff too, with the employee's own shift.
+create or replace function public.attendance_admin_set_at(p_actor uuid,p_user uuid,p_entries jsonb,p_reason text,p_replace boolean,p_dry_run boolean,p_request text,p_now timestamptz)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);person public.profiles;today date=public.attendance_local_date(p_now);
+ note text=nullif(btrim(coalesce(p_reason,'')),'');overwrite boolean=coalesce(p_replace,false);first_policy public.attendance_policies;
+ real_start date;new_tracking date;item jsonb;p jsonb;day date;wanted text;wanted_leave text;t_in time;t_out time;
+ rules public.attendance_policies;rec public.attendance_records;lv public.attendance_leave_requests;holiday_name text;
+ covered boolean;covered_real boolean;in_at timestamptz;out_at timestamptz;calc record;outcome text;message text;was jsonb;will jsonb;
+ plan jsonb='[]'::jsonb;counted jsonb;target_id text;audit_entity text;seg public.attendance_periods;seg_next public.attendance_periods;
+begin
+ if p_user is null or jsonb_typeof(p_entries) is distinct from 'array' or jsonb_array_length(p_entries) not between 1 and 31 then
+  raise exception 'Choose between 1 and 31 dates' using errcode='HA400';end if;
+ if note is not null and length(note)>300 then raise exception 'Use a reason of 300 characters or fewer' using errcode='HA400';end if;
+ if p_user=p_actor then raise exception 'You cannot change your own attendance. Another administrator must do it.' using errcode='HA403';end if;
+ select * into person from public.profiles where id=p_user and role in ('admin','agent','staff') and deleted_at is null for share;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ if exists(select 1 from jsonb_array_elements(p_entries) e where jsonb_typeof(e) is distinct from 'object'
+   or (e-array['date','status','check_in','check_out','leave_type'])<>'{}'::jsonb
+   or coalesce(e->>'date','')!~'^\d{4}-\d{2}-\d{2}$'
+   or coalesce(e->>'status','') not in ('present','late','half_day','absent','leave','clear')
+   or (e ? 'check_in' and coalesce(e->>'check_in','')!~'^([01]\d|2[0-3]):[0-5]\d$')
+   or (e ? 'check_out' and coalesce(e->>'check_out','')!~'^([01]\d|2[0-3]):[0-5]\d$')
+   or (e ? 'leave_type' and coalesce(e->>'leave_type','') not in ('casual','sick','emergency','unpaid','other'))) then
+  raise exception 'Invalid attendance entry' using errcode='HA400';end if;
+ if (select count(distinct e->>'date') from jsonb_array_elements(p_entries) e)<>jsonb_array_length(p_entries) then
+  raise exception 'Enter each date once' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_user,40));
+ select * into first_policy from public.attendance_policies order by effective_from limit 1;
+ if first_policy.id is null then raise exception 'Attendance tracking is not set up yet' using errcode='HA409';end if;
+ -- The account's own attendance (opened when it was enabled) starts here;
+ -- only days before it can be entered as extra counted days.
+ select min(starts_on) into real_start from public.attendance_periods where user_id=p_user and recorded_by is null;
+ if real_start is null then raise exception 'This account has never been enabled for attendance' using errcode='HA409';end if;
+
+ -- 1. Decide every date without changing anything.
+ for item in select e from jsonb_array_elements(p_entries) e order by e->>'date' loop
+  day=(item->>'date')::date;wanted=item->>'status';wanted_leave=item->>'leave_type';
+  t_in=(item->>'check_in')::time;t_out=(item->>'check_out')::time;
+  outcome=null;message=null;will=null;in_at=null;out_at=null;
+  rules=public.attendance_admin_rules_for(p_user,day);
+  select * into rec from public.attendance_records where user_id=p_user and attendance_date=day for update;
+  select * into lv from public.attendance_leave_requests l where l.user_id=p_user and l.status='approved' and day between l.start_date and l.end_date
+   order by l.created_at limit 1 for update;
+  holiday_name=(select h.name from public.attendance_holidays h where h.holiday_date=day);
+  covered=exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.starts_on<=day and (e.ends_on is null or e.ends_on>=day));
+  covered_real=exists(select 1 from public.attendance_periods e where e.user_id=p_user and e.recorded_by is null and e.starts_on<=day and (e.ends_on is null or e.ends_on>=day));
+  was=jsonb_build_object('state',case when rec.id is not null then case when rec.state='checked_in' then 'incomplete' else rec.state end
+    when lv.id is not null and covered then 'leave' when covered then 'absent' else 'not_counted' end,
+   'check_in_at',rec.check_in_at,'check_out_at',rec.check_out_at,'punctuality',rec.punctuality,'leave_type',lv.leave_type);
+  if day>today then outcome='error';message='Future dates cannot be entered';
+  elsif day=today then outcome='error';message='Today''s attendance uses check-in and check-out. Choose an earlier day.';
+  elsif day<today-366 then outcome='error';message='Choose a date within the last year';
+  elsif rules.id is null then outcome='error';message='Attendance rules are not set up for this date';
+  elsif not (extract(isodow from day)::smallint=any(rules.work_days)) then outcome='error';message='Scheduled day off';
+  elsif holiday_name is not null then outcome='error';message='Company holiday: '||holiday_name;
+  elsif not covered and day>=real_start then outcome='error';message='The account was not active on this date';
+  elsif exists(select 1 from public.attendance_corrections c where c.user_id=p_user and c.attendance_date=day and c.status='pending') then
+   outcome='error';message='A correction request for this day is waiting. Review it first.';
+  elsif wanted in ('present','late','half_day') then
+   if t_in is null or t_out is null then outcome='error';message='Enter both the check-in and check-out times';
+   elsif t_out<=t_in then outcome='error';message='Check-out must be after check-in';
+   else
+    in_at=public.attendance_moment(day,t_in);out_at=public.attendance_moment(day,t_out);
+    select * into calc from public.attendance_compute(day,coalesce(rec.shift_start,rules.shift_start),coalesce(rec.shift_end,rules.shift_end),
+     coalesce(rec.grace_minutes,rules.grace_minutes),in_at,out_at);
+    if wanted='late' and calc.punctuality<>'late' then outcome='error';
+     message=format('A %s check-in is within the %s-minute grace period, so the day is not late',to_char(t_in,'HH24:MI'),coalesce(rec.grace_minutes,rules.grace_minutes));
+    elsif wanted='half_day' and calc.early_departure_minutes=0 then outcome='error';
+     message=format('A half day ends before the shift ends at %s',to_char(coalesce(rec.shift_end,rules.shift_end),'HH24:MI'));
+    elsif rec.id is not null then
+     if rec.check_in_at=in_at and rec.check_out_at is not distinct from out_at and covered then outcome='unchanged';message='Already recorded with these times';
+     elsif not overwrite then outcome='skip';message='Already recorded. Choose to replace existing attendance to change it.';
+     else outcome='update';end if;
+    elsif lv.id is not null then
+     if not overwrite then outcome='skip';message='On approved leave. Choose to replace existing attendance to record work instead.';
+     else outcome='update';end if;
+    else outcome='create';end if;
+    will=jsonb_build_object('state','checked_out','check_in_at',in_at,'check_out_at',out_at,'punctuality',calc.punctuality,
+     'late_minutes',calc.late_minutes,'worked_minutes',calc.worked_minutes,'early_departure_minutes',calc.early_departure_minutes);
+   end if;
+  elsif wanted='absent' then
+   if rec.id is not null then
+    if not overwrite then outcome='skip';message='Already recorded as worked. Choose to replace existing attendance to mark it absent.';
+    elsif exists(select 1 from public.attendance_corrections c where c.record_id=rec.id) then outcome='error';
+     message='This day has correction history, so its record cannot be removed';
+    else outcome='update';end if;
+   elsif lv.id is not null then
+    if not overwrite then outcome='skip';message='On approved leave. Choose to replace existing attendance to mark it absent.';
+    elsif lv.recorded_by is null or lv.start_date<>lv.end_date then outcome='error';
+     message='This day is covered by an approved leave request, which cannot be changed here';
+    else outcome='update';end if;
+   elsif covered then outcome='unchanged';message='Already counted as absent';
+   else outcome='create';end if;
+   will=jsonb_build_object('state','absent');
+  elsif wanted='leave' then
+   if wanted_leave is null then outcome='error';message='Choose the leave type';
+   elsif exists(select 1 from public.attendance_leave_requests l where l.user_id=p_user and l.status='pending' and day between l.start_date and l.end_date) then
+    outcome='error';message='A leave request covering this day is waiting. Review it instead.';
+   elsif rec.id is not null then
+    if not overwrite then outcome='skip';message='Already recorded as worked. Choose to replace existing attendance to record leave.';
+    elsif exists(select 1 from public.attendance_corrections c where c.record_id=rec.id) then outcome='error';
+     message='This day has correction history, so its record cannot be removed';
+    else outcome='update';end if;
+   elsif lv.id is not null then
+    if lv.leave_type=wanted_leave and covered then outcome='unchanged';message='Already on this leave';
+    elsif not overwrite then outcome='skip';message='Already on approved leave. Choose to replace existing attendance to change it.';
+    elsif lv.recorded_by is null or lv.start_date<>lv.end_date then outcome='error';
+     message='This day is covered by an approved leave request, which cannot be changed here';
+    else outcome='update';end if;
+   else outcome='create';end if;
+   will=jsonb_build_object('state','leave','leave_type',wanted_leave);
+  else
+   -- clear: remove an entered day, so it is no longer counted.
+   if covered_real then outcome='error';
+    message='This day is part of the employee''s own attendance. Mark it absent or enter attendance instead.';
+   elsif not covered and rec.id is null and lv.id is null then outcome='unchanged';message='Not counted';
+   elsif not overwrite then outcome='skip';message='Choose to replace existing attendance to remove it.';
+   elsif rec.id is not null and exists(select 1 from public.attendance_corrections c where c.record_id=rec.id) then outcome='error';
+    message='This day has correction history, so its record cannot be removed';
+   elsif lv.id is not null and (lv.recorded_by is null or lv.start_date<>lv.end_date) then outcome='error';
+    message='This day is covered by an approved leave request, which cannot be changed here';
+   else outcome='update';end if;
+   will=jsonb_build_object('state','not_counted');
+  end if;
+  plan=plan||jsonb_build_array(jsonb_build_object('date',day,'status',wanted,'result',outcome,'message',message,'before',was,
+   'after',case when outcome in ('create','update') then will end,
+   '_record',rec.id,'_leave',lv.id,'_leave_admin',lv.recorded_by is not null and lv.start_date=lv.end_date,'_in',in_at,'_out',out_at,'_type',wanted_leave,
+   '_count',not covered and wanted<>'clear'));
+ end loop;
+
+ -- 2. The days that become counted, and the start of tracking they need.
+ select coalesce(jsonb_agg(x->'date' order by x->>'date'),'[]'::jsonb) into counted from jsonb_array_elements(plan) x
+  where x->>'result' in ('create','update') and (x->>'_count')::boolean;
+ select min((x->>'date')::date) into new_tracking from jsonb_array_elements(plan) x where x->>'result' in ('create','update') and (x->>'date')::date<first_policy.effective_from;
+
+ -- 3. Apply.
+ if not coalesce(p_dry_run,false) then
+  if new_tracking is not null then
+   perform pg_advisory_xact_lock(873440);
+   update public.attendance_policies set effective_from=new_tracking where id=first_policy.id and effective_from>new_tracking;
+   insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+    values(p_actor,'attendance.tracking_start_moved','attendance_policies',first_policy.id::text,p_request,
+     jsonb_build_object('user_id',p_user,'from',first_policy.effective_from,'to',new_tracking,'reason',note));
+  end if;
+  for p in select x from jsonb_array_elements(plan) x where x->>'result' in ('create','update') loop
+   day=(p->>'date')::date;wanted=p->>'status';audit_entity='attendance_records';target_id=p->>'_record';
+   -- Count an entered day: join it to an entered period next to it, or give
+   -- it its own.
+   if (p->>'_count')::boolean then
+    select * into seg from public.attendance_periods where user_id=p_user and recorded_by is not null and ends_on=day-1 for update;
+    select * into seg_next from public.attendance_periods where user_id=p_user and recorded_by is not null and starts_on=day+1 for update;
+    if seg.id is not null and seg_next.id is not null then
+     delete from public.attendance_periods where id=seg_next.id;
+     update public.attendance_periods set ends_on=seg_next.ends_on where id=seg.id;
+    elsif seg.id is not null then update public.attendance_periods set ends_on=day where id=seg.id;
+    elsif seg_next.id is not null then update public.attendance_periods set starts_on=day where id=seg_next.id;
+    else insert into public.attendance_periods(user_id,starts_on,ends_on,recorded_by) values(p_user,day,day,p_actor);
+    end if;
+   end if;
+   if wanted in ('present','late','half_day') then
+    in_at=(p->>'_in')::timestamptz;out_at=(p->>'_out')::timestamptz;
+    if p->>'_record' is not null then
+     select * into rec from public.attendance_records where id=(p->>'_record')::uuid for update;
+     select * into calc from public.attendance_compute(day,rec.shift_start,rec.shift_end,rec.grace_minutes,in_at,out_at);
+     update public.attendance_records set check_in_at=in_at,check_out_at=out_at,state='checked_out',punctuality=calc.punctuality,
+      late_minutes=calc.late_minutes,beyond_grace_minutes=calc.beyond_grace_minutes,worked_minutes=calc.worked_minutes,
+      early_departure_minutes=calc.early_departure_minutes,overtime_minutes=calc.overtime_minutes,corrected=true where id=rec.id;
+    else
+     rules=public.attendance_policy_for(p_user,day);
+     select * into calc from public.attendance_compute(day,rules.shift_start,rules.shift_end,rules.grace_minutes,in_at,out_at);
+     insert into public.attendance_records(user_id,attendance_date,policy_id,shift_start,shift_end,grace_minutes,check_in_at,check_out_at,state,
+      punctuality,late_minutes,beyond_grace_minutes,worked_minutes,early_departure_minutes,overtime_minutes,corrected)
+     values(p_user,day,rules.id,rules.shift_start,rules.shift_end,rules.grace_minutes,in_at,out_at,'checked_out',calc.punctuality,calc.late_minutes,
+      calc.beyond_grace_minutes,calc.worked_minutes,calc.early_departure_minutes,calc.overtime_minutes,true)
+     returning id::text into target_id;
+     -- Leave recorded here gives way to the worked day. Leave the employee
+     -- requested stays on file; a check-in counts as present anyway.
+     if (p->>'_leave_admin')::boolean then delete from public.attendance_leave_requests where id=(p->>'_leave')::uuid;end if;
+    end if;
+   elsif wanted='absent' then
+    if p->>'_record' is not null then delete from public.attendance_records where id=(p->>'_record')::uuid;
+    elsif p->>'_leave' is not null then
+     audit_entity='attendance_leave_requests';target_id=p->>'_leave';
+     delete from public.attendance_leave_requests where id=(p->>'_leave')::uuid;
+    else audit_entity='attendance_periods';target_id=p_user::text;
+    end if;
+   elsif wanted='leave' then
+    if p->>'_record' is not null then delete from public.attendance_records where id=(p->>'_record')::uuid;end if;
+    audit_entity='attendance_leave_requests';
+    if p->>'_leave' is not null then
+     target_id=p->>'_leave';
+     if (p->>'_leave_admin')::boolean then
+      update public.attendance_leave_requests set leave_type=p->>'_type' where id=(p->>'_leave')::uuid;
+     end if;
+    else
+     -- The administrator's reason stays in the audit log; the employee sees
+     -- this leave in their own list.
+     insert into public.attendance_leave_requests(user_id,leave_type,start_date,end_date,reason,status,reviewer_id,reviewed_at,recorded_by)
+     values(p_user,p->>'_type',day,day,'Recorded by an administrator','approved',p_actor,now(),p_actor)
+     returning id::text into target_id;
+    end if;
+   else
+    if p->>'_record' is not null then delete from public.attendance_records where id=(p->>'_record')::uuid;end if;
+    if (p->>'_leave_admin')::boolean then
+     delete from public.attendance_leave_requests where id=(p->>'_leave')::uuid;
+     if target_id is null then audit_entity='attendance_leave_requests';target_id=p->>'_leave';end if;
+    end if;
+    if target_id is null then audit_entity='attendance_periods';target_id=p_user::text;end if;
+    -- Stop counting the day: shrink or split the entered period holding it.
+    select * into seg from public.attendance_periods where user_id=p_user and recorded_by is not null and starts_on<=day and ends_on>=day for update;
+    if seg.id is not null then
+     if seg.starts_on=day and seg.ends_on=day then delete from public.attendance_periods where id=seg.id;
+     elsif seg.starts_on=day then update public.attendance_periods set starts_on=day+1 where id=seg.id;
+     elsif seg.ends_on=day then update public.attendance_periods set ends_on=day-1 where id=seg.id;
+     else
+      update public.attendance_periods set ends_on=day-1 where id=seg.id;
+      insert into public.attendance_periods(user_id,starts_on,ends_on,recorded_by) values(p_user,day+1,seg.ends_on,seg.recorded_by);
+     end if;
+    end if;
+   end if;
+   insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+    values(p_actor,case when p->>'result'='create' then 'attendance.manual_create' else 'attendance.manual_update' end,audit_entity,target_id,p_request,
+     jsonb_build_object('user_id',p_user,'date',day,'status',wanted,'before',p->'before','after',p->'after','reason',note,
+      'counted',(p->>'_count')::boolean));
+  end loop;
+  perform public.attendance_admin_tidy(p_user);
+ end if;
+ return jsonb_build_object('dry_run',coalesce(p_dry_run,false),
+  'employee',jsonb_build_object('id',person.id,'name',person.name,'uid',person.uid,'role',person.role),
+  'results',(select coalesce(jsonb_agg(x-array['_record','_leave','_leave_admin','_in','_out','_type','_count'] order by x->>'date'),'[]'::jsonb) from jsonb_array_elements(plan) x),
+  'summary',(select jsonb_build_object('created',count(*) filter(where x->>'result'='create'),'updated',count(*) filter(where x->>'result'='update'),
+    'unchanged',count(*) filter(where x->>'result'='unchanged'),'skipped',count(*) filter(where x->>'result'='skip'),
+    'failed',count(*) filter(where x->>'result'='error')) from jsonb_array_elements(plan) x),
+  'counted_days',counted,
+  'tracking_start',case when new_tracking is not null then jsonb_build_object('from',first_policy.effective_from,'to',new_tracking) end);
+end $$;
+
+-- As in 045, for agents and staff.
+create or replace function public.task_checkout_check(p_actor public.profiles,p_rec public.attendance_records,p_at timestamptz,p_lock boolean)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare day date=p_rec.attendance_date;report boolean;req public.task_checkout_requests;
+ ends timestamptz=public.attendance_moment(p_rec.attendance_date,p_rec.shift_end);
+begin
+ if p_actor.role not in ('agent','staff') or not public.task_rules_on(day) then
+  return jsonb_build_object('allowed',true,'required',false);end if;
+ report=exists(select 1 from public.task_daily_reports where user_id=p_actor.id and work_date=day);
+ if p_lock then
+  select * into req from public.task_checkout_requests where user_id=p_actor.id and work_date=day and status='approved' and used_at is null for update;
+ else
+  select * into req from public.task_checkout_requests where user_id=p_actor.id and work_date=day and status='approved' and used_at is null;
+ end if;
+ if req.id is not null and req.kind='emergency' then
+  return case when report or req.waive_report then jsonb_build_object('allowed',true,'required',true,'request_id',req.id,'kind','emergency')
+   else jsonb_build_object('allowed',false,'required',true,'reason','Submit your daily work report before checking out. Your emergency approval did not waive the report.') end;
+ end if;
+ if p_at<ends then
+  if req.id is not null and report then
+   return jsonb_build_object('allowed',true,'required',true,'request_id',req.id,'kind','early');end if;
+  return jsonb_build_object('allowed',false,'required',true,'reason',
+   format('Checking out before your shift ends at %s needs an approved early or emergency checkout request.',to_char(p_rec.shift_end,'FMHH12:MI AM')));
+ end if;
+ if not report then
+  return jsonb_build_object('allowed',false,'required',true,'reason','Please submit your daily work report before checking out.');end if;
+ return jsonb_build_object('allowed',true,'required',true)||case when req.id is null then '{}'::jsonb else jsonb_build_object('request_id',req.id,'kind',req.kind) end;
+end $$;
+
+-- As in 045, for agents and staff, with the employee's own shift.
+create or replace function public.task_checkout_state_at(p_actor uuid,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);rec public.attendance_records;
+ summary jsonb=public.task_day(p_actor,today);report boolean;pending public.task_checkout_requests;approved public.task_checkout_requests;
+ early text[]='{}';gate jsonb;limits jsonb=public.task_request_limits(p_actor,'early',today,p_at);
+ urgent jsonb=public.task_request_limits(p_actor,'emergency',today,p_at);
+begin
+ select * into rec from public.attendance_records where user_id=p_actor and attendance_date=today;
+ report=exists(select 1 from public.task_daily_reports where user_id=p_actor and work_date=today);
+ select * into pending from public.task_checkout_requests where user_id=p_actor and work_date=today and status='pending';
+ select * into approved from public.task_checkout_requests where user_id=p_actor and work_date=today and status='approved';
+ if rec.id is not null and rec.state='checked_in' then gate=public.task_checkout_check(actor,rec,p_at,false);end if;
+ -- Reasons an early request isn't available yet, in the order to fix them.
+ if actor.role not in ('agent','staff') then early=early||'Only agents and staff request early checkout.'::text;
+ elsif not public.task_rules_on(today) then early=early||'Checkout rules are off, so no approval is needed.'::text;
+ elsif rec.id is null then early=early||'Check in first.'::text;
+ elsif rec.state<>'checked_in' then early=early||'You have already checked out today.'::text;
+ elsif p_at>=public.attendance_moment(today,rec.shift_end) then early=early||'Your shift has ended; check out normally.'::text;
+ else
+  if (summary->>'due_count')::integer=0 then early=early||'You have no tasks due today. Check out at the end of your shift, or ask for an emergency checkout.'::text;
+  elsif not (summary->>'all_due_completed')::boolean then
+   early=early||case when (summary->>'overdue')::integer>0 then format('Finish your %s overdue task(s) first.',summary->>'overdue')
+    else format('Complete every task due today first (%s of %s done).',summary->>'due_completed',summary->>'due_count') end;
+  end if;
+  if not report then early=early||'Submit your daily report first.'::text;end if;
+  if pending.id is not null then early=early||'You already have a request waiting for an administrator.'::text;end if;
+  if approved.id is not null then early=early||'Your checkout request is already approved.'::text;end if;
+  if (limits->>'limit_reached')::boolean then early=early||'You have reached today''s limit of 3 early checkout requests.'::text;
+  elsif (limits->>'waiting')::boolean then
+   early=early||format('You can ask again from %s, 15 minutes after your last request was rejected.',public.task_time_text((limits->>'retry_at')::timestamptz));
+  end if;
+ end if;
+ return jsonb_build_object('date',today,'rules_active',public.task_rules_on(today),'required',actor.role in ('agent','staff') and public.task_rules_on(today),
+  'attendance_state',rec.state,'shift_end',to_char(coalesce(rec.shift_end,(public.attendance_policy_for(p_actor,today)).shift_end),'HH24:MI'),
+  'before_shift_end',rec.id is not null and p_at<public.attendance_moment(today,rec.shift_end),
+  'report_submitted',report,'tasks',summary,
+  'pending_request',case when pending.id is null then null else public.task_request_json(pending,today) end,
+  'approved_request',case when approved.id is null then null else public.task_request_json(approved,today) end,
+  'can_check_out',coalesce((gate->>'allowed')::boolean,false),'blocked_reason',case when gate is not null and not (gate->>'allowed')::boolean then gate->>'reason' end,
+  'can_request_early',cardinality(early)=0,'early_blockers',to_jsonb(early),
+  'can_request_emergency',coalesce(actor.role in ('agent','staff') and public.task_rules_on(today) and rec.state='checked_in' and pending.id is null and approved.id is null
+   and not (urgent->>'limit_reached')::boolean,false),
+  'early_resubmission',limits-'reasons','emergency_resubmission',urgent-'reasons');
+end $$;
+
+-- As in 045, for agents and staff.
+create or replace function public.task_report_submit_at(p_actor uuid,p_day date,p_remarks text,p_amend boolean,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);day date=coalesce(p_day,today);
+ r public.task_daily_reports;snap jsonb;pct numeric;n integer;
+begin
+ if actor.role not in ('agent','staff') then raise exception 'Daily reports are for agents and staff' using errcode='HA403';end if;
+ if day>today or day<today-7 then raise exception 'Choose today or one of the last seven days' using errcode='HA400';end if;
+ if length(p_remarks)>1000 then raise exception 'Keep the remarks under 1000 characters' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ select * into r from public.task_daily_reports where user_id=p_actor and work_date=day for update;
+ if r.id is not null and r.status='reviewed' then
+  raise exception 'This report was reviewed by an administrator and can''t be changed' using errcode='HA409';end if;
+ if r.id is not null and not coalesce(p_amend,false) then
+  raise exception 'You already submitted the report for %. Choose Amend report to change it.',public.task_day_text(day) using errcode='HA409';end if;
+ select coalesce(jsonb_agg(jsonb_build_object('assignment_id',x.id,'title',t.title,'kind',t.kind,'target_quantity',t.target_quantity,'unit',t.unit,
+   'completed_quantity',x.completed_quantity,'status',x.status,'due_on',t.due_on,'percent',public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status))
+   order by t.due_on,t.title,x.id),'[]'::jsonb),round(avg(public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status)),1),count(*)
+ into snap,pct,n from public.task_assignments x join public.tasks t on t.id=x.task_id
+ where x.user_id=p_actor and x.status<>'cancelled' and t.task_date<=day and t.due_on>=day;
+ if r.id is null then
+  insert into public.task_daily_reports(user_id,work_date,remarks,tasks,task_count,completion_percent,submitted_at)
+  values(p_actor,day,nullif(btrim(p_remarks),''),snap,n,pct,p_at) returning * into r;
+  insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'task.report_submit','task_daily_reports',r.id::text,p_request,jsonb_build_object('user_id',p_actor,'date',day,'task_count',n,
+   'completion_percent',pct,'late',day<today));
+  perform public.task_notify_admins(p_actor,'task_report','task-reports:'||day,'Daily report: '||left(actor.name,150),
+   format('%s submitted the report for %s: %s.',actor.name,public.task_day_text(day),
+    case when n=0 then 'no tasks that day' else format('%s%% across %s task(s)',pct,n) end),
+   '/task-management?tab=reports&date='||day,'%s daily reports for '||public.task_day_text(day),'Open Daily reports to review them.');
+ else
+  insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'task.report_amend','task_daily_reports',r.id::text,p_request,jsonb_build_object('user_id',p_actor,'date',day,
+   'before',jsonb_build_object('completion_percent',r.completion_percent,'task_count',r.task_count,'remarks_changed',r.remarks is distinct from nullif(btrim(p_remarks),''),
+    'tasks',(select coalesce(jsonb_agg(jsonb_build_object('title',e->>'title','completed_quantity',e->'completed_quantity','status',e->>'status')),'[]'::jsonb) from jsonb_array_elements(r.tasks) e)),
+   'after',jsonb_build_object('completion_percent',pct,'task_count',n)));
+  update public.task_daily_reports set remarks=nullif(btrim(p_remarks),''),tasks=snap,task_count=n,completion_percent=pct,amended_at=p_at,
+   amendment_count=amendment_count+1 where id=r.id returning * into r;
+ end if;
+ return public.task_report_json(r);
+end $$;
+
+-- As in 045, for agents and staff.
+create or replace function public.task_checkout_request_at(p_actor uuid,p_kind text,p_reason text,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(p_at);rec public.attendance_records;
+ state jsonb;summary jsonb;req public.task_checkout_requests;report boolean;limits jsonb;
+begin
+ if actor.role not in ('agent','staff') then raise exception 'Only agents and staff request checkout approval' using errcode='HA403';end if;
+ if p_kind not in ('early','emergency') then raise exception 'Choose early or emergency checkout' using errcode='HA400';end if;
+ if length(p_reason)>500 then raise exception 'Keep the reason under 500 characters' using errcode='HA400';end if;
+ if p_kind='emergency' and length(btrim(coalesce(p_reason,'')))<5 then raise exception 'Tell the administrator briefly what happened' using errcode='HA400';end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_actor,40));
+ if not public.task_rules_on(today) then raise exception 'Checkout rules are off, so you can check out without approval' using errcode='HA409';end if;
+ select * into rec from public.attendance_records where user_id=p_actor and attendance_date=today;
+ if rec.id is null then raise exception 'Check in first' using errcode='HA409';end if;
+ if rec.state<>'checked_in' then raise exception 'You have already checked out today' using errcode='HA409';end if;
+ if exists(select 1 from public.task_checkout_requests where user_id=p_actor and work_date=today and status='pending') then
+  raise exception 'You already have a request waiting for an administrator' using errcode='HA409';end if;
+ if exists(select 1 from public.task_checkout_requests where user_id=p_actor and work_date=today and status='approved') then
+  raise exception 'Your checkout request is already approved' using errcode='HA409';end if;
+ limits=public.task_request_limits(p_actor,p_kind,today,p_at);
+ if (limits->>'limit_reached')::boolean then
+  raise exception 'You have reached today''s limit of 3 % checkout requests. Please speak to an administrator.',p_kind using errcode='HA429';end if;
+ if (limits->>'explanation_required')::boolean then
+  if length(btrim(coalesce(p_reason,'')))<10 then
+   raise exception 'Your last % checkout request was rejected. Explain what has changed (at least 10 characters).',p_kind using errcode='HA400';end if;
+  if limits->'reasons' ? lower(regexp_replace(btrim(p_reason),'\s+',' ','g')) then
+   raise exception 'This explanation repeats an earlier request. Explain what has changed since then.' using errcode='HA409';end if;
+  if (limits->>'waiting')::boolean then
+   raise exception 'You can ask again from %, 15 minutes after your last request was rejected.',public.task_time_text((limits->>'retry_at')::timestamptz) using errcode='HA429';end if;
+ end if;
+ if p_kind='early' then
+  state=public.task_checkout_state_at(p_actor,p_at);
+  if not (state->>'can_request_early')::boolean then raise exception '%',state->'early_blockers'->>0 using errcode='HA409';end if;
+ end if;
+ summary=public.task_day(p_actor,today);
+ report=exists(select 1 from public.task_daily_reports where user_id=p_actor and work_date=today);
+ insert into public.task_checkout_requests(user_id,work_date,kind,reason,requested_at,shift_end,completion_percent,report_submitted)
+ values(p_actor,today,p_kind,nullif(btrim(p_reason),''),p_at,rec.shift_end,(summary->>'completion_percent')::numeric,report) returning * into req;
+ -- The emergency reason stays in the request, not in notifications or the audit.
+ perform public.task_notify_admins(p_actor,'checkout_request','checkout:'||req.id,
+  format('%s checkout request: %s',case p_kind when 'early' then 'Early' else 'Emergency' end,left(actor.name,150)),
+  case p_kind when 'early' then format('%s has completed all required daily tasks and requested checkout at %s. Normal shift end: %s. Task completion: %s%%. Report: submitted.',
+    actor.name,public.task_time_text(p_at),to_char(rec.shift_end,'FMHH12:MI AM'),coalesce(req.completion_percent::text,'0'))
+   else format('%s requested an emergency checkout at %s. Task completion: %s. Report: %s. Open the request to read the reason.',
+    actor.name,public.task_time_text(p_at),coalesce(req.completion_percent::text||'%','no tasks'),case when report then 'submitted' else 'not submitted' end) end,
+  '/task-management?tab=requests',null,null);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(p_actor,'checkout.request','task_checkout_requests',req.id::text,p_request,jsonb_build_object('user_id',p_actor,'kind',p_kind,'date',today,
+  'completion_percent',req.completion_percent,'report_submitted',report,'shift_end',to_char(rec.shift_end,'HH24:MI'),
+  'attempt',(limits->>'count')::integer+1));
+ return public.task_request_json(req,today);
+end $$;
+
+-- As in 045, for agents and staff, with each person's role and department.
+create or replace function public.task_admin_overview(p_actor uuid,p_day date) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);day date=coalesce(p_day,public.attendance_local_date(now()));
+begin
+ return (with a as (select x.*,t.kind,t.target_quantity,t.task_date,t.due_on from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.status<>'cancelled' and t.task_date<=day and t.due_on>=day),
+  agents as (select p.id,p.name,p.uid,p.role,public.department_name(p.department_id) department from public.profiles p where p.role in ('agent','staff') and p.active and p.deleted_at is null),
+  r as (select * from public.task_daily_reports where work_date=day)
+ select jsonb_build_object('date',day,'rules_active',public.task_rules_on(day),
+  'active_tasks',(select count(distinct task_id) from a),'assigned_today',(select count(*) from public.tasks t where t.task_date=day and t.cancelled_at is null),
+  'assignments',(select count(*) from a),'completed',(select count(*) from a where status='completed'),
+  'pending',(select count(*) from a where status<>'completed'),'average_percent',(select round(avg(public.task_percent(kind,target_quantity,completed_quantity,status)),1) from a),
+  'reports_submitted',(select count(*) from r),'reports_to_review',(select count(*) from public.task_daily_reports where status='submitted'),
+  'missing_reports',(select coalesce(jsonb_agg(jsonb_build_object('id',g.id,'name',g.name,'uid',g.uid,'role',g.role,'department',g.department) order by g.name),'[]'::jsonb) from agents g
+   where exists(select 1 from a where a.user_id=g.id) and not exists(select 1 from r where r.user_id=g.id)),
+  'agents_with_tasks',(select count(distinct user_id) from a),
+  'pending_early',(select count(*) from public.task_checkout_requests where status='pending' and kind='early' and work_date=day),
+  'pending_emergency',(select count(*) from public.task_checkout_requests where status='pending' and kind='emergency'),
+  'overdue_reports',(select jsonb_array_length(public.task_missing_reports(p_actor,day-7,day-1)->'data')),
+  'people',(select coalesce(jsonb_agg(jsonb_build_object('id',g.id,'name',g.name,'uid',g.uid,'role',g.role,'department',g.department,
+    'tasks',(select count(*) from a where a.user_id=g.id),'completed',(select count(*) from a where a.user_id=g.id and status='completed'),
+    'percent',(select round(avg(public.task_percent(kind,target_quantity,completed_quantity,status)),1) from a where a.user_id=g.id),
+    'report',(select jsonb_build_object('id',r.id,'status',r.status,'completion_percent',r.completion_percent) from r where r.user_id=g.id)) order by g.name),'[]'::jsonb)
+   from agents g)));
+end $$;
+
+-- As in 045, for agents and staff: chosen people, all agents, all staff
+-- and whole departments, as they are when the task is assigned.
+create or replace function public.task_create_at(p_actor uuid,p_data jsonb,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(p_at);t public.tasks;
+ ids uuid[];key uuid;day date;due date;kind text;dup text;u uuid;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['scope','title','description','instructions','category','priority','kind',
+  'target_quantity','unit','task_date','due_on','assignees','all_agents','all_staff','departments','client_key','allow_duplicate'])<>'{}'::jsonb then
+  raise exception 'Unsupported task details' using errcode='HA400';end if;
+ key=(p_data->>'client_key')::uuid;
+ if key is null then raise exception 'Invalid request' using errcode='HA400';end if;
+ -- The same submission again (a double click or a retry) returns the task.
+ select * into t from public.tasks where created_by=actor.id and client_key=key;
+ if found then return public.task_detail(p_actor,t.id);end if;
+ if length(btrim(coalesce(p_data->>'title','')))<3 then raise exception 'Enter a task title' using errcode='HA400';end if;
+ kind=p_data->>'kind';day=coalesce((p_data->>'task_date')::date,today);due=coalesce((p_data->>'due_on')::date,day);
+ if p_data->>'scope' not in ('team','individual') or kind not in ('measurable','simple') then
+  raise exception 'Choose a team or individual task, measurable or simple' using errcode='HA400';end if;
+ if day<today or day>today+60 then raise exception 'Choose today or a date up to 60 days ahead' using errcode='HA400';end if;
+ if due<day or due>day+31 then raise exception 'The due date must be on or after the task date, within 31 days' using errcode='HA400';end if;
+ if kind='measurable' and (p_data->>'target_quantity' is null or nullif(btrim(p_data->>'unit'),'') is null) then
+  raise exception 'A measurable task needs a target and a unit, for example 50 calls' using errcode='HA400';end if;
+ if p_data->>'scope'='individual' and (coalesce((p_data->>'all_agents')::boolean,false) or coalesce((p_data->>'all_staff')::boolean,false)
+  or jsonb_array_length(coalesce(p_data->'departments','[]'::jsonb))>0) then
+  raise exception 'An individual task is for one person' using errcode='HA400';end if;
+ ids=public.task_recipients(p_data);
+ if cardinality(ids)=0 then raise exception 'There are no active employees to assign' using errcode='HA400';end if;
+ if p_data->>'scope'='individual' and cardinality(ids)<>1 then raise exception 'An individual task is for one person' using errcode='HA400';end if;
+ if not coalesce((p_data->>'allow_duplicate')::boolean,false) then
+  select p.name into dup from public.task_assignments x join public.tasks o on o.id=x.task_id join public.profiles p on p.id=x.user_id
+   where x.user_id=any(ids) and x.status<>'cancelled' and o.task_date=day and lower(btrim(o.title))=lower(btrim(p_data->>'title')) limit 1;
+  if dup is not null then
+   raise exception '% already has “%” on %. Choose Assign anyway to add it again.',dup,btrim(p_data->>'title'),public.task_day_text(day) using errcode='HA409';end if;
+ end if;
+ insert into public.tasks(scope,title,description,instructions,category,priority,kind,target_quantity,unit,task_date,due_on,client_key,created_by,updated_by,audience)
+ values(p_data->>'scope',btrim(p_data->>'title'),nullif(btrim(p_data->>'description'),''),nullif(btrim(p_data->>'instructions'),''),
+  nullif(p_data->>'category',''),coalesce(p_data->>'priority','normal'),kind,
+  case when kind='measurable' then (p_data->>'target_quantity')::integer end,case when kind='measurable' then btrim(p_data->>'unit') end,
+  day,due,key,actor.id,actor.id,public.task_audience(p_data)) returning * into t;
+ insert into public.task_assignments(task_id,user_id) select t.id,i from unnest(ids) i;
+ foreach u in array ids loop
+  perform public.push_notification(u,'task_assigned','task:'||t.id,'New task: '||left(t.title,180),
+   format('%s assigned this for %s%s.',actor.name,public.task_day_text(t.task_date),
+    case when t.kind='measurable' then format(': target %s %s',t.target_quantity,t.unit) else '' end),'/my-tasks',null);
+ end loop;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.create','tasks',t.id::text,p_request,jsonb_build_object('scope',t.scope,'title',t.title,'kind',t.kind,
+  'target_quantity',t.target_quantity,'unit',t.unit,'date',t.task_date,'due_on',t.due_on,'priority',t.priority,'assignee_count',cardinality(ids),
+  'audience',t.audience)
+  ||case when cardinality(ids)=1 then jsonb_build_object('user_id',ids[1]) else '{}'::jsonb end);
+ return public.task_detail(p_actor,t.id);
+end $$;
+
+-- As in 045; an individual task is for one person, agent or staff.
+create or replace function public.task_update_at(p_actor uuid,p_task uuid,p_data jsonb,p_request text,p_at timestamptz) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(p_at);t public.tasks;n public.tasks;
+ fields text[];added uuid[]='{}';u uuid;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['title','description','instructions','category','priority','target_quantity',
+  'unit','due_on','add_assignees','expected_updated_at'])<>'{}'::jsonb then
+  raise exception 'Unsupported task details' using errcode='HA400';end if;
+ select * into t from public.tasks where id=p_task for update;
+ if not found then raise exception 'Task not found' using errcode='HA404';end if;
+ if t.cancelled_at is not null then raise exception 'This task was cancelled' using errcode='HA409';end if;
+ if p_data?'expected_updated_at' and (p_data->>'expected_updated_at')::timestamptz is distinct from t.updated_at then
+  raise exception 'Someone else changed this task. Reload it and repeat your change.' using errcode='HA409';end if;
+ if t.kind='simple' and (p_data?'target_quantity' or p_data?'unit') then
+  raise exception 'A simple task has no target' using errcode='HA400';end if;
+ n=t;
+ if p_data?'title' then n.title=btrim(p_data->>'title');end if;
+ if p_data?'description' then n.description=nullif(btrim(p_data->>'description'),'');end if;
+ if p_data?'instructions' then n.instructions=nullif(btrim(p_data->>'instructions'),'');end if;
+ if p_data?'category' then n.category=nullif(p_data->>'category','');end if;
+ if p_data?'priority' then n.priority=p_data->>'priority';end if;
+ if p_data?'target_quantity' then n.target_quantity=(p_data->>'target_quantity')::integer;end if;
+ if p_data?'unit' then n.unit=btrim(p_data->>'unit');end if;
+ if p_data?'due_on' then n.due_on=(p_data->>'due_on')::date;
+  if n.due_on<>t.due_on and (n.due_on<greatest(t.task_date,today) or n.due_on>t.task_date+31) then
+   raise exception 'Choose a due date from today, within 31 days of the task date' using errcode='HA400';end if;
+ end if;
+ fields=array(select k from unnest(array['title','description','instructions','category','priority','target_quantity','unit','due_on']) k
+  where to_jsonb(t)->k is distinct from to_jsonb(n)->k);
+ if p_data?'add_assignees' then
+  if t.scope='individual' then raise exception 'An individual task is for one person' using errcode='HA400';end if;
+  added=array(select i from unnest(public.task_agents(p_data->'add_assignees',false)) i
+   where not exists(select 1 from public.task_assignments x where x.task_id=t.id and x.user_id=i and x.status<>'cancelled'));
+ end if;
+ if cardinality(fields)=0 and cardinality(added)=0 then return public.task_detail(p_actor,t.id);end if;
+ update public.tasks set title=n.title,description=n.description,instructions=n.instructions,category=n.category,priority=n.priority,
+  target_quantity=n.target_quantity,unit=n.unit,due_on=n.due_on,updated_by=actor.id where id=t.id returning * into n;
+ if 'target_quantity'=any(fields) then
+  update public.task_assignments set status=public.task_status_for(n.target_quantity,completed_quantity),
+   completed_at=case when public.task_status_for(n.target_quantity,completed_quantity)='completed' then coalesce(completed_at,p_at) end
+  where task_id=t.id and status<>'cancelled' and verified_status is null;
+ end if;
+ -- Someone removed earlier gets the task back as new.
+ foreach u in array added loop
+  insert into public.task_assignments as x(task_id,user_id) values(t.id,u)
+  on conflict(task_id,user_id) do update set status='pending',completed_quantity=0,employee_note=null,progress_at=null,completed_at=null,
+   cancelled_at=null,cancelled_by=null,cancel_reason=null,verified_status=null,verified_quantity=null,verified_by=null,verified_at=null,review_note=null;
+  perform public.push_notification(u,'task_assigned','task:'||t.id||':'||gen_random_uuid(),'New task: '||left(n.title,180),
+   format('%s assigned this for %s.',actor.name,public.task_day_text(n.task_date)),'/my-tasks',null);
+ end loop;
+ if cardinality(fields)>0 then
+  for u in select user_id from public.task_assignments where task_id=t.id and status<>'cancelled' and not (user_id=any(added)) loop
+   perform public.push_notification(u,'task_updated','task-update:'||t.id||':'||gen_random_uuid(),'Task updated: '||left(n.title,180),
+    format('%s changed this task (%s).',actor.name,array_to_string(array(select replace(f,'_',' ') from unnest(fields) f),', ')),'/my-tasks',null);
+  end loop;
+ end if;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'task.update','tasks',t.id::text,p_request,jsonb_build_object('title',n.title,'fields',to_jsonb(fields),'added_count',cardinality(added),
+  'before',jsonb_build_object('target_quantity',t.target_quantity,'due_on',t.due_on,'title',t.title),
+  'after',jsonb_build_object('target_quantity',n.target_quantity,'due_on',n.due_on,'title',n.title)));
+ return public.task_detail(p_actor,t.id);
+end $$;
+
+-- As in 036, for staff accounts too.
+create or replace function public.begin_account_provisioning(p_actor uuid,p_session text,p_unlock text,p_id uuid,p_email text,p_name text,p_role text,p_active boolean,p_uid integer,p_request text)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare chosen integer;taken text;
+begin
+ -- Same lock order as invitations, deletion and account role edits.
+ perform pg_advisory_xact_lock(873420);perform pg_advisory_xact_lock(873436);
+ perform public.accounts_gate(p_actor,p_session,p_unlock);
+ if p_id is null or p_email is null or p_email<>lower(btrim(p_email)) or length(p_email)>254 or p_email!~'^[^@[:space:]]+@gmail\.com$'
+ or p_role is null or p_role not in ('admin','agent','staff') or p_active is null or nullif(btrim(p_name),'') is null or length(p_name)>200
+ or (p_uid is not null and p_uid not between 100000 and 999999) then
+  raise exception 'Invalid account request' using errcode='22023';end if;
+ -- No background worker: abandoned reservations resolve on the next request.
+ -- An Auth user created by an interrupted request keeps its UID, disabled.
+ with recovered as (
+  update public.account_provisioning q set status=case when exists(select 1 from public.profiles p where p.id=q.id) then 'completed' else 'failed' end,finished_at=now()
+  where q.status='creating' and q.lease_until<=now() returning q.id,q.status
+ ) insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  select p_actor,'account.create_recovered','profiles',id::text,p_request,jsonb_build_object('status',status) from recovered;
+ if exists(select 1 from auth.users u where lower(to_jsonb(u)->>'email')=p_email)
+ or exists(select 1 from public.account_invitations where lower(email)=p_email)
+ or exists(select 1 from public.account_creation_requests where normalized_email=p_email and status not in ('expired','cancelled','completed'))
+ or exists(select 1 from public.account_provisioning where normalized_email=p_email and status='creating') then
+  raise exception 'An account with this email already exists' using errcode='23505';end if;
+ if p_uid is not null and (exists(select 1 from public.profiles where uid=p_uid)
+ or exists(select 1 from public.account_provisioning where uid=p_uid and status<>'failed')) then
+  raise exception 'This UID is already assigned to another account. Please choose a different UID.' using errcode='PT409';end if;
+ for attempt in 1..5 loop
+  chosen=coalesce(p_uid,public.generate_account_uid());
+  begin
+   insert into public.account_provisioning(id,uid,uid_source,normalized_email,requested_name,requested_role,desired_active,requested_by,status,lease_until)
+    values(p_id,chosen,case when p_uid is null then 'auto' else 'manual' end,p_email,btrim(p_name),p_role,p_active,p_actor,'creating',now()+interval '5 minutes');
+   exit;
+  exception when unique_violation then
+   -- Unique indexes stay authoritative. A rare generated collision draws again;
+   -- a manual UID is never silently replaced.
+   get stacked diagnostics taken=constraint_name;
+   if taken='account_provisioning_uid' and p_uid is null and attempt<5 then continue;end if;
+   if taken='account_provisioning_uid' then
+    raise exception 'This UID is already assigned to another account. Please choose a different UID.' using errcode='PT409';end if;
+   raise exception 'An account with this email already exists' using errcode='23505';
+  end;
+ end loop;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'account.create_requested','profiles',p_id::text,p_request,jsonb_build_object('uid',chosen,'uid_source',case when p_uid is null then 'auto' else 'manual' end,'role',p_role));
+ return jsonb_build_object('id',p_id,'uid',chosen,'uid_source',case when p_uid is null then 'auto' else 'manual' end);
+end $$;
+
+-- As in 036, also saving the department and job title chosen at creation.
+create or replace function public.complete_account_provisioning(p_actor uuid,p_session text,p_unlock text,p_id uuid,p_request text)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare r public.account_provisioning;profile public.profiles;u jsonb;
+begin
+ perform pg_advisory_xact_lock(873420);perform pg_advisory_xact_lock(873436);
+ perform public.accounts_gate(p_actor,p_session,p_unlock);
+ select * into r from public.account_provisioning where id=p_id and requested_by=p_actor for update;
+ if r.id is null then raise exception 'Account creation request not found' using errcode='P0002';end if;
+ if r.status='completed' then return public.account_provisioning_summary(p_id);end if;
+ if r.status<>'creating' then raise exception 'Account creation was cancelled' using errcode='40001';end if;
+ select to_jsonb(a) into u from auth.users a where a.id=p_id;
+ if u is null or lower(u->>'email') is distinct from r.normalized_email or nullif(u->>'email_confirmed_at','') is null
+ or u->'raw_app_meta_data'->>'crm_account_request' is distinct from p_id::text or nullif(u->>'deleted_at','') is not null then
+  raise exception 'Auth account could not be confirmed' using errcode='22023';end if;
+ select * into profile from public.profiles where id=p_id for update;
+ if profile.id is null or profile.uid is distinct from r.uid or profile.deletion_requested_at is not null then
+  raise exception 'Account profile could not be confirmed' using errcode='22023';end if;
+ update public.profiles set name=r.requested_name,role=r.requested_role,active=r.desired_active,
+  department_id=coalesce(r.requested_department_id,department_id),job_title=coalesce(r.requested_job_title,job_title) where id=p_id;
+ update public.account_provisioning set status='completed',finished_at=now() where id=p_id;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(p_actor,'account.created','profiles',p_id::text,p_request,jsonb_build_object('uid',r.uid,'uid_source',r.uid_source,'role',r.requested_role,'active',r.desired_active)
+   ||case when r.requested_department_id is not null then jsonb_build_object('department',public.department_name(r.requested_department_id)) else '{}'::jsonb end
+   ||case when r.requested_job_title is not null then jsonb_build_object('job_title',r.requested_job_title) else '{}'::jsonb end);
+ return public.account_provisioning_summary(p_id);
+end $$;
+
+-- As in 036, for staff too, with each account's department and job title.
+create or replace function public.accounts_page_032(p_actor uuid,p_session text,p_unlock text,p_page integer,p_limit integer,p_search text,p_role text,p_access text)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare rows jsonb; total bigint; summary jsonb;
+begin
+  perform public.accounts_gate(p_actor,p_session,p_unlock);
+  if p_page<1 or p_page>100000 or p_limit<1 or p_limit>100 or length(p_search)>100 or p_role not in ('','admin','agent','staff') or p_access not in ('','active','disabled','pending','expired','cancelled','deleting') then raise exception 'Invalid account filters' using errcode='22023'; end if;
+  with records as (
+    select p.id,p.uid,p.name,p.role,public.department_name(p.department_id) department,p.job_title,p.active,p.created_at,coalesce(d.confirmation_email,to_jsonb(u)->>'email') email,
+      to_jsonb(u)->>'last_sign_in_at' last_sign_in_at,to_jsonb(u)->>'email_confirmed_at' email_confirmed_at,
+      to_jsonb(u)->>'banned_until' banned_until,public.account_lifecycle(p.id,p.active,to_jsonb(u)->>'email_confirmed_at') account_status,i.requested_at invitation_date,i.expires_at invitation_expires_at,i.accepted_at invitation_accepted_at,i.state invitation_state,(i.user_id is not null or (nullif(to_jsonb(u)->>'email_confirmed_at','') is null and to_jsonb(u)->'raw_app_meta_data'->>'crm_provisioning'='true')) invitation_required
+    from public.profiles p join auth.users u on u.id=p.id left join public.account_invitations i on i.user_id=p.id left join crm_private.account_deletions d on d.user_id=p.id where p.deleted_at is null
+  ), eligible as (
+    select * from records where (p_role='' or role=p_role) and (p_access='' or (p_access='active' and account_status='active') or (p_access='disabled' and account_status in ('suspended','deletion_pending')) or (p_access='deleting' and account_status='deletion_pending') or (p_access='pending' and account_status in ('pending_invitation','pending_verification')) or (p_access='expired' and account_status='invitation_expired') or (p_access='cancelled' and account_status='invitation_cancelled'))
+      and (p_search='' or position(lower(p_search) in lower(name))>0 or position(lower(p_search) in lower(coalesce(email,'')))>0 or position(p_search in uid::text)>0)
+  ), page_rows as (select * from eligible order by created_at desc,id offset (p_page-1)*p_limit limit p_limit)
+  select coalesce((select jsonb_agg(to_jsonb(r)) from page_rows r),'[]'::jsonb),(select count(*) from eligible),
+    (select jsonb_build_object('total',count(*),'admins',count(*) filter(where role='admin' and account_status='active'),'agents',count(*) filter(where role='agent' and account_status='active'),'staff',count(*) filter(where role='staff' and account_status='active'),'disabled',count(*) filter(where account_status='suspended'),'pending',count(*) filter(where account_status in ('pending_invitation','pending_verification')),'expired',count(*) filter(where account_status='invitation_expired')) from records)
+    into rows,total,summary;
+  return jsonb_build_object('data',rows,'count',total,'page',p_page,'limit',p_limit,'summary',summary);
+end $$;
+
+-- As in 037, with the Staff sign-in.
+create or replace function public.record_login_attempt(p_email text,p_success boolean,p_user uuid,p_portal text,p_ip text,p_agent text,
+ p_max integer,p_window integer,p_lock integer,p_business_start integer,p_business_end integer)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare address text=lower(btrim(p_email));attempt crm_private.login_attempts;account uuid;result text;local_hour integer;
+begin
+ if address is null or length(address) not between 3 and 254 or p_success is null or (p_portal is not null and p_portal not in ('admin','agent','staff'))
+ or p_max not between 1 and 20 or p_window not between 1 and 1440 or p_lock not between 1 and 1440
+ or p_business_start not between 0 and 23 or p_business_end not between 0 and 23 then
+  raise exception 'Invalid login attempt' using errcode='22023';end if;
+ perform pg_advisory_xact_lock(hashtextextended('login:'||address,37));
+ -- p_user comes only from a successful Supabase sign-in for this address.
+ select p.id into account from public.profiles p join auth.users u on u.id=p.id
+  where (p_success and p.id=p_user) or (not p_success and lower(to_jsonb(u)->>'email')=address) limit 1;
+ select * into attempt from crm_private.login_attempts where email=address for update;
+ if attempt.locked_until>now() then
+  result='locked';
+ elsif p_success then
+  result='success';
+  delete from crm_private.login_attempts where email=address;
+ else
+  result='failed';
+  insert into crm_private.login_attempts(email,failures,window_started) values(address,1,now())
+  on conflict(email) do update set
+   failures=case when crm_private.login_attempts.window_started<=now()-make_interval(mins=>p_window) or crm_private.login_attempts.locked_until is not null then 1 else crm_private.login_attempts.failures+1 end,
+   window_started=case when crm_private.login_attempts.window_started<=now()-make_interval(mins=>p_window) or crm_private.login_attempts.locked_until is not null then now() else crm_private.login_attempts.window_started end,
+   locked_until=null,updated_at=now()
+  returning * into attempt;
+  if attempt.failures>=p_max then
+   update crm_private.login_attempts set locked_until=now()+make_interval(mins=>p_lock),updated_at=now() where email=address returning * into attempt;
+   if account is not null then
+    insert into public.security_alerts(type,severity,user_id,message,metadata)
+     values('account_login_locked','warning',account,'Sign-in locked after repeated incorrect passwords.',
+      jsonb_build_object('failures',attempt.failures,'locked_until',attempt.locked_until,'ip',left(p_ip,100)));
+   end if;
+  end if;
+ end if;
+ insert into public.login_events(user_id,email,portal,outcome,ip,user_agent)
+  values(account,address,p_portal,result,left(p_ip,100),left(p_agent,300));
+ if result='success' and account is not null then
+  local_hour=extract(hour from now() at time zone 'Asia/Karachi')::integer;
+  if (p_business_start<p_business_end and (local_hour<p_business_start or local_hour>=p_business_end))
+  or (p_business_start>p_business_end and local_hour>=p_business_end and local_hour<p_business_start) then
+   insert into public.security_alerts(type,severity,user_id,message,metadata)
+    values('after_hours_login','info',account,'Signed in outside business hours.',
+     jsonb_build_object('portal',p_portal,'ip',left(p_ip,100),'pakistan_hour',local_hour));
+  end if;
+ end if;
+ return jsonb_build_object('outcome',result,'locked',coalesce(attempt.locked_until>now(),false),
+  'locked_until',case when attempt.locked_until>now() then attempt.locked_until end);
+end $$;
+
+-- --------------------------------------------- department filters
+-- As in 045, for agents and staff, with each person's role and department,
+-- department totals and a department filter (p_department, null for all).
+create or replace function public.task_performance(p_actor uuid,p_from date,p_to date,p_user uuid,p_department uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);
+begin
+ if p_from is null or p_to is null or p_to<p_from or p_to-p_from>92 then raise exception 'Choose a range of up to 93 days' using errcode='HA400';end if;
+ return (with a as (select x.user_id,t.due_on,t.kind,t.target_quantity,x.completed_quantity,x.status,x.verified_status,x.verified_quantity,
+    public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status) pct,
+    case when x.verified_status is null then null when x.verified_status='not_done' then 0.0 when t.kind='measurable'
+     then least(100,round(coalesce(x.verified_quantity,x.completed_quantity)*100.0/t.target_quantity,1)) else 100.0 end vpct
+   from public.task_assignments x join public.tasks t on t.id=x.task_id
+   where x.status<>'cancelled' and t.due_on between p_from and p_to and (p_user is null or x.user_id=p_user) and (p_department is null or x.user_id in (select id from public.profiles where department_id=p_department))),
+  r as (select * from public.task_daily_reports where work_date between p_from and p_to and (p_user is null or user_id=p_user) and (p_department is null or user_id in (select id from public.profiles where department_id=p_department))),
+  q as (select * from public.task_checkout_requests where work_date between p_from and p_to and (p_user is null or user_id=p_user) and (p_department is null or user_id in (select id from public.profiles where department_id=p_department))),
+  people as (select p.* from public.profiles p where p.id in (select user_id from a union select user_id from r union select user_id from q)
+   or (p_user is null and p.role in ('agent','staff') and p.active and p.deleted_at is null
+    and (p_department is null or p.department_id=p_department)) or p.id=p_user)
+ select jsonb_build_object('from',p_from,'to',p_to,
+  'totals',jsonb_build_object('assignments',(select count(*) from a),'completed',(select count(*) from a where status='completed'),
+   'average_percent',(select round(avg(pct),1) from a),'verified',(select count(*) from a where verified_status is not null),
+   'verified_average_percent',(select round(avg(vpct),1) from a),'reports',(select count(*) from r),
+   'early_approved',(select count(*) from q where kind='early' and status='approved'),'emergency_approved',(select count(*) from q where kind='emergency' and status='approved')),
+  'employees',(select coalesce(jsonb_agg(jsonb_build_object('id',p.id,'name',p.name,'uid',p.uid,'active',p.active and p.deleted_at is null,
+    'role',p.role,'department',public.department_name(p.department_id),
+    'assignments',(select count(*) from a where user_id=p.id),'completed',(select count(*) from a where user_id=p.id and status='completed'),
+    'average_percent',(select round(avg(pct),1) from a where user_id=p.id),
+    'verified',(select count(*) from a where user_id=p.id and verified_status is not null),
+    'verified_average_percent',(select round(avg(vpct),1) from a where user_id=p.id),
+    'task_days',(select count(distinct due_on) from a where user_id=p.id),
+    'reports',(select count(*) from r where user_id=p.id),'reports_reviewed',(select count(*) from r where user_id=p.id and status='reviewed'),
+    'missing_reports',(select count(*) from (select distinct due_on from a where user_id=p.id and due_on<public.attendance_local_date(now())) d
+     where not exists(select 1 from r where r.user_id=p.id and r.work_date=d.due_on)),
+    'early',(select jsonb_build_object('approved',count(*) filter(where status='approved'),'rejected',count(*) filter(where status='rejected'),
+      'pending',count(*) filter(where status='pending')) from q where user_id=p.id and kind='early'),
+    'emergency',(select jsonb_build_object('approved',count(*) filter(where status='approved'),'rejected',count(*) filter(where status='rejected'),
+      'pending',count(*) filter(where status='pending')) from q where user_id=p.id and kind='emergency'))
+   order by p.name,p.id),'[]'::jsonb) from people p),
+  -- Each department's assignments, averaged with equal weight per task as
+  -- elsewhere; membership is each person's current department.
+  'departments',(select coalesce(jsonb_agg(jsonb_build_object('id',d.id,'name',d.name,'active',d.active,
+    'employees',(select count(*) from public.profiles p where p.department_id=d.id and p.role in ('agent','staff') and p.active and p.deleted_at is null),
+    'assignments',(select count(*) from a join public.profiles p on p.id=a.user_id where p.department_id=d.id),
+    'completed',(select count(*) from a join public.profiles p on p.id=a.user_id where p.department_id=d.id and a.status='completed'),
+    'average_percent',(select round(avg(a.pct),1) from a join public.profiles p on p.id=a.user_id where p.department_id=d.id),
+    'reports',(select count(*) from r join public.profiles p on p.id=r.user_id where p.department_id=d.id))
+   order by d.sort_order,lower(d.name)),'[]'::jsonb) from public.departments d where p_department is null or d.id=p_department),
+  'days',(select coalesce(jsonb_agg(jsonb_build_object('date',d,'assignments',(select count(*) from a where due_on=d),
+    'completed',(select count(*) from a where due_on=d and status='completed'),'average_percent',(select round(avg(pct),1) from a where due_on=d),
+    'reports',(select count(*) from r where work_date=d)) order by d),'[]'::jsonb)
+   from generate_series(p_from,p_to,interval '1 day') g(dd),lateral (select g.dd::date d) x)));
+end $$;
+-- The 045 call without a department.
+create or replace function public.task_performance(p_actor uuid,p_from date,p_to date,p_user uuid) returns jsonb language sql security definer set search_path='' as $$
+ select public.task_performance(p_actor,p_from,p_to,p_user,null::uuid)
+$$;
+-- As in 040, with each employee's department and a department filter.
+create or replace function public.attendance_leave_page(p_actor uuid,p_mine boolean,p_status text,p_user uuid,p_page integer,p_limit integer,p_department uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);scope uuid;result jsonb;
+begin
+ if (p_status is not null and p_status not in ('pending','approved','rejected','cancelled')) or p_page not between 1 and 100000 or p_limit not between 1 and 100 then
+  raise exception 'Invalid filter' using errcode='HA400';end if;
+ scope=case when actor.role<>'admin' or coalesce(p_mine,false) then p_actor else p_user end;
+ with visible as (
+  select l.*,p.name employee_name,p.uid employee_uid,p.role employee_role,public.department_name(p.department_id) employee_department,r.name reviewer_name
+  from public.attendance_leave_requests l join public.profiles p on p.id=l.user_id left join public.profiles r on r.id=l.reviewer_id
+  where (scope is null or l.user_id=scope) and (p_status is null or l.status=p_status)
+   and (p_department is null or p.department_id=p_department)
+ ), page as (select * from visible order by case status when 'pending' then 0 else 1 end,created_at desc,id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('data',coalesce((select jsonb_agg(to_jsonb(page) order by case status when 'pending' then 0 else 1 end,created_at desc,id) from page),'[]'::jsonb),
+  'count',(select count(*) from visible),'page',p_page,'limit',p_limit) into result;
+ return result;
+end $$;
+-- The 040 call without a department.
+create or replace function public.attendance_leave_page(p_actor uuid,p_mine boolean,p_status text,p_user uuid,p_page integer,p_limit integer) returns jsonb language sql security definer set search_path='' as $$
+ select public.attendance_leave_page(p_actor,p_mine,p_status,p_user,p_page,p_limit,null::uuid)
+$$;
+
+-- -------------------------------------------------------------- accounts
+-- The department and job title of an account being created, set by the API
+-- after begin_account_provisioning reserves it and before the login exists;
+-- complete_account_provisioning saves them with the role.
+create or replace function public.account_provisioning_details(p_actor uuid,p_session text,p_unlock text,p_id uuid,p_department uuid,p_job_title text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare r public.account_provisioning;title text=nullif(regexp_replace(btrim(coalesce(p_job_title,'')),'\s+',' ','g'),'');
+begin
+ perform pg_advisory_xact_lock(873420);perform pg_advisory_xact_lock(873436);
+ perform public.accounts_gate(p_actor,p_session,p_unlock);
+ select * into r from public.account_provisioning where id=p_id and requested_by=p_actor for update;
+ if r.id is null or r.status<>'creating' then raise exception 'Account creation request not found' using errcode='P0002';end if;
+ if length(title)>80 then raise exception 'Invalid account request' using errcode='22023';end if;
+ if p_department is not null and not exists(select 1 from public.departments where id=p_department and active) then
+  raise exception 'Invalid account request' using errcode='22023';end if;
+ update public.account_provisioning set requested_department_id=p_department,requested_job_title=title where id=p_id;
+ return jsonb_build_object('id',p_id,'department',public.department_name(p_department),'job_title',title);
+end $$;
+
+-- As in 022 (with the active-leads check of 032), for staff too. Staff never
+-- hold leads, so an agent with leads hands them over before becoming staff
+-- (the handover dialog can make that change). The audit also records a
+-- change of role or access.
+create or replace function public.update_account_022(p_actor uuid,p_session text,p_unlock text,p_target uuid,p_data jsonb,p_request text)
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare target public.profiles; result public.profiles;
+begin
+  -- Serialize account-role/access edits before locking administrator rows.
+  perform pg_advisory_xact_lock(873420);
+  perform pg_advisory_xact_lock(873436);
+  perform public.accounts_gate(p_actor,p_session,p_unlock);
+  if jsonb_typeof(p_data) is distinct from 'object' or p_data='{}'::jsonb or (p_data-array['name','role','active'])<>'{}'::jsonb
+    or (p_data?'name' and (jsonb_typeof(p_data->'name')<>'string' or length(btrim(p_data->>'name')) not between 1 and 200))
+    or (p_data?'role' and coalesce(p_data->>'role','') not in ('admin','agent','staff'))
+    or (p_data?'active' and jsonb_typeof(p_data->'active') is distinct from 'boolean') then raise exception 'Invalid account fields' using errcode='22023'; end if;
+  select * into target from public.profiles where id=p_target for update;
+  if not found then raise exception 'Account not found' using errcode='P0002'; end if;
+  if target.role='agent' and p_data?'active' and not (p_data->>'active')::boolean
+    and exists(select 1 from public.active_leads where assigned_agent=p_target) then
+    raise exception 'Use the agent handover dialog before disabling an agent with leads' using errcode='22023'; end if;
+  if target.role='agent' and p_data->>'role'='staff' and exists(select 1 from public.active_leads where assigned_agent=p_target) then
+    raise exception 'Use the agent handover dialog to hand over this agent''s leads before changing the account to Staff' using errcode='22023'; end if;
+  if p_target=p_actor and ((p_data?'role' and p_data->>'role'<>'admin') or (p_data?'active' and not (p_data->>'active')::boolean)) then raise exception 'You cannot disable or demote your own administrator account' using errcode='22023'; end if;
+  if target.active and target.role='admin' and (coalesce(p_data->>'role',target.role)<>'admin' or not coalesce((p_data->>'active')::boolean,target.active))
+    and (select count(*) from public.profiles where role='admin' and active)<=1 then raise exception 'Keep at least one active administrator' using errcode='22023'; end if;
+  update public.profiles set name=case when p_data?'name' then btrim(p_data->>'name') else name end,
+    role=coalesce(p_data->>'role',role),active=coalesce((p_data->>'active')::boolean,active) where id=p_target returning * into result;
+  if not result.active or result.role<>'admin' then delete from public.account_unlocks where admin_id=p_target; end if;
+  insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata) values(p_actor,'manage_account','profiles',p_target::text,p_request,
+    jsonb_build_object('fields',to_jsonb(array(select jsonb_object_keys(p_data))))
+    ||case when result.role<>target.role then jsonb_build_object('role_from',target.role,'role_to',result.role) else '{}'::jsonb end
+    ||case when result.active<>target.active then jsonb_build_object('active',result.active) else '{}'::jsonb end);
+  return to_jsonb(result);
+end $$;
+
+-- ---------------------------------------------------- employee management
+-- Administrators only, through attendance_admin. Departments, job titles,
+-- joining dates and shifts are working details, not account access, so they
+-- do not need the Accounts PIN.
+create or replace function public.employee_departments(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);
+begin
+ return (select coalesce(jsonb_agg(jsonb_build_object('id',d.id,'name',d.name,'active',d.active,'sort_order',d.sort_order,
+   'agents',(select count(*) from public.profiles p where p.department_id=d.id and p.role='agent' and p.active and p.deleted_at is null),
+   'staff',(select count(*) from public.profiles p where p.department_id=d.id and p.role='staff' and p.active and p.deleted_at is null),
+   'members',(select count(*) from public.profiles p where p.department_id=d.id and p.active and p.deleted_at is null))
+  order by d.sort_order,lower(d.name)),'[]'::jsonb) from public.departments d);
+end $$;
+-- p_id null creates a department. Departments are renamed or deactivated,
+-- never deleted, so every past link stays readable.
+create or replace function public.department_save(p_actor uuid,p_id uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);before public.departments;result public.departments;
+ nm text=regexp_replace(btrim(coalesce(p_data->>'name','')),'\s+',' ','g');
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or (p_data-array['name','active','sort_order'])<>'{}'::jsonb
+  or (p_data?'active' and jsonb_typeof(p_data->'active') is distinct from 'boolean')
+  or (p_data?'sort_order' and (jsonb_typeof(p_data->'sort_order') is distinct from 'number' or (p_data->>'sort_order')::numeric not between 0 and 10000
+   or (p_data->>'sort_order')::numeric<>trunc((p_data->>'sort_order')::numeric))) then
+  raise exception 'Invalid department details' using errcode='HA400';end if;
+ if (p_id is null or p_data?'name') and length(nm) not between 2 and 60 then
+  raise exception 'Enter a department name of 2 to 60 characters' using errcode='HA400';end if;
+ begin
+  if p_id is null then
+   insert into public.departments(name,sort_order,active,created_by)
+   values(nm,coalesce((p_data->>'sort_order')::integer,100),coalesce((p_data->>'active')::boolean,true),actor.id) returning * into result;
+   insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+   values(actor.id,'department.created','departments',result.id::text,p_request,jsonb_build_object('name',result.name));
+  else
+   select * into before from public.departments where id=p_id for update;
+   if not found then raise exception 'Department not found' using errcode='HA404';end if;
+   update public.departments set name=case when p_data?'name' then nm else name end,active=coalesce((p_data->>'active')::boolean,active),
+    sort_order=coalesce((p_data->>'sort_order')::integer,sort_order) where id=p_id returning * into result;
+   if result.name<>before.name or result.active<>before.active or result.sort_order<>before.sort_order then
+    insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+    values(actor.id,'department.updated','departments',p_id::text,p_request,jsonb_build_object('name',result.name,
+     'before',jsonb_build_object('name',before.name,'active',before.active),'after',jsonb_build_object('name',result.name,'active',result.active)));
+   end if;
+  end if;
+ exception when unique_violation then
+  raise exception 'A department called % already exists',nm using errcode='HA409';
+ end;
+ return to_jsonb(result);
+end $$;
+-- One employee as administrators manage them: profile, department, job
+-- title, joining date and shifts (the attendance, tasks and leave come from
+-- the existing attendance and task functions).
+create or replace function public.employee_detail(p_actor uuid,p_user uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);p public.profiles;today date=public.attendance_local_date(now());
+begin
+ select * into p from public.profiles where id=p_user and deleted_at is null and role in ('admin','agent','staff');
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ return jsonb_build_object('id',p.id,'uid',p.uid,'name',p.name,'role',p.role,'active',p.active,
+  'email',(select to_jsonb(u)->>'email' from auth.users u where u.id=p.id),
+  'department_id',p.department_id,'department',public.department_name(p.department_id),'job_title',p.job_title,'joined_on',p.joined_on,
+  'created_at',p.created_at,'today',today,'shift',public.employee_shift_info(p.id,today),
+  'shifts',(select coalesce(jsonb_agg(jsonb_build_object('effective_from',s.effective_from,
+    'source',case when s.follows_company then 'company' else 'assigned' end,'label',s.label,
+    'shift_start',to_char(s.shift_start,'HH24:MI'),'shift_end',to_char(s.shift_end,'HH24:MI'),'work_days',to_jsonb(s.work_days),
+    'grace_minutes',s.grace_minutes,'created_by_name',(select name from public.profiles where id=s.created_by),'created_at',s.created_at,
+    'upcoming',s.effective_from>today) order by s.effective_from desc),'[]'::jsonb) from public.employee_shifts s where s.user_id=p.id));
+end $$;
+create or replace function public.employee_profile_save(p_actor uuid,p_user uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);before public.profiles;result public.profiles;dep uuid;title text;joined date;
+ changes jsonb='{}'::jsonb;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object' or p_data='{}'::jsonb or (p_data-array['department_id','job_title','joined_on'])<>'{}'::jsonb
+  or (p_data?'department_id' and jsonb_typeof(p_data->'department_id') not in ('string','null'))
+  or (p_data?'job_title' and jsonb_typeof(p_data->'job_title') not in ('string','null'))
+  or (p_data?'joined_on' and jsonb_typeof(p_data->'joined_on') not in ('string','null')) then
+  raise exception 'Invalid employee details' using errcode='HA400';end if;
+ select * into before from public.profiles where id=p_user and deleted_at is null and role in ('admin','agent','staff') for update;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ dep=case when p_data?'department_id' then (p_data->>'department_id')::uuid else before.department_id end;
+ if dep is distinct from before.department_id and dep is not null and not exists(select 1 from public.departments where id=dep and active) then
+  raise exception 'Choose an active department' using errcode='HA400';end if;
+ title=case when p_data?'job_title' then nullif(regexp_replace(btrim(coalesce(p_data->>'job_title','')),'\s+',' ','g'),'') else before.job_title end;
+ if length(title)>80 then raise exception 'Use a job title of up to 80 characters' using errcode='HA400';end if;
+ joined=case when p_data?'joined_on' then (p_data->>'joined_on')::date else before.joined_on end;
+ if joined is not null and joined is distinct from before.joined_on and (joined<'1990-01-01' or joined>public.attendance_local_date(now())+366) then
+  raise exception 'Choose a joining date between 1990 and a year from now' using errcode='HA400';end if;
+ update public.profiles set department_id=dep,job_title=title,joined_on=joined where id=p_user returning * into result;
+ if result.department_id is distinct from before.department_id then
+  changes=changes||jsonb_build_object('department',jsonb_build_object('before',public.department_name(before.department_id),'after',public.department_name(result.department_id)));end if;
+ if result.job_title is distinct from before.job_title then
+  changes=changes||jsonb_build_object('job_title',jsonb_build_object('before',before.job_title,'after',result.job_title));end if;
+ if result.joined_on is distinct from before.joined_on then
+  changes=changes||jsonb_build_object('joined_on',jsonb_build_object('before',before.joined_on,'after',result.joined_on));end if;
+ if changes<>'{}'::jsonb then
+  insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+  values(actor.id,'employee.updated','profiles',p_user::text,p_request,jsonb_build_object('user_id',p_user,'role',result.role,'changes',changes));
+ end if;
+ return public.employee_detail(p_actor,p_user);
+end $$;
+-- A shift from a date: today or later, so days already worked keep their
+-- rules. Saving the same date again replaces that change.
+create or replace function public.employee_shift_save(p_actor uuid,p_user uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);person public.profiles;today date=public.attendance_local_date(now());
+ starts date;company boolean;days smallint[];label text;s_start time;s_end time;grace integer;before jsonb;saved public.employee_shifts;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object'
+  or (p_data-array['effective_from','follows_company','label','shift_start','shift_end','work_days','grace_minutes'])<>'{}'::jsonb
+  or (p_data?'follows_company' and jsonb_typeof(p_data->'follows_company') is distinct from 'boolean') then
+  raise exception 'Invalid shift details' using errcode='HA400';end if;
+ select * into person from public.profiles where id=p_user and deleted_at is null and role in ('admin','agent','staff') for share;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ starts=coalesce((p_data->>'effective_from')::date,today);
+ if starts<today or starts>today+365 then
+  raise exception 'Choose today or a date up to a year ahead. Days already worked keep the shift they had.' using errcode='HA400';end if;
+ company=coalesce((p_data->>'follows_company')::boolean,false);
+ if not company then
+  label=nullif(regexp_replace(btrim(coalesce(p_data->>'label','')),'\s+',' ','g'),'');
+  if label is null or length(label)>60 then raise exception 'Name the shift (up to 60 characters)' using errcode='HA400';end if;
+  s_start=(p_data->>'shift_start')::time;s_end=(p_data->>'shift_end')::time;grace=(p_data->>'grace_minutes')::integer;
+  if s_start is null or s_end is null or s_end<=s_start then
+   raise exception 'The shift must end after it starts, on the same day' using errcode='HA400';end if;
+  if jsonb_typeof(p_data->'work_days') is distinct from 'array' then raise exception 'Choose the working days' using errcode='HA400';end if;
+  days=array(select distinct x::smallint from jsonb_array_elements_text(p_data->'work_days') x order by 1);
+  if cardinality(days) not between 1 and 7 or not days<@'{1,2,3,4,5,6,7}'::smallint[] then
+   raise exception 'Choose the working days' using errcode='HA400';end if;
+  if grace is null or grace not between 0 and 120 or make_interval(mins=>grace)>=s_end-s_start then
+   raise exception 'Choose a grace period of 0 to 120 minutes, shorter than the shift' using errcode='HA400';end if;
+ end if;
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_user,40));
+ before=public.employee_shift_info(p_user,starts);
+ insert into public.employee_shifts(user_id,effective_from,follows_company,label,shift_start,shift_end,work_days,grace_minutes,created_by)
+ values(p_user,starts,company,label,s_start,s_end,days,grace,actor.id)
+ on conflict(user_id,effective_from) do update set follows_company=excluded.follows_company,label=excluded.label,shift_start=excluded.shift_start,
+  shift_end=excluded.shift_end,work_days=excluded.work_days,grace_minutes=excluded.grace_minutes,created_by=excluded.created_by,created_at=now()
+ returning * into saved;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'employee.shift_changed','profiles',p_user::text,p_request,jsonb_build_object('user_id',p_user,'role',person.role,
+  'effective_from',starts,'before',before-'upcoming'-'effective_from','after',public.employee_shift_info(p_user,starts)-'upcoming'-'effective_from'));
+ return public.employee_detail(p_actor,p_user);
+end $$;
+-- Only a change that has not started yet can be withdrawn.
+create or replace function public.employee_shift_cancel(p_actor uuid,p_user uuid,p_from date,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(now());gone public.employee_shifts;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_user,40));
+ delete from public.employee_shifts where user_id=p_user and effective_from=p_from and effective_from>today returning * into gone;
+ if not found then raise exception 'Only a shift change that has not started yet can be withdrawn' using errcode='HA409';end if;
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'employee.shift_cancelled','profiles',p_user::text,p_request,jsonb_build_object('user_id',p_user,'effective_from',p_from,
+  'label',gone.label,'follows_company',gone.follows_company));
+ return public.employee_detail(p_actor,p_user);
+end $$;
+-- Every employee with today's attendance and tasks, for Employee
+-- management. Filters: search, role, department (an id or 'none'), account
+-- (active, inactive), attendance (present, late or a day state) and tasks
+-- (none, incomplete, complete).
+create or replace function public.employees_page(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);f jsonb=coalesce(p_filters,'{}'::jsonb);today date=public.attendance_local_date(now());
+ term text=nullif(lower(btrim(coalesce(f->>'search',''))),'');result jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 or jsonb_typeof(f)<>'object'
+  or (f-array['search','role','department','account','attendance','tasks'])<>'{}'::jsonb or length(coalesce(f->>'search',''))>100
+  or coalesce(f->>'role','admin') not in ('admin','agent','staff') or coalesce(f->>'account','active') not in ('active','inactive')
+  or coalesce(f->>'tasks','none') not in ('none','incomplete','complete')
+  or coalesce(f->>'attendance','present') not in ('present','late','absent','leave','not_checked_in','checked_in','checked_out','incomplete','day_off','holiday','not_tracked')
+  or (f->>'department' is not null and f->>'department'<>'none' and f->>'department'!~'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') then
+  raise exception 'Invalid employee filter' using errcode='HA400';end if;
+ with people as (
+  select p.*,to_jsonb(u)->>'email' email from public.profiles p join auth.users u on u.id=p.id
+  where p.deleted_at is null and p.role in ('admin','agent','staff')
+ ), days as (select * from public.attendance_days(today,today,null,now())),
+ work as (
+  select x.user_id,count(*) tasks,count(*) filter(where x.status='completed') completed,
+   round(avg(public.task_percent(t.kind,t.target_quantity,x.completed_quantity,x.status)),1) pct
+  from public.task_assignments x join public.tasks t on t.id=x.task_id
+  where x.status<>'cancelled' and t.task_date<=today and t.due_on>=today group by x.user_id
+ ), rows as (
+  select pe.id,pe.uid,pe.name,pe.email,pe.role,pe.department_id,public.department_name(pe.department_id) department,pe.job_title,pe.joined_on,
+   pe.active,coalesce(d.state,'not_tracked') attendance_state,d.punctuality,d.late_minutes,d.check_in_at,d.check_out_at,d.leave_type,
+   coalesce(w.tasks,0) tasks,coalesce(w.completed,0) completed,w.pct task_percent,
+   exists(select 1 from public.task_daily_reports r where r.user_id=pe.id and r.work_date=today) report_submitted
+  from people pe left join days d on d.user_id=pe.id left join work w on w.user_id=pe.id
+ ), filtered as (
+  select * from rows r
+  where (term is null or position(term in lower(r.name))>0 or position(term in lower(coalesce(r.email,'')))>0 or r.uid::text=term
+    or position(term in lower(coalesce(r.job_title,'')))>0)
+   and (f->>'role' is null or r.role=f->>'role')
+   and (f->>'department' is null or (f->>'department'='none' and r.department_id is null) or r.department_id::text=f->>'department')
+   and (f->>'account' is null or r.active=(f->>'account'='active'))
+   and (f->>'attendance' is null or (f->>'attendance'='present' and r.attendance_state in ('checked_in','checked_out'))
+    or (f->>'attendance'='late' and r.punctuality='late') or r.attendance_state=f->>'attendance')
+   and (f->>'tasks' is null or (f->>'tasks'='none' and r.tasks=0) or (f->>'tasks'='complete' and r.tasks>0 and r.completed=r.tasks)
+    or (f->>'tasks'='incomplete' and r.tasks>r.completed))
+ ), page as (select * from filtered order by lower(name),id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('date',today,'count',(select count(*) from filtered),'page',p_page,'limit',p_limit,
+  'data',coalesce((select jsonb_agg(to_jsonb(pg)||jsonb_build_object('shift',public.employee_shift_info(pg.id,today)) order by lower(pg.name),pg.id)
+   from page pg),'[]'::jsonb),
+  'summary',jsonb_build_object('active',(select count(*) from rows where active),
+   'admins',(select count(*) from rows where active and role='admin'),'agents',(select count(*) from rows where active and role='agent'),
+   'staff',(select count(*) from rows where active and role='staff'),
+   'present',(select count(*) from rows where active and attendance_state in ('checked_in','checked_out')),
+   'late',(select count(*) from rows where active and punctuality='late'),
+   'absent',(select count(*) from rows where active and attendance_state='absent'),
+   'on_leave',(select count(*) from rows where active and attendance_state='leave'),
+   'without_department',(select count(*) from rows where active and department_id is null))) into result;
+ return result;
+end $$;
+-- The signed-in employee's own working details, for My profile.
+create or replace function public.employee_me(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);
+begin
+ return jsonb_build_object('id',actor.id,'uid',actor.uid,'name',actor.name,'role',actor.role,
+  'email',(select to_jsonb(u)->>'email' from auth.users u where u.id=actor.id),
+  'department',public.department_name(actor.department_id),'job_title',actor.job_title,'joined_on',actor.joined_on,
+  'shift',public.employee_shift_info(actor.id,public.attendance_local_date(now())));
+end $$;
+
+
+-- ---------------------------------------------------------------- grants
+-- Browser roles get nothing. Restated functions keep their privileges (the
+-- API calls the same ones as before); the new ones the API calls are granted
+-- to the service role, and the new helpers run only inside other functions.
+do $$ declare f record; begin
+ for f in select p.oid::regprocedure signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname in ('account_provisioning_details','employee_departments','department_save','employee_detail','employee_profile_save','employee_shift_save','employee_shift_cancel','employees_page','employee_me','task_performance','attendance_leave_page','department_name','attendance_shift_apply','attendance_policy_for','attendance_admin_rules_for','employee_shift_info','task_recipients','task_audience','attendance_member','attendance_days','attendance_me','attendance_check_in_at','attendance_overview','attendance_daily','attendance_period','attendance_employees','attendance_employee','attendance_correction_request','attendance_correction_review','attendance_admin_tidy','attendance_admin_day_at','attendance_admin_set_at','task_checkout_check','task_checkout_state_at','task_report_submit_at','task_checkout_request_at','task_admin_overview','task_create_at','task_update_at','task_agents','begin_account_provisioning','complete_account_provisioning','accounts_page_032','record_login_attempt','update_account_022') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  if f.proname in ('account_provisioning_details','employee_departments','department_save','employee_detail','employee_profile_save','employee_shift_save','employee_shift_cancel','employees_page','employee_me','task_performance','attendance_leave_page') then
+   execute format('grant execute on function %s to service_role',f.signature);
+  elsif f.proname in ('department_name','attendance_shift_apply','attendance_policy_for','attendance_admin_rules_for','employee_shift_info','task_recipients','task_audience') then
+   execute format('revoke all on function %s from service_role',f.signature);
+  end if;
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
+
+
+-- Migration: 048_flexible_employee_shifts.sql
+
+-- Apply after 047. Safe to rerun. Flexible office timings (update 048).
+-- Office timings at three levels on top of the company policy, highest
+-- first:
+--  1. an employee's own shift (employee_shifts, from 047);
+--  2. their department's shift;
+--  3. the default shift for their role (agents or staff);
+--  4. the company policy (attendance_policies), as before.
+-- Administrators follow the company policy unless given their own shift.
+-- Every timing is dated: a change applies from a chosen day (today or
+-- later) until the next change, and earlier days keep the timing they had.
+-- Each attendance record already keeps the shift it was recorded with, and
+-- days are resolved with the role and department the employee had on that
+-- day, so moving someone between departments never rewrites their past.
+-- Nothing is deleted: saving the same day again adds a newer version, and a
+-- planned change is withdrawn rather than removed. "Inherit" rows end an own
+-- or department shift from a date, returning to the next level.
+-- Shifts are same-day (they end after they start); overnight shifts are not
+-- supported, as before.
+-- Every change must start from the latest version of the timing it edits
+-- (expected_version / p_version): a save or withdrawal made from an older
+-- view is refused instead of overwriting a newer change. The 047 withdrawal
+-- function without a version is replaced, so no way around this remains.
+-- Existing attendance, leave, tasks, reports and accounts are unchanged.
+-- Other functions keep their names and arguments. Never apply an older
+-- update again after this one.
+
+set local lock_timeout='5s';
+do $$ begin
+ if to_regclass('public.employee_shifts') is null
+  or to_regprocedure('public.attendance_shift_apply(public.attendance_policies,uuid,date)') is null
+  or to_regprocedure('public.employees_page(uuid,jsonb,integer,integer)') is null then
+  raise exception 'Apply CRM updates up to 047 before update 048.';
+ end if;
+end $$;
+
+-- ------------------------------------------------- role and department
+-- One row per change. inherits=true ends the timing from that day: a
+-- department falls back to the role default, a role to the company policy.
+create table if not exists public.shift_schedules(
+ id uuid primary key default gen_random_uuid(),
+ scope text not null check(scope in ('role','department')),
+ role text check(role in ('agent','staff')),
+ department_id uuid references public.departments(id),
+ effective_from date not null,
+ inherits boolean not null default false,
+ shift_start time,
+ shift_end time,
+ work_days smallint[],
+ grace_minutes integer,
+ reason text check(reason is null or (reason=btrim(reason) and length(reason) between 1 and 300)),
+ created_by uuid references public.profiles(id),
+ created_at timestamptz not null default now(),
+ withdrawn_at timestamptz,
+ withdrawn_by uuid references public.profiles(id),
+ constraint shift_schedules_target check((scope='role' and role is not null and department_id is null)
+  or (scope='department' and department_id is not null and role is null)),
+ constraint shift_schedules_times check(
+  (inherits and shift_start is null and shift_end is null and work_days is null and grace_minutes is null)
+  or (not inherits and shift_end>shift_start and cardinality(work_days) between 1 and 7 and work_days<@'{1,2,3,4,5,6,7}'::smallint[]
+   and grace_minutes between 0 and 120 and make_interval(mins=>grace_minutes)<shift_end-shift_start))
+);
+create index if not exists shift_schedules_role on public.shift_schedules(role,effective_from desc,created_at desc) where scope='role' and withdrawn_at is null;
+create index if not exists shift_schedules_department on public.shift_schedules(department_id,effective_from desc,created_at desc) where scope='department' and withdrawn_at is null;
+
+-- Own shifts (047) keep every version too, with a reason.
+alter table public.employee_shifts drop constraint if exists employee_shifts_user_id_effective_from_key;
+alter table public.employee_shifts
+ add column if not exists reason text,
+ add column if not exists withdrawn_at timestamptz,
+ add column if not exists withdrawn_by uuid references public.profiles(id);
+alter table public.employee_shifts drop constraint if exists employee_shifts_reason;
+alter table public.employee_shifts add constraint employee_shifts_reason check(reason is null or (reason=btrim(reason) and length(reason) between 1 and 300));
+create index if not exists employee_shifts_current on public.employee_shifts(user_id,effective_from desc,created_at desc) where withdrawn_at is null;
+
+-- The role and department each employee had from each day, so a past day is
+-- resolved with the groups of that day. Everyone starts with their current
+-- role and department; later changes are recorded from the day they happen.
+create table if not exists public.employee_group_history(
+ user_id uuid not null references public.profiles(id),
+ effective_from date not null,
+ role text not null,
+ department_id uuid references public.departments(id),
+ recorded_at timestamptz not null default now(),
+ primary key(user_id,effective_from)
+);
+insert into public.employee_group_history(user_id,effective_from,role,department_id)
+select id,'-infinity',role,department_id from public.profiles on conflict do nothing;
+create or replace function public.track_employee_group() returns trigger language plpgsql security definer set search_path='' as $$
+begin
+ if tg_op='INSERT' then
+  insert into public.employee_group_history(user_id,effective_from,role,department_id) values(new.id,'-infinity',new.role,new.department_id)
+  on conflict(user_id,effective_from) do update set role=excluded.role,department_id=excluded.department_id,recorded_at=now();
+ elsif new.role is distinct from old.role or new.department_id is distinct from old.department_id then
+  -- An account set up today (created, then given its role and department)
+  -- has had these groups from the start.
+  if public.attendance_local_date(new.created_at)=public.attendance_local_date(now()) then
+   update public.employee_group_history set role=new.role,department_id=new.department_id,recorded_at=now() where user_id=new.id;
+  end if;
+  insert into public.employee_group_history(user_id,effective_from,role,department_id)
+  values(new.id,case when public.attendance_local_date(new.created_at)=public.attendance_local_date(now()) then '-infinity'
+   else public.attendance_local_date(now()) end,new.role,new.department_id)
+  on conflict(user_id,effective_from) do update set role=excluded.role,department_id=excluded.department_id,recorded_at=now();
+ end if;
+ return null;
+end $$;
+create or replace trigger track_employee_group after insert or update of role,department_id on public.profiles
+ for each row execute function public.track_employee_group();
+
+do $$ declare t text; begin
+ foreach t in array array['shift_schedules','employee_group_history'] loop
+  execute format('alter table public.%I enable row level security',t);
+  execute format('revoke all on public.%I from public,anon,authenticated',t);
+  execute format('grant all on public.%I to service_role',t);
+ end loop;
+end $$;
+
+-- Employees are told about a change to their office timing.
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check(type in ('lead_assigned','lead_moved_away','lead_kept','first_call_missed',
+ 'missed_calls_review','calls_due_soon','daily_call_summary','followup_due','visit_tomorrow',
+ 'attendance_request','attendance_review','attendance_incomplete','attendance_summary',
+ 'property_source_updated','property_source_removed',
+ 'task_assigned','task_updated','task_cancelled','task_report','task_report_reviewed','checkout_request','checkout_decision',
+ 'shift_changed'));
+
+-- ---------------------------------------------------------------- helpers
+create or replace function public.work_days_text(p_days smallint[]) returns text language sql immutable set search_path='' as $$
+ with d as (select distinct x from unnest(p_days) x where x between 1 and 7),
+  n as (select array_agg(x order by x) a from d)
+ select case when n.a is null then null
+  when cardinality(n.a)>2 and n.a[cardinality(n.a)]-n.a[1]=cardinality(n.a)-1
+   then (array['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])[n.a[1]]||'–'||(array['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])[n.a[cardinality(n.a)]]
+  else (select string_agg((array['Mon','Tue','Wed','Thu','Fri','Sat','Sun'])[x],', ' order by x) from unnest(n.a) x) end
+ from n
+$$;
+create or replace function public.shift_hours_text(p_start time,p_end time) returns text language sql immutable set search_path='' as $$
+ select to_char(p_start,'FMHH12:MI AM')||' – '||to_char(p_end,'FMHH12:MI AM')
+$$;
+-- The timing rule for an employee on a day, highest level first; source is
+-- individual, department, role or company (the company policy applies).
+create or replace function public.employee_schedule_rule(p_user uuid,p_day date)
+returns table(source text,source_label text,rule_id uuid,rule_from date,label text,shift_start time,shift_end time,work_days smallint[],grace_minutes integer)
+language plpgsql stable security definer set search_path='' as $$
+declare own public.employee_shifts;grp public.employee_group_history;sch public.shift_schedules;
+begin
+ select * into own from public.employee_shifts where user_id=p_user and effective_from<=p_day and withdrawn_at is null
+  order by effective_from desc,created_at desc limit 1;
+ if found and not own.follows_company then
+  return query select 'individual'::text,'Individual shift'::text,own.id,own.effective_from,own.label,own.shift_start,own.shift_end,own.work_days,own.grace_minutes;
+  return;
+ end if;
+ select * into grp from public.employee_group_history where user_id=p_user and effective_from<=p_day order by effective_from desc limit 1;
+ if found and grp.role in ('agent','staff') then
+  if grp.department_id is not null then
+   select * into sch from public.shift_schedules where scope='department' and department_id=grp.department_id and effective_from<=p_day and withdrawn_at is null
+    order by effective_from desc,created_at desc limit 1;
+   if found and not sch.inherits then
+    return query select 'department'::text,coalesce(public.department_name(grp.department_id),'Department')||' department shift',sch.id,sch.effective_from,
+     null::text,sch.shift_start,sch.shift_end,sch.work_days,sch.grace_minutes;
+    return;
+   end if;
+  end if;
+  select * into sch from public.shift_schedules where scope='role' and role=grp.role and effective_from<=p_day and withdrawn_at is null
+   order by effective_from desc,created_at desc limit 1;
+  if found and not sch.inherits then
+   return query select 'role'::text,case grp.role when 'agent' then 'Agent default shift' else 'Staff default shift' end,sch.id,sch.effective_from,
+    null::text,sch.shift_start,sch.shift_end,sch.work_days,sch.grace_minutes;
+   return;
+  end if;
+ end if;
+ return query select 'company'::text,'Company default shift'::text,null::uuid,null::date,null::text,null::time,null::time,null::smallint[],null::integer;
+end $$;
+-- As in 047: p_base (the company rules for the day) with the timing that
+-- applies to the employee that day.
+create or replace function public.attendance_shift_apply(p_base public.attendance_policies,p_user uuid,p_day date) returns public.attendance_policies language plpgsql stable security definer set search_path='' as $$
+declare r record;result public.attendance_policies=p_base;
+begin
+ if p_base.id is null then return p_base;end if;
+ select * into r from public.employee_schedule_rule(p_user,p_day);
+ if r.source<>'company' then
+  result.name=coalesce(r.label,r.source_label);result.shift_start=r.shift_start;result.shift_end=r.shift_end;
+  result.work_days=r.work_days;result.grace_minutes=r.grace_minutes;
+ end if;
+ return result;
+end $$;
+-- What an employee follows on a day, and the next day it changes, if any.
+create or replace function public.employee_shift_info(p_user uuid,p_day date) returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare r record;pol public.attendance_policies=public.attendance_policy_for(p_user,p_day);grp public.employee_group_history;change_day date;
+ u record;upol public.attendance_policies;upcoming jsonb;
+begin
+ select * into r from public.employee_schedule_rule(p_user,p_day);
+ select * into grp from public.employee_group_history where user_id=p_user and effective_from<=p_day order by effective_from desc limit 1;
+ -- Days something is planned to change at any level; the first one that
+ -- changes this employee's timing or where it comes from.
+ for change_day in select distinct d from (
+  select effective_from d from public.employee_shifts where user_id=p_user and effective_from>p_day and withdrawn_at is null
+  union all select effective_from from public.shift_schedules where scope='department' and department_id=grp.department_id and grp.role in ('agent','staff')
+   and effective_from>p_day and withdrawn_at is null
+  union all select effective_from from public.shift_schedules where scope='role' and role=grp.role and effective_from>p_day and withdrawn_at is null
+  union all select effective_from from public.attendance_policies where effective_from>p_day) x order by d limit 20 loop
+  select * into u from public.employee_schedule_rule(p_user,change_day);
+  upol=public.attendance_policy_for(p_user,change_day);
+  if u.source_label is distinct from r.source_label or upol.name is distinct from pol.name
+   or concat_ws('|',upol.shift_start,upol.shift_end,upol.work_days::text,upol.grace_minutes)
+    is distinct from concat_ws('|',pol.shift_start,pol.shift_end,pol.work_days::text,pol.grace_minutes) then
+   upcoming=jsonb_build_object('effective_from',change_day,'source',u.source,'source_label',u.source_label,
+    'label',coalesce(u.label,upol.name),'shift_start',to_char(upol.shift_start,'HH24:MI'),'shift_end',to_char(upol.shift_end,'HH24:MI'),
+    'work_days',to_jsonb(upol.work_days),'grace_minutes',upol.grace_minutes);
+   exit;
+  end if;
+ end loop;
+ return jsonb_build_object('source',r.source,'source_label',r.source_label,'label',coalesce(r.label,pol.name),
+  'shift_start',to_char(pol.shift_start,'HH24:MI'),'shift_end',to_char(pol.shift_end,'HH24:MI'),'work_days',to_jsonb(pol.work_days),
+  'grace_minutes',pol.grace_minutes,'effective_from',r.rule_from,'upcoming',upcoming);
+end $$;
+-- The effective timing as one comparable value, to tell who a change affects.
+create or replace function public.shift_signature(p_user uuid,p_day date) returns text language sql stable security definer set search_path='' as $$
+ select concat_ws('|',p.shift_start,p.shift_end,p.work_days::text,p.grace_minutes) from public.attendance_policy_for(p_user,p_day) p
+$$;
+-- In words, for notices: "12:00 PM – 8:00 PM, Mon–Sat (Media department shift)".
+create or replace function public.shift_summary(p_user uuid,p_day date) returns text language plpgsql stable security definer set search_path='' as $$
+declare pol public.attendance_policies=public.attendance_policy_for(p_user,p_day);r record;
+begin
+ if pol.id is null then return null;end if;
+ select * into r from public.employee_schedule_rule(p_user,p_day);
+ return public.shift_hours_text(pol.shift_start,pol.shift_end)||', '||public.work_days_text(pol.work_days)||' ('||r.source_label||')';
+end $$;
+-- Tells each employee whose timing from p_day differs from p_before (their
+-- signatures before the change), once per change (p_group).
+create or replace function public.shift_notify(p_before jsonb,p_day date,p_group text,p_intro text) returns integer language plpgsql security definer set search_path='' as $$
+declare item record;n integer=0;
+begin
+ for item in select key::uuid id,value from jsonb_each_text(p_before) loop
+  if public.shift_signature(item.id,p_day) is distinct from item.value then
+   perform public.push_notification(item.id,'shift_changed',p_group,'Your office timing has been updated',
+    left(p_intro||' From '||to_char(p_day,'FMDD FMMonth YYYY')||' your office timing is '
+     ||coalesce(public.shift_summary(item.id,p_day),'the company default shift')||'.',500),'/attendance',null);
+   n=n+1;
+  end if;
+ end loop;
+ return n;
+end $$;
+-- Checks a timing in p_data (shift_start, shift_end, work_days,
+-- grace_minutes) and the date it starts from.
+create or replace function public.shift_parse(p_data jsonb,p_today date,
+ out effective_from date,out shift_start time,out shift_end time,out work_days smallint[],out grace_minutes integer,out reason text)
+language plpgsql stable set search_path='' as $$
+begin
+ effective_from=coalesce((p_data->>'effective_from')::date,p_today);
+ if effective_from<p_today or effective_from>p_today+365 then
+  raise exception 'Choose today or a date up to a year ahead. Days already worked keep the shift they had.' using errcode='HA400';end if;
+ reason=nullif(regexp_replace(btrim(coalesce(p_data->>'reason','')),'\s+',' ','g'),'');
+ if length(reason)>300 then raise exception 'Keep the reason under 300 characters' using errcode='HA400';end if;
+ if coalesce((p_data->>'inherit')::boolean,false) then return;end if;
+ shift_start=(p_data->>'shift_start')::time;shift_end=(p_data->>'shift_end')::time;grace_minutes=(p_data->>'grace_minutes')::integer;
+ if shift_start is null or shift_end is null or shift_end<=shift_start then
+  raise exception 'The shift must end after it starts, on the same day. Overnight shifts are not supported.' using errcode='HA400';end if;
+ if jsonb_typeof(p_data->'work_days') is distinct from 'array' then raise exception 'Choose the working days' using errcode='HA400';end if;
+ work_days=array(select distinct x::smallint from jsonb_array_elements_text(p_data->'work_days') x order by 1);
+ if cardinality(work_days) not between 1 and 7 or not work_days<@'{1,2,3,4,5,6,7}'::smallint[] then
+  raise exception 'Choose the working days' using errcode='HA400';end if;
+ if grace_minutes is null or grace_minutes not between 0 and 120 or make_interval(mins=>grace_minutes)>=shift_end-shift_start then
+  raise exception 'Choose a grace period of 0 to 120 minutes, shorter than the shift' using errcode='HA400';end if;
+end $$;
+-- A role or department timing as administrators see it.
+create or replace function public.shift_schedule_json(p_row public.shift_schedules) returns jsonb language sql stable security definer set search_path='' as $$
+ select case when p_row.id is null then null else jsonb_build_object('id',p_row.id,'effective_from',p_row.effective_from,'inherits',p_row.inherits,
+  'shift_start',to_char(p_row.shift_start,'HH24:MI'),'shift_end',to_char(p_row.shift_end,'HH24:MI'),'work_days',to_jsonb(p_row.work_days),
+  'grace_minutes',p_row.grace_minutes,'reason',p_row.reason,'created_by_name',(select name from public.profiles where id=p_row.created_by),
+  'created_at',p_row.created_at) end
+$$;
+-- The timing set for a role or department on a day (its own rule, if any).
+create or replace function public.shift_default_at(p_scope text,p_target text,p_day date) returns public.shift_schedules language sql stable security definer set search_path='' as $$
+ select * from public.shift_schedules where scope=p_scope and withdrawn_at is null and effective_from<=p_day
+  and case when p_scope='role' then role=p_target else department_id::text=p_target end
+ order by effective_from desc,created_at desc limit 1
+$$;
+-- Active agents and staff in a role or department on a day.
+create or replace function public.shift_group_members(p_scope text,p_target text,p_day date) returns uuid[] language sql stable security definer set search_path='' as $$
+ select coalesce(array_agg(p.id order by p.id),'{}') from public.profiles p
+ join lateral (select * from public.employee_group_history g where g.user_id=p.id and g.effective_from<=p_day order by g.effective_from desc limit 1) g on true
+ where p.active and p.deleted_at is null and g.role in ('agent','staff')
+  and case when p_scope='role' then g.role=p_target else g.department_id::text=p_target end
+$$;
+-- Changes when a timing was last saved or withdrawn: a save made from an
+-- older view of the timing is refused instead of overwriting the newer one.
+create or replace function public.shift_version(p_scope text,p_target text) returns text language sql stable security definer set search_path='' as $$
+ select md5(coalesce(string_agg(x.id::text||':'||coalesce(x.withdrawn_at::text,''),',' order by x.id),'')) from (
+  select id,withdrawn_at from public.employee_shifts where p_scope='individual' and user_id::text=p_target
+  union all select id,withdrawn_at from public.shift_schedules where p_scope in ('role','department') and scope=p_scope
+   and case when p_scope='role' then role=p_target else department_id::text=p_target end) x
+$$;
+-- A role or department with its timing now, its planned changes and how
+-- many active employees follow it today.
+create or replace function public.shift_target_json(p_scope text,p_target text,p_today date) returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare members uuid[]=public.shift_group_members(p_scope,p_target,p_today);
+begin
+ return jsonb_build_object('current',public.shift_schedule_json(public.shift_default_at(p_scope,p_target,p_today)),
+  'planned',(select coalesce(jsonb_agg(public.shift_schedule_json(s) order by s.effective_from),'[]'::jsonb) from (
+    select distinct on (effective_from) * from public.shift_schedules where scope=p_scope and withdrawn_at is null and effective_from>p_today
+     and case when p_scope='role' then role=p_target else department_id::text=p_target end
+    order by effective_from,created_at desc) s),
+  'version',public.shift_version(p_scope,p_target),'members',cardinality(members),
+  'following',(select count(*) from unnest(members) m where (select r.source from public.employee_schedule_rule(m,p_today) r)=p_scope));
+end $$;
+
+-- Gives an employee their own timing from a date, or with inherit ends it
+-- from that date (they return to their department, role or company timing).
+-- p_data: effective_from, label, shift_start, shift_end, work_days,
+-- grace_minutes, reason and expected_version (shift_version from
+-- employee_detail, required).
+create or replace function public.employee_shift_save(p_actor uuid,p_user uuid,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);person public.profiles;today date=public.attendance_local_date(now());
+ t record;inherit boolean;shift_label text;cur public.employee_shifts;before jsonb;was jsonb;saved public.employee_shifts;notified integer;
+begin
+ if jsonb_typeof(p_data) is distinct from 'object'
+  or (p_data-array['effective_from','inherit','label','shift_start','shift_end','work_days','grace_minutes','reason','expected_version'])<>'{}'::jsonb
+  or (p_data?'inherit' and jsonb_typeof(p_data->'inherit') is distinct from 'boolean') then
+  raise exception 'Invalid shift details' using errcode='HA400';end if;
+ if jsonb_typeof(p_data->'expected_version') is distinct from 'string' then
+  raise exception 'Make this change in Shift management, which checks you are editing the latest timing' using errcode='HA400';end if;
+ select * into person from public.profiles where id=p_user and deleted_at is null and role in ('admin','agent','staff') for share;
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ select * into t from public.shift_parse(p_data,today);
+ inherit=t.shift_start is null;
+ if not inherit then
+  shift_label=coalesce(nullif(regexp_replace(btrim(coalesce(p_data->>'label','')),'\s+',' ','g'),''),'Individual shift');
+  if length(shift_label)>60 then raise exception 'Keep the shift name under 60 characters' using errcode='HA400';end if;
+ end if;
+ perform pg_advisory_xact_lock(hashtextextended('shift-schedules',48));
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_user,40));
+ if p_data->>'expected_version'<>public.shift_version('individual',p_user::text) then
+  raise exception 'This employee''s shift was changed a moment ago. Reload to see the latest before saving.' using errcode='HA409';end if;
+ select * into cur from public.employee_shifts where user_id=p_user and effective_from<=t.effective_from and withdrawn_at is null
+  order by effective_from desc,created_at desc limit 1;
+ if inherit and (cur.id is null or cur.follows_company) then
+  raise exception 'This employee has no individual shift on that date' using errcode='HA409';end if;
+ if not inherit and cur.id is not null and not cur.follows_company and cur.label=shift_label and cur.shift_start=t.shift_start
+  and cur.shift_end=t.shift_end and cur.work_days=t.work_days and cur.grace_minutes=t.grace_minutes then
+  raise exception 'This is already their individual shift on that date' using errcode='HA409';end if;
+ before=public.employee_shift_info(p_user,t.effective_from);
+ was=case when p_user=actor.id then '{}'::jsonb else jsonb_build_object(p_user,public.shift_signature(p_user,t.effective_from)) end;
+ insert into public.employee_shifts(user_id,effective_from,follows_company,label,shift_start,shift_end,work_days,grace_minutes,reason,created_by)
+ values(p_user,t.effective_from,inherit,shift_label,t.shift_start,t.shift_end,t.work_days,t.grace_minutes,t.reason,actor.id)
+ returning * into saved;
+ notified=public.shift_notify(was,t.effective_from,'shift:'||saved.id,
+  case when inherit then 'Your individual office timing has been removed.' else 'You have been given an individual office timing.' end);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'employee.shift_changed','profiles',p_user::text,p_request,jsonb_build_object('user_id',p_user,'role',person.role,
+  'effective_from',t.effective_from,'inherits',inherit,'reason',t.reason,'notified',notified,
+  'before',before-'upcoming'-'effective_from','after',public.employee_shift_info(p_user,t.effective_from)-'upcoming'-'effective_from'));
+ return public.employee_detail(p_actor,p_user);
+end $$;
+-- Withdraws an employee's planned change that has not started yet, from the
+-- version that was shown (p_version). The row stays in the history, marked
+-- withdrawn. Replaces the 047 form without a version.
+drop function if exists public.employee_shift_cancel(uuid,uuid,date,text);
+create or replace function public.employee_shift_cancel(p_actor uuid,p_user uuid,p_from date,p_version text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(now());gone public.employee_shifts;
+ was jsonb;notified integer;
+begin
+ perform pg_advisory_xact_lock(hashtextextended('shift-schedules',48));
+ perform pg_advisory_xact_lock(hashtextextended('attendance:'||p_user,40));
+ if p_version is null then
+  raise exception 'Make this change in Shift management, which checks you are editing the latest timing' using errcode='HA400';end if;
+ if p_version<>public.shift_version('individual',p_user::text) then
+  raise exception 'This employee''s shift was changed a moment ago. Reload to see the latest before withdrawing.' using errcode='HA409';end if;
+ if p_from is null or p_from<=today
+  or not exists(select 1 from public.employee_shifts where user_id=p_user and effective_from=p_from and withdrawn_at is null) then
+  raise exception 'Only a shift change that has not started yet can be withdrawn' using errcode='HA409';end if;
+ was=case when p_user=actor.id then '{}'::jsonb else jsonb_build_object(p_user,public.shift_signature(p_user,p_from)) end;
+ with w as (update public.employee_shifts set withdrawn_at=now(),withdrawn_by=actor.id
+  where user_id=p_user and effective_from=p_from and withdrawn_at is null returning *)
+ select * into gone from w order by created_at desc limit 1;
+ notified=public.shift_notify(was,p_from,'shift-withdrawn:'||gone.id,'A planned change to your office timing was withdrawn.');
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'employee.shift_cancelled','profiles',p_user::text,p_request,jsonb_build_object('user_id',p_user,'effective_from',p_from,
+  'label',gone.label,'follows_company',gone.follows_company,'inherits',gone.follows_company,'notified',notified));
+ return public.employee_detail(p_actor,p_user);
+end $$;
+
+-- Sets the timing of a role (p_target agent or staff) or a department
+-- (p_target its id) from a date, or with inherit ends it from that date,
+-- starting from the version shown (expected_version, required). Everyone
+-- whose timing changes is told once.
+create or replace function public.shift_default_save(p_actor uuid,p_scope text,p_target text,p_data jsonb,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(now());t record;
+ dep public.departments;target_name text;cur public.shift_schedules;saved public.shift_schedules;was jsonb;notified integer;
+begin
+ if p_scope is null or p_scope not in ('role','department') or jsonb_typeof(p_data) is distinct from 'object'
+  or (p_data-array['effective_from','inherit','shift_start','shift_end','work_days','grace_minutes','reason','expected_version'])<>'{}'::jsonb
+  or (p_data?'inherit' and jsonb_typeof(p_data->'inherit') is distinct from 'boolean') then
+  raise exception 'Invalid shift details' using errcode='HA400';end if;
+ if jsonb_typeof(p_data->'expected_version') is distinct from 'string' then
+  raise exception 'Make this change in Shift management, which checks you are editing the latest timing' using errcode='HA400';end if;
+ if p_scope='role' then
+  if p_target is null or p_target not in ('agent','staff') then raise exception 'Choose agents or staff' using errcode='HA400';end if;
+  target_name=case p_target when 'agent' then 'Agent default' else 'Staff default' end;
+ else
+  if p_target is null or p_target!~'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
+   raise exception 'Department not found' using errcode='HA404';end if;
+  select * into dep from public.departments where id=p_target::uuid;
+  if not found then raise exception 'Department not found' using errcode='HA404';end if;
+  target_name=dep.name||' department';
+ end if;
+ select * into t from public.shift_parse(p_data,today);
+ if p_scope='department' and not dep.active and t.shift_start is not null then
+  raise exception 'This department is inactive. Make it active before giving it a shift.' using errcode='HA409';end if;
+ perform pg_advisory_xact_lock(hashtextextended('shift-schedules',48));
+ if p_data->>'expected_version'<>public.shift_version(p_scope,p_target) then
+  raise exception 'This shift was changed a moment ago. Reload to see the latest before saving.' using errcode='HA409';end if;
+ cur=public.shift_default_at(p_scope,p_target,t.effective_from);
+ if t.shift_start is null and (cur.id is null or cur.inherits) then
+  raise exception 'The % has no shift of its own on that date',lower(target_name) using errcode='HA409';end if;
+ if t.shift_start is not null and cur.id is not null and not cur.inherits and cur.shift_start=t.shift_start and cur.shift_end=t.shift_end
+  and cur.work_days=t.work_days and cur.grace_minutes=t.grace_minutes then
+  raise exception 'This is already the % shift on that date',lower(target_name) using errcode='HA409';end if;
+ select coalesce(jsonb_object_agg(m,coalesce(public.shift_signature(m,t.effective_from),'')),'{}'::jsonb) into was
+  from unnest(public.shift_group_members(p_scope,p_target,t.effective_from)) m;
+ insert into public.shift_schedules(scope,role,department_id,effective_from,inherits,shift_start,shift_end,work_days,grace_minutes,reason,created_by)
+ values(p_scope,case when p_scope='role' then p_target end,case when p_scope='department' then p_target::uuid end,t.effective_from,
+  t.shift_start is null,t.shift_start,t.shift_end,t.work_days,t.grace_minutes,t.reason,actor.id)
+ returning * into saved;
+ notified=public.shift_notify(was,t.effective_from,'shift:'||saved.id,
+  case when saved.inherits then 'The '||target_name||' shift has ended.' else 'The '||target_name||' shift has changed.' end);
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'shift.default_changed','shift_schedules',saved.id::text,p_request,jsonb_build_object('scope',p_scope,
+  'role',saved.role,'department_id',saved.department_id,'department',dep.name,'target',target_name,'effective_from',saved.effective_from,
+  'inherits',saved.inherits,'reason',saved.reason,'notified',notified,'affected',(select count(*) from jsonb_object_keys(was)),
+  'before',public.shift_schedule_json(cur)-'id'-'created_by_name'-'created_at'-'reason',
+  'after',public.shift_schedule_json(saved)-'id'-'created_by_name'-'created_at'-'reason'));
+ return public.shift_overview(p_actor);
+end $$;
+-- Withdraws a planned role or department change that has not started yet,
+-- from the version that was shown (p_version). Replaces an earlier draft of
+-- this update without a version.
+drop function if exists public.shift_default_cancel(uuid,text,text,date,text);
+create or replace function public.shift_default_cancel(p_actor uuid,p_scope text,p_target text,p_from date,p_version text,p_request text) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(now());target_name text;
+ gone public.shift_schedules;was jsonb;notified integer;
+begin
+ if p_scope is null or p_scope not in ('role','department') or p_target is null
+  or (p_scope='role' and p_target not in ('agent','staff'))
+  or (p_scope='department' and p_target!~'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') then
+  raise exception 'Shift not found' using errcode='HA404';end if;
+ target_name=case when p_scope='role' then case p_target when 'agent' then 'Agent default' else 'Staff default' end
+  else coalesce(public.department_name(p_target::uuid),'Department')||' department' end;
+ perform pg_advisory_xact_lock(hashtextextended('shift-schedules',48));
+ if p_version is null then
+  raise exception 'Make this change in Shift management, which checks you are editing the latest timing' using errcode='HA400';end if;
+ if p_version<>public.shift_version(p_scope,p_target) then
+  raise exception 'This shift was changed a moment ago. Reload to see the latest before withdrawing.' using errcode='HA409';end if;
+ if p_from is null or p_from<=today or not exists(select 1 from public.shift_schedules where scope=p_scope and effective_from=p_from
+   and withdrawn_at is null and case when p_scope='role' then role=p_target else department_id::text=p_target end) then
+  raise exception 'Only a shift change that has not started yet can be withdrawn' using errcode='HA409';end if;
+ select coalesce(jsonb_object_agg(m,coalesce(public.shift_signature(m,p_from),'')),'{}'::jsonb) into was
+  from unnest(public.shift_group_members(p_scope,p_target,p_from)) m;
+ with w as (update public.shift_schedules set withdrawn_at=now(),withdrawn_by=actor.id
+  where scope=p_scope and effective_from=p_from and withdrawn_at is null
+   and case when p_scope='role' then role=p_target else department_id::text=p_target end returning *)
+ select * into gone from w order by created_at desc limit 1;
+ notified=public.shift_notify(was,p_from,'shift-withdrawn:'||gone.id,'A planned change to the '||target_name||' shift was withdrawn.');
+ insert into public.audit_log(actor_id,action,entity,entity_id,request_id,metadata)
+ values(actor.id,'shift.default_withdrawn','shift_schedules',gone.id::text,p_request,jsonb_build_object('scope',p_scope,
+  'role',gone.role,'department_id',gone.department_id,'department',public.department_name(gone.department_id),'target',target_name,
+  'effective_from',p_from,'inherits',gone.inherits,'notified',notified,
+  'withdrawn',public.shift_schedule_json(gone)-'id'-'created_by_name'-'created_at'-'reason'));
+ return public.shift_overview(p_actor);
+end $$;
+
+-- ------------------------------------------------------- administrators
+-- These read but are not stable: the API runs stable functions read-only,
+-- and the administrator check locks the actor's profile row.
+-- The company policy and every role and department timing.
+create or replace function public.shift_overview(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);today date=public.attendance_local_date(now());
+ pol public.attendance_policies=public.attendance_policy_on(today);
+begin
+ return jsonb_build_object('today',today,
+  'company',case when pol.id is null then null else jsonb_build_object('name',pol.name,'shift_start',to_char(pol.shift_start,'HH24:MI'),
+   'shift_end',to_char(pol.shift_end,'HH24:MI'),'work_days',to_jsonb(pol.work_days),'grace_minutes',pol.grace_minutes,
+   'effective_from',pol.effective_from) end,
+  'roles',(select jsonb_agg(jsonb_build_object('role',r.role,'name',r.name)||public.shift_target_json('role',r.role,today) order by r.n)
+   from (values ('agent','Agents',1),('staff','Staff',2)) r(role,name,n)),
+  'departments',(select coalesce(jsonb_agg(jsonb_build_object('id',d.id,'name',d.name,'active',d.active)
+    ||public.shift_target_json('department',d.id::text,today) order by d.sort_order,lower(d.name)),'[]'::jsonb) from public.departments d),
+  'individual',(select count(*) from public.profiles p where p.active and p.deleted_at is null and p.role in ('admin','agent','staff')
+   and (select r.source from public.employee_schedule_rule(p.id,today) r)='individual'));
+end $$;
+-- Employees with the timing they follow today and where it comes from.
+-- p_filters: search (name, UID or email), role, department (id or none),
+-- source (individual, department, role, company), account (active, inactive).
+create or replace function public.shift_employees_page(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);f jsonb=coalesce(p_filters,'{}'::jsonb);today date=public.attendance_local_date(now());
+ term text=nullif(lower(btrim(coalesce(f->>'search',''))),'');result jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 or jsonb_typeof(f)<>'object'
+  or (f-array['search','role','department','source','account'])<>'{}'::jsonb or length(coalesce(f->>'search',''))>100
+  or coalesce(f->>'role','admin') not in ('admin','agent','staff') or coalesce(f->>'account','active') not in ('active','inactive')
+  or coalesce(f->>'source','company') not in ('individual','department','role','company')
+  or (f->>'department' is not null and f->>'department'<>'none' and f->>'department'!~'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') then
+  raise exception 'Invalid employee filter' using errcode='HA400';end if;
+ with people as (
+  select p.id,p.uid,p.name,to_jsonb(u)->>'email' email,p.role,p.active,p.department_id,public.department_name(p.department_id) department,
+   p.job_title,r.source,r.source_label
+  from public.profiles p join auth.users u on u.id=p.id cross join lateral public.employee_schedule_rule(p.id,today) r
+  where p.deleted_at is null and p.role in ('admin','agent','staff')
+ ), filtered as (
+  select * from people pe
+  where (term is null or position(term in lower(pe.name))>0 or position(term in lower(coalesce(pe.email,'')))>0 or pe.uid::text=term)
+   and (f->>'role' is null or pe.role=f->>'role')
+   and (f->>'department' is null or (f->>'department'='none' and pe.department_id is null) or pe.department_id::text=f->>'department')
+   and (f->>'account' is null or pe.active=(f->>'account'='active'))
+   and (f->>'source' is null or pe.source=f->>'source')
+ ), page as (select * from filtered order by lower(name),id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('date',today,'count',(select count(*) from filtered),'page',p_page,'limit',p_limit,
+  'data',coalesce((select jsonb_agg(jsonb_build_object('id',pg.id,'uid',pg.uid,'name',pg.name,'email',pg.email,'role',pg.role,'active',pg.active,
+    'department_id',pg.department_id,'department',pg.department,'job_title',pg.job_title,
+    'shift',public.employee_shift_info(pg.id,today),'version',public.shift_version('individual',pg.id::text),
+    'planned',(select coalesce(jsonb_agg(jsonb_build_object('effective_from',s.effective_from,'inherits',s.follows_company,'label',s.label,
+      'shift_start',to_char(s.shift_start,'HH24:MI'),'shift_end',to_char(s.shift_end,'HH24:MI'),'work_days',to_jsonb(s.work_days),
+      'grace_minutes',s.grace_minutes,'reason',s.reason) order by s.effective_from),'[]'::jsonb)
+     from (select distinct on (effective_from) * from public.employee_shifts where user_id=pg.id and withdrawn_at is null and effective_from>today
+      order by effective_from,created_at desc) s))
+   order by lower(pg.name),pg.id) from page pg),'[]'::jsonb),
+  'summary',jsonb_build_object('individual',(select count(*) from people where active and source='individual'),
+   'department',(select count(*) from people where active and source='department'),
+   'role',(select count(*) from people where active and source='role'),
+   'company',(select count(*) from people where active and source='company'))) into result;
+ return result;
+end $$;
+-- Every timing ever saved, newest first, with whether it is in effect.
+-- p_filters: search (whose timing), scope (individual, role, department),
+-- status (current, planned, ended, replaced, withdrawn), user (an employee).
+create or replace function public.shift_history_page(p_actor uuid,p_filters jsonb,p_page integer,p_limit integer) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);f jsonb=coalesce(p_filters,'{}'::jsonb);today date=public.attendance_local_date(now());
+ term text=nullif(lower(btrim(coalesce(f->>'search',''))),'');result jsonb;
+begin
+ if p_page is null or p_page<1 or p_limit is null or p_limit not between 1 and 100 or jsonb_typeof(f)<>'object'
+  or (f-array['search','scope','status','user'])<>'{}'::jsonb or length(coalesce(f->>'search',''))>100
+  or coalesce(f->>'scope','role') not in ('individual','role','department')
+  or coalesce(f->>'status','current') not in ('current','planned','ended','replaced','withdrawn')
+  or (f->>'user' is not null and f->>'user'!~'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') then
+  raise exception 'Invalid history filter' using errcode='HA400';end if;
+ with entries as (
+  select s.id,'individual'::text scope,s.user_id::text target,p.name target_name,p.uid,s.effective_from,s.follows_company inherits,s.label,
+   s.shift_start,s.shift_end,s.work_days,s.grace_minutes,s.reason,s.created_by,s.created_at,s.withdrawn_at,s.withdrawn_by
+  from public.employee_shifts s join public.profiles p on p.id=s.user_id
+  union all
+  select s.id,s.scope,coalesce(s.role,s.department_id::text),
+   case when s.scope='role' then case s.role when 'agent' then 'Agents' else 'Staff' end else coalesce(public.department_name(s.department_id),'Department') end,
+   null,s.effective_from,s.inherits,null,s.shift_start,s.shift_end,s.work_days,s.grace_minutes,s.reason,s.created_by,s.created_at,s.withdrawn_at,s.withdrawn_by
+  from public.shift_schedules s
+ ), ranked as (
+  select e.*,
+   case when e.withdrawn_at is not null then 'withdrawn'
+    when row_number() over (partition by e.scope,e.target,e.effective_from,e.withdrawn_at is null order by e.created_at desc)>1 then 'replaced'
+    when e.effective_from>today then 'planned'
+    when e.id=(select c.id from entries c where c.scope=e.scope and c.target=e.target and c.withdrawn_at is null and c.effective_from<=today
+     order by c.effective_from desc,c.created_at desc limit 1) then 'current'
+    else 'ended' end status
+  from entries e
+ ), filtered as (
+  select * from ranked r
+  where (term is null or position(term in lower(r.target_name))>0 or r.uid::text=term)
+   and (f->>'scope' is null or r.scope=f->>'scope')
+   and (f->>'status' is null or r.status=f->>'status')
+   and (f->>'user' is null or (r.scope='individual' and r.target=f->>'user'))
+ ), page as (select * from filtered order by created_at desc,id limit p_limit offset (p_page-1)*p_limit)
+ select jsonb_build_object('date',today,'count',(select count(*) from filtered),'page',p_page,'limit',p_limit,
+  'data',coalesce((select jsonb_agg(jsonb_build_object('id',pg.id,'scope',pg.scope,'target',pg.target,'target_name',pg.target_name,'uid',pg.uid,
+    'effective_from',pg.effective_from,'inherits',pg.inherits,'label',pg.label,'shift_start',to_char(pg.shift_start,'HH24:MI'),
+    'shift_end',to_char(pg.shift_end,'HH24:MI'),'work_days',to_jsonb(pg.work_days),'grace_minutes',pg.grace_minutes,'reason',pg.reason,
+    'status',pg.status,'created_by_name',(select name from public.profiles where id=pg.created_by),'created_at',pg.created_at,
+    'withdrawn_at',pg.withdrawn_at,'withdrawn_by_name',(select name from public.profiles where id=pg.withdrawn_by))
+   order by pg.created_at desc,pg.id) from page pg),'[]'::jsonb)) into result;
+ return result;
+end $$;
+-- As in 047, with every version of the employee's own shift (withdrawn ones
+-- included) and the version a save must start from.
+create or replace function public.employee_detail(p_actor uuid,p_user uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_admin(p_actor);p public.profiles;today date=public.attendance_local_date(now());
+begin
+ select * into p from public.profiles where id=p_user and deleted_at is null and role in ('admin','agent','staff');
+ if not found then raise exception 'Employee not found' using errcode='HA404';end if;
+ return jsonb_build_object('id',p.id,'uid',p.uid,'name',p.name,'role',p.role,'active',p.active,
+  'email',(select to_jsonb(u)->>'email' from auth.users u where u.id=p.id),
+  'department_id',p.department_id,'department',public.department_name(p.department_id),'job_title',p.job_title,'joined_on',p.joined_on,
+  'created_at',p.created_at,'today',today,'shift',public.employee_shift_info(p.id,today),
+  'shift_version',public.shift_version('individual',p.id::text),
+  'shifts',(select coalesce(jsonb_agg(jsonb_build_object('id',s.id,'effective_from',s.effective_from,
+    'source',case when s.follows_company then 'inherit' else 'individual' end,'inherits',s.follows_company,'label',s.label,
+    'shift_start',to_char(s.shift_start,'HH24:MI'),'shift_end',to_char(s.shift_end,'HH24:MI'),'work_days',to_jsonb(s.work_days),
+    'grace_minutes',s.grace_minutes,'reason',s.reason,'created_by_name',(select name from public.profiles where id=s.created_by),'created_at',s.created_at,
+    'withdrawn_at',s.withdrawn_at,'withdrawn_by_name',(select name from public.profiles where id=s.withdrawn_by),
+    'upcoming',s.effective_from>today and s.withdrawn_at is null) order by s.effective_from desc,s.created_at desc),'[]'::jsonb)
+   from public.employee_shifts s where s.user_id=p.id));
+end $$;
+-- As in 047, with where the employee's timing comes from (their own shift,
+-- their department's, their role's or the company's) and its next change.
+create or replace function public.attendance_me(p_actor uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+declare actor public.profiles=public.attendance_member(p_actor);today date=public.attendance_local_date(now());pol public.attendance_policies=public.attendance_policy_for(p_actor,today);
+ info jsonb=public.employee_shift_info(p_actor,today);month_start date=date_trunc('month',today)::date;result jsonb;
+begin
+ select jsonb_build_object(
+  'server_now',now(),'date',today,
+  'employee',jsonb_build_object('id',actor.id,'name',actor.name,'uid',actor.uid,'role',actor.role,
+   'department',public.department_name(actor.department_id),'job_title',actor.job_title),
+  'policy',case when pol.id is null then null else jsonb_build_object('name',pol.name,'shift_start',to_char(pol.shift_start,'HH24:MI'),'shift_end',to_char(pol.shift_end,'HH24:MI'),
+   'work_days',to_jsonb(pol.work_days),'grace_minutes',pol.grace_minutes,'timezone',pol.timezone,
+   'assigned',info->>'source'='individual','source',info->'source','source_label',info->'source_label','upcoming',info->'upcoming') end,
+  'today',(select to_jsonb(d) from public.attendance_days(today,today,p_actor,now()) d),
+  'month',(select to_jsonb(t)-'user_id' from public.attendance_totals(month_start,today,p_actor,now()) t),
+  'recent',(select coalesce(jsonb_agg(to_jsonb(d)-'user_id' order by d.day desc),'[]'::jsonb) from public.attendance_days(today-13,today,p_actor,now()) d where d.state not in ('not_tracked','not_employed')),
+  'incomplete',(select coalesce(jsonb_agg(jsonb_build_object('date',d.day,'check_in_at',d.check_in_at,'pending_correction',d.pending_correction) order by d.day desc),'[]'::jsonb)
+   from public.attendance_days(today-45,today-1,p_actor,now()) d where d.state='incomplete'),
+  'pending_leave',(select count(*) from public.attendance_leave_requests where user_id=p_actor and status='pending'),
+  'pending_corrections',(select count(*) from public.attendance_corrections where user_id=p_actor and status='pending')) into result;
+ return result;
+end $$;
+
+-- ---------------------------------------------------------------- grants
+-- Browser roles get nothing. Restated functions keep their privileges; the
+-- new ones the API calls are granted to the service role, and the helpers run
+-- only inside other functions.
+do $$ declare f record; begin
+ for f in select p.oid::regprocedure signature,p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and p.proname in ('shift_default_save','shift_default_cancel','shift_overview','shift_employees_page','shift_history_page',
+   'employee_shift_save','employee_shift_cancel','employee_detail','attendance_me','track_employee_group','work_days_text','shift_hours_text',
+   'employee_schedule_rule','attendance_shift_apply','employee_shift_info','shift_signature','shift_summary','shift_notify','shift_parse',
+   'shift_schedule_json','shift_default_at','shift_group_members','shift_version','shift_target_json') loop
+  execute format('revoke all on function %s from public,anon,authenticated',f.signature);
+  if f.proname in ('shift_default_save','shift_default_cancel','shift_overview','shift_employees_page','shift_history_page',
+   'employee_shift_save','employee_shift_cancel','employee_detail','attendance_me') then
+   execute format('grant execute on function %s to service_role',f.signature);
+  else
+   execute format('revoke all on function %s from service_role',f.signature);
+  end if;
+ end loop;
+end $$;
+notify pgrst,'reload schema';
+
 
 COMMIT;
 SELECT 'HD Marketing database setup completed' AS status;

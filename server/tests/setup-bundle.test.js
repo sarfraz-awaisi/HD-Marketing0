@@ -204,14 +204,14 @@ describe("fresh-install SQL bundle with F1", () => {
         ).rows[0].allowed,
       ).toBe(false);
   });
-  it("creates the pipeline tables, sample property and restricted browser grants", async () => {
+  it("creates the pipeline tables without sample business data and with restricted browser grants", async () => {
     const result = await db.exec(await setupSql());
     expect(result.at(-1).rows[0].status).toBe(
       "HD Marketing database setup completed",
     );
     expect(
       (await db.query("select count(*)::int n from properties")).rows[0].n,
-    ).toBe(1);
+    ).toBe(0);
     expect(
       (
         await db.query(

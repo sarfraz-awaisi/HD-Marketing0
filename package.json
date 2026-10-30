@@ -11,6 +11,7 @@
     "dev": "concurrently -k -n server,client,jobs \"npm run dev -w server\" \"npm run dev -w client\" \"npm run jobs\"",
     "build": "npm run build -w client",
     "test": "npm run test -w server && npm run test -w client",
+    "seed:local": "node --env-file=.env scripts/seed-local.js",
     "setup:dev": "node --env-file=.env scripts/setup-dev.js",
     "configure": "node scripts/configure.js",
     "jobs": "node --env-file=.env server/src/jobs/runner.js",

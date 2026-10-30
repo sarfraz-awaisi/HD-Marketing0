@@ -69,10 +69,11 @@ Restoring a backup over the live local database has **not been tested yet**. Ask
 
 ## Reset or rebuild local data
 
-`db reset` **wipes the local database**, then re-applies `supabase/migrations` and `seed.sql`. Back up first. Stopping a reset halfway can leave an empty database; if so, follow the rebuild steps below instead.
+`db reset` **wipes the local database**, then re-applies `supabase/migrations`. Automatic sample seeding is disabled. Back up first. Stopping a reset halfway can leave an empty database; if so, follow the rebuild steps below instead.
 
 ```bash
 npx supabase@2.122.0 db reset
+npm run seed:local         # optional sample property; local database only
 npm run setup:dev          # recreates the two accounts; open both emails in Mailpit and click the link
 docker exec -i supabase_db_hd-marketing-crm psql -U postgres -c "update public.profiles p set active = true from auth.users u where u.id = p.id and u.email in ('admin@hd-local.test','agent@hd-local.test')"
 ```
@@ -81,7 +82,7 @@ docker exec -i supabase_db_hd-marketing-crm psql -U postgres -c "update public.p
 
 1. If `auth.identities` is missing, run `docker restart supabase_auth_hd-marketing-crm` so Auth creates its tables.
 2. `npx supabase@2.122.0 migration up --local` applies every migration.
-3. `docker exec -i supabase_db_hd-marketing-crm psql -U postgres < supabase/seed.sql`
+3. `npm run seed:local` optionally adds the sample property without changing existing records.
 4. Recreate the two accounts: the last two commands of the reset steps above.
 
 Never add `--linked` or `--db-url`, and never run `supabase link`, `supabase db push` or `supabase config push`. Those commands act on a hosted project. Production database changes go through the reviewed release process only.
@@ -95,6 +96,8 @@ grep -E '^(LOCAL_DEV_ONLY|SUPABASE_URL)=' .env
 grep -E '^VITE_SUPABASE_URL=' client/.env
 grep -c supabase.co .env client/.env   # must print 0 for both files
 ```
+
+`setup:dev`, `seed:local`, `verify:live` and `send-mock-event.js` require `LOCAL_DEV_ONLY=true` and `http://127.0.0.1:54321`; missing opt-in or a hosted URL stops them before any request.
 
 With `LOCAL_DEV_ONLY=true`, the API, the jobs, `setup:dev`, `verify:live` and the website all refuse to start if any of these is set:
 
