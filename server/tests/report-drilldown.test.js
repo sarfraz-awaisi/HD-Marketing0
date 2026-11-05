@@ -754,7 +754,10 @@ describe("who called", () => {
     ).data;
     expect(row.lead.assigned_agent.id).toBe(ali);
     expect(row.last_call.caller.id).toBe(sara);
-    expect(row.last_call.started_at).toMatch(/^2026-11-03T11:00/);
+    // The same instant whatever the database's time zone.
+    expect(Date.parse(row.last_call.started_at)).toBe(
+      Date.parse("2026-11-03T06:00:00Z"),
+    );
     expect(row.calls).toBe(2);
   });
   it("says nothing about the caller when no record shows who called", async () => {
