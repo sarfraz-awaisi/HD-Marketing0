@@ -1239,3 +1239,49 @@ export const departmentUpdate = z
   .refine((v) => Object.keys(v).length > 0, {
     message: "Change at least one detail",
   });
+
+// Dealer affiliate network (update 049). The database trims, checks and
+// normalizes the details again and gives the messages people see; these only
+// bound the shape and size of what is sent.
+const dealerText = (max) => z.string().max(max);
+const dealerOptional = (max) => dealerText(max).nullable().optional();
+const dealerFields = {
+  name: dealerText(240),
+  phone: dealerText(40),
+  address: dealerText(600),
+  company_name: dealerOptional(240),
+  city: dealerOptional(160),
+  area: dealerOptional(240),
+  notes: dealerOptional(2000),
+};
+export const dealerCreate = z
+  .object({ client_key: uuid, ...dealerFields })
+  .strict();
+// Only the details sent change; expected_updated_at is the updated_at the
+// administrator saw.
+export const dealerUpdate = z
+  .object({
+    expected_updated_at: z.iso.datetime({ offset: true }),
+    ...dealerFields,
+    name: dealerFields.name.optional(),
+    phone: dealerFields.phone.optional(),
+    address: dealerFields.address.optional(),
+  })
+  .strict();
+export const dealerReason = z
+  .object({ reason: z.string().max(1000).optional() })
+  .strict();
+export const dealerListQuery = z
+  .object({
+    ...pageFields,
+    status: z.enum(["pending", "approved", "rejected"]).optional(),
+    search: z.string().trim().max(100).optional(),
+    sort: z.enum(["newest", "oldest", "name", "updated"]).optional(),
+    agent: uuid.optional(),
+    view: z.enum(["active", "deleted"]).optional(),
+    duplicates: z.enum(["true", "false"]).optional(),
+  })
+  .strict();
+export const dealerPhoneQuery = z
+  .object({ phone: z.string().trim().min(1).max(40), except: uuid.optional() })
+  .strict();

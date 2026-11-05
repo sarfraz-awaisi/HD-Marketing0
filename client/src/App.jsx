@@ -12,6 +12,7 @@ const Leads = lazy(routeLoaders.Leads);
 const ImportedFiles = lazy(routeLoaders.ImportedFiles);
 const LeadDetail = lazy(routeLoaders.LeadDetail);
 const Inventory = lazy(routeLoaders.Inventory);
+const Dealers = lazy(routeLoaders.Dealers);
 const Targets = lazy(routeLoaders.Targets);
 const CallReview = lazy(routeLoaders.CallReview);
 const Team = lazy(routeLoaders.Team);
@@ -83,6 +84,7 @@ export default function App() {
                 <Route path="leads" element={<Leads />} />
                 <Route path="leads/:id" element={<LeadDetail />} />
                 <Route path="inventory" element={<Inventory />} />
+                <Route path="dealers" element={<Dealers />} />
                 <Route
                   path="properties"
                   element={<Navigate to="/inventory" replace />}

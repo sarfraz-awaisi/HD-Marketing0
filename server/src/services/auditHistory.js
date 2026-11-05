@@ -18,6 +18,7 @@ export const auditModules = [
   ["integrations", "Facebook leads"],
   ["system", "Automatic CRM tasks"],
   ["tasks", "Tasks and daily reports"],
+  ["dealers", "Dealer network"],
 ];
 export const auditKinds = [
   ["create", "Added or created"],
@@ -100,6 +101,7 @@ const fieldLabels = {
   due_on: "due date",
   target_quantity: "target",
   building_categories: "building categories",
+  company_name: "agency or company name",
 };
 // ["price","availability"] as "price and availability status".
 export function fieldsText(fields) {
@@ -783,6 +785,68 @@ add(
     c.m.to
       ? `Checkout rules start on ${dayText(c.m.to)}: agents submit a daily report before checking out, and checking out before the shift ends needs approval.`
       : "Turned the task checkout rules off.",
+);
+
+// Dealer affiliate network (update 049). agent_id is who added the dealer.
+const dealerText = (c) => {
+  const ref =
+    number(c.m.number) != null
+      ? "DL-" + String(c.m.number).padStart(6, "0")
+      : null;
+  return c.m.name
+    ? `dealer “${c.m.name}”${ref ? ` (${ref})` : ""}`
+    : ref
+      ? `dealer ${ref}`
+      : "a dealer";
+};
+const dealerChanges = {
+  name: "Dealer name",
+  company_name: "Agency or company",
+  address: "Address",
+  city: "City",
+  area: "Area or location",
+  notes: "Notes",
+};
+add("dealer.create", "dealers", "dealers", "create", "Added a dealer", (c) =>
+  c.m.auto_approved
+    ? `Added and approved ${dealerText(c)}.`
+    : `Submitted ${dealerText(c)} for approval.`,
+);
+add(
+  "dealer.approve",
+  "dealers",
+  "dealers",
+  "review",
+  "Approved a dealer",
+  (c) => `Approved ${dealerText(c)}, added by ${agentText(c)}.`,
+);
+add(
+  "dealer.reject",
+  "dealers",
+  "dealers",
+  "review",
+  "Rejected a dealer",
+  (c) => `Rejected ${dealerText(c)}, added by ${agentText(c)}.`,
+);
+add("dealer.update", "dealers", "dealers", "update", "Changed a dealer", (c) =>
+  changed(c, `Changed ${dealerText(c)}`),
+);
+add(
+  "dealer.delete",
+  "dealers",
+  "dealers",
+  "delete",
+  "Deleted a dealer",
+  (c) =>
+    `Deleted ${dealerText(c)}, added by ${agentText(c)}. It can be restored.`,
+);
+add(
+  "dealer.restore",
+  "dealers",
+  "dealers",
+  "update",
+  "Restored a dealer",
+  (c) => `Restored ${dealerText(c)}, added by ${agentText(c)}.`,
 );
 
 // Properties
@@ -1772,6 +1836,7 @@ const moduleByEntity = {
   task_assignments: "tasks",
   task_daily_reports: "tasks",
   task_checkout_requests: "tasks",
+  dealers: "dealers",
 };
 function entryFor(action, entity) {
   return (
@@ -1902,6 +1967,18 @@ export function presentAuditEntry(row) {
       before: categoriesOf(m.building_categories.before).join(", ") || "None",
       after: categoriesOf(m.building_categories.after).join(", ") || "None",
     });
+  if (
+    c.action === "dealer.update" &&
+    m.changes &&
+    typeof m.changes === "object"
+  )
+    for (const [key, label] of Object.entries(dealerChanges))
+      if (m.changes[key])
+        changes.push({
+          label,
+          before: m.changes[key].before ?? null,
+          after: m.changes[key].after ?? null,
+        });
   if (c.action === "task.report_amend" && m.before && m.after)
     changes.push({
       label: "Completion",
