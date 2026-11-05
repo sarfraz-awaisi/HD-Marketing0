@@ -1,0 +1,168 @@
+/* Report drill-down (update 050). Report numbers open the records behind
+   them; built on the existing report styles and theme tokens. */
+.report-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.report-link:hover {
+  color: var(--info);
+  text-decoration-style: solid;
+}
+.report-link:focus-visible,
+.report-row-button:focus-visible,
+.drill-related button:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}
+.report-pair {
+  display: inline-flex;
+  gap: 4px;
+}
+.report-row-button {
+  width: 100%;
+  border-width: 0 0 1px;
+  border-style: solid;
+  border-color: #f0f2f5;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+.report-row-button:hover {
+  background: var(--neutral-soft);
+}
+.report-row-button > span:first-child {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+dialog.report-drill-dialog {
+  width: min(1240px, calc(100% - 32px));
+}
+.drill-context p {
+  margin: 0 0 var(--space-1);
+}
+.drill-related {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+.drill-related button {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.drill-related button.active {
+  border-color: var(--brand-gold);
+  background: var(--warning-soft);
+  font-weight: 700;
+}
+.drill-toolbar {
+  flex-wrap: wrap;
+}
+.drill-toolbar input[type="search"] {
+  flex: 1 1 240px;
+}
+.drill-notice {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--neutral-soft);
+}
+.drill-notice.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.drill-note {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  margin-top: var(--space-3);
+}
+.drill-cell {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.drill-cell small {
+  color: var(--muted);
+}
+.report-drill-dialog td[data-field="lead"] {
+  min-width: 150px;
+}
+.report-drill-dialog td[data-field="status"] {
+  min-width: 220px;
+}
+.report-drill-dialog td[data-field="dates"] {
+  min-width: 160px;
+}
+.report-drill-dialog td[data-field="lead"] a,
+.report-drill-dialog td[data-field="lead"] small:first-of-type,
+.report-drill-dialog td[data-field="open"] button {
+  white-space: nowrap;
+}
+.drill-cell .badge {
+  justify-self: start;
+}
+.drill-history {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.drill-history header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.drill-history h3 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+@media (max-width: 800px) {
+  .report-drill-dialog table,
+  .report-drill-dialog tbody,
+  .report-drill-dialog tr {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+  .report-drill-dialog thead {
+    display: none;
+  }
+  .report-drill-dialog tr {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 8px 12px;
+    margin: 12px 0;
+  }
+  .report-drill-dialog td {
+    display: grid;
+    grid-template-columns: minmax(0, 110px) minmax(0, 1fr);
+    gap: 10px;
+    padding: 6px 0;
+    white-space: normal;
+  }
+  .report-drill-dialog td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+}

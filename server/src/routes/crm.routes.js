@@ -49,6 +49,7 @@ import { employeesAdminRouter } from "./employees.routes.js";
 import { shiftsAdminRouter } from "./shifts.routes.js";
 import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
 import { dealersRouter } from "./dealers.routes.js";
+import { reportDrilldownRouter } from "./reportDrilldown.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
 import {
@@ -88,6 +89,8 @@ export function crmRouter(db, options = {}) {
   router.use("/documents", documentsRouter(db));
   router.use(accountsRouter(db, options));
   router.use(securityRouter(db));
+  // Before the sales router's /reports/:type.
+  router.use("/reports/drilldown", adminOnly, reportDrilldownRouter(db));
   router.use(salesRouter(db));
   router.use("/attendance", attendanceRouter(db));
   router.use("/admin/attendance/shifts", adminOnly, shiftsAdminRouter(db));
