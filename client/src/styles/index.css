@@ -989,6 +989,21 @@ dd {
 .timeline-title small {
   font-size: 10px;
 }
+/* Who did it, lead tags and later changes on a timeline entry. */
+.timeline-by {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted, #6b7c93);
+}
+.timeline-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.timeline-updates {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
 .timeline-item p {
   font-size: 12px;
   margin: 8px 0;

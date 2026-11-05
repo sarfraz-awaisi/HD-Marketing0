@@ -48,6 +48,16 @@ export const tags = [
   "Ready to visit",
   "Ready to close",
 ];
+// When a call ends with a promise to follow up, the follow-up is scheduled with
+// the call so it appears under Follow-ups. Pakistan time, within a year.
+export const followUpAt = z.iso.datetime({ offset: true }).refine(
+  (value) => {
+    const at = Date.parse(value);
+    return at > Date.now() - 60000 && at < Date.now() + 366 * 86400000;
+  },
+  { message: "Choose a follow-up time in the future, within a year" },
+);
+export const followUpOutcome = "Follow-up required";
 export function manualCall(role) {
   return z
     .object({
@@ -58,6 +68,7 @@ export function manualCall(role) {
       outcome: z.enum(outcomes),
       notes: z.string().max(4000).default(""),
       deal_tags: z.array(z.enum(tags)).max(7).default([]),
+      follow_up_at: followUpAt.optional(),
     })
     .strict()
     .superRefine((data, ctx) => {
@@ -139,6 +150,7 @@ export const schemas = {
       outcome: z.enum(outcomes),
       notes: text.default(""),
       deal_tags: z.array(z.enum(tags)).max(7).default([]),
+      follow_up_at: followUpAt.optional(),
     })
     .strict(),
   followups: z
@@ -201,10 +213,12 @@ export const listQuery = z
     method: z.enum(["manual", "mock", "provider"]).optional(),
     import_id: uuid.optional(),
     sort: z
-      .enum(["created_at", "name", "updated_at", "call_due_at"])
+      .enum(["created_at", "name", "updated_at", "call_due_at", "due_at"])
       .default("created_at"),
     direction: z.enum(["asc", "desc"]).default("desc"),
-    view: z.enum(["due", "overdue", "upcoming", "completed"]).optional(),
+    view: z
+      .enum(["pending", "due", "overdue", "upcoming", "completed", "cancelled"])
+      .optional(),
     call: z.enum(["uncalled", "missed"]).optional(),
   })
   .strict();

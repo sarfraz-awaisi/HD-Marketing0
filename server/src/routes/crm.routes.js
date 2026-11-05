@@ -20,6 +20,7 @@ import {
   dealCreate,
   dealUpdate,
   manualCall,
+  followUpOutcome,
   phoneRevealQuery,
   bulkAssignment,
   leadIds,
@@ -49,6 +50,12 @@ import { shiftsAdminRouter } from "./shifts.routes.js";
 import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
+import {
+  callFollowUpNotes,
+  enrichTimeline,
+  scheduleFollowUp,
+  unscheduledFollowUps,
+} from "../services/leadActivity.js";
 import { inventoryRouter } from "./inventory.routes.js";
 const portalNames = { admin: "Admin", agent: "Agent", staff: "Staff" };
 export function unwrap(r) {
@@ -471,11 +478,64 @@ export function crmRouter(db, options = {}) {
       );
       timeline.push(...data.map((item) => ({ ...item, kind: table })));
     }
-    res.json(timeline.sort((a, b) => b.created_at.localeCompare(a.created_at)));
+    // Who did what comes from the audit log. If that lookup fails, the
+    // activity itself is still shown, without the names.
+    let items;
+    try {
+      items = await enrichTimeline(db, lead, timeline);
+    } catch {
+      console.error("Lead timeline shown without activity details");
+      items = timeline.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    }
+    res.json(items);
   });
+  // A call that ends with a promise to follow up schedules the follow-up. The
+  // call is kept even if scheduling fails; the response then says so instead
+  // of reporting success, so the call is not logged twice on a retry.
+  const withFollowUp = async (req, leadId, dueAt, call, saved) => {
+    if (!dueAt) return saved;
+    try {
+      return {
+        ...saved,
+        followup: await scheduleFollowUp(
+          db,
+          mutate,
+          req,
+          leadId,
+          dueAt,
+          callFollowUpNotes(call),
+        ),
+      };
+    } catch (error) {
+      return {
+        ...saved,
+        followup_error:
+          error.message === "Forbidden"
+            ? "You can no longer schedule follow-ups for this lead"
+            : "The follow-up could not be saved.",
+        // So the follow-up alone can be saved again, never the call.
+        followup_due_at: new Date(dueAt).toISOString(),
+        followup_notes: callFollowUpNotes(call),
+      };
+    }
+  };
+  const needsFollowUpTime = () =>
+    Object.assign(
+      new Error(
+        "Choose when to follow up: a call marked Follow-up required schedules the follow-up",
+      ),
+      { status: 400 },
+    );
+  router.get("/followups/unscheduled", async (req, res) =>
+    res.json(await unscheduledFollowUps(db, req.user)),
+  );
   router.post("/leads/:id/calls/manual", sensitiveLimit, async (req, res) => {
     const lead = await ownedLead(db, req.user, req.params.id);
-    const data = manualCall(req.user.role).parse(req.body);
+    const { follow_up_at: followUp, ...data } = manualCall(req.user.role).parse(
+      req.body,
+    );
+    if (data.outcome === followUpOutcome && !followUp)
+      throw needsFollowUpTime();
     const result = await db.rpc("log_manual_call", {
       p_lead: lead.id,
       p_actor: req.user.id,
@@ -489,7 +549,9 @@ export function crmRouter(db, options = {}) {
         ),
         { status: 503 },
       );
-    res.status(201).json(unwrap(result));
+    res
+      .status(201)
+      .json(await withFollowUp(req, lead.id, followUp, data, unwrap(result)));
   });
   router.post("/leads/:id/call", sensitiveLimit, async (req, res) => {
     if (!callCapabilities().mock)
@@ -789,9 +851,14 @@ export function crmRouter(db, options = {}) {
           );
         query = query.eq("lost_reason", q.lost_reason);
       }
+      // A follow-up belongs to the lead's current owner, as agents see it.
       if (q.agent && req.user.role === "admin")
         query = query.eq(
-          table === "leads" ? "assigned_agent" : "agent_id",
+          table === "leads"
+            ? "assigned_agent"
+            : table === "followups"
+              ? "leads.assigned_agent"
+              : "agent_id",
           q.agent,
         );
       if (q.call) {
@@ -814,12 +881,13 @@ export function crmRouter(db, options = {}) {
       }
       if (q.view && table === "followups") {
         const now = new Date().toISOString();
-        if (q.view === "completed") query = query.eq("status", "completed");
+        if (q.view === "completed" || q.view === "cancelled")
+          query = query.eq("status", q.view);
         else {
           query = query.eq("status", "pending");
           if (q.view === "overdue") query = query.lt("due_at", now);
           else if (q.view === "upcoming") query = query.gt("due_at", now);
-          else
+          else if (q.view === "due")
             query = query.lte(
               "due_at",
               new Date(Date.now() + 86400000).toISOString(),
@@ -833,7 +901,8 @@ export function crmRouter(db, options = {}) {
             : "created_at"
           : q.sort === "updated_at" && ["calls", "targets"].includes(table)
             ? "created_at"
-            : q.sort === "call_due_at" && table !== "leads"
+            : (q.sort === "call_due_at" && table !== "leads") ||
+                (q.sort === "due_at" && table !== "followups")
               ? "created_at"
               : q.sort;
       const result = await query
@@ -891,10 +960,24 @@ export function crmRouter(db, options = {}) {
           Object.hasOwn(req.body, field),
         ),
       );
+      let followUp;
       if (table === "calls") {
-        data = schemas.calls.parse(req.body);
+        ({ follow_up_at: followUp, ...data } = schemas.calls.parse(req.body));
         data.outcome_submitted_at = new Date().toISOString();
         data.missing_outcome = false;
+        // Choosing Follow-up required for a call schedules the follow-up.
+        if (data.outcome === followUpOutcome && !followUp) {
+          const before = unwrap(
+            await db
+              .from("calls")
+              .select("lead_id,outcome")
+              .eq("id", id)
+              .maybeSingle(),
+          );
+          if (before) await ownedLead(db, req.user, before.lead_id);
+          if (before && before.outcome !== followUpOutcome)
+            throw needsFollowUpTime();
+        }
       }
       if (
         table === "leads" &&
@@ -909,7 +992,12 @@ export function crmRouter(db, options = {}) {
             p_request: req.id,
           }),
         );
-      res.json(await mutate(req, table, id, data));
+      const saved = await mutate(req, table, id, data);
+      res.json(
+        table === "calls" && followUp
+          ? await withFollowUp(req, saved.lead_id, followUp, saved, saved)
+          : saved,
+      );
     });
   }
   router.post("/notes", async (req, res) =>

@@ -75,11 +75,14 @@ export default function CallDialog({ lead, role, onClose, onSaved }) {
         onDialStart={() => setStarted(true)}
         onPending={setSaving}
         onSave={async (data) => {
-          await api(`/leads/${lead.id}/calls/manual`, {
-            method: "POST",
-            body: data,
-          });
-          onSaved();
+          // The page that opened the dialog reports the result, including a
+          // follow-up that could not be saved.
+          onSaved(
+            await api(`/leads/${lead.id}/calls/manual`, {
+              method: "POST",
+              body: data,
+            }),
+          );
         }}
       />
     </Modal>

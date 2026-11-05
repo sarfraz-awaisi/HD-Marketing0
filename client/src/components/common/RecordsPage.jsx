@@ -7,6 +7,11 @@ import { api, date, pkr, localISO, localInput } from "../../lib/api";
 import { lostReasons, lostReasonLabel } from "../../lib/pipeline";
 import VisitConflicts from "../visits/VisitConflicts";
 import {
+  followUpState,
+  followUpStateLabel,
+  followUpViews,
+} from "../../lib/followups";
+import {
   Button,
   Modal,
   RecordForm,
@@ -144,6 +149,77 @@ export function ActivityForm({ entity, leadId, initial, onSave }) {
     </RecordForm>
   );
 }
+// Leads whose latest call was marked Follow-up required but have no follow-up
+// scheduled (for example calls logged before the call form could schedule
+// one). The owner picks the date; nothing is guessed.
+function UnscheduledFollowUps() {
+  const qc = useQueryClient(),
+    toast = useToast();
+  const [lead, setLead] = useState(null);
+  const q = useQuery({
+    queryKey: ["followups", "unscheduled"],
+    queryFn: ({ signal }) => api("/followups/unscheduled", { signal }),
+  });
+  if (!q.data?.count) return <ErrorBox error={q.error} />;
+  return (
+    <section className="panel" aria-labelledby="unscheduled-title">
+      <div className="panel-heading">
+        <div>
+          <h2 id="unscheduled-title">Calls waiting for a follow-up date</h2>
+          <p className="field-hint">
+            These calls were marked Follow-up required but no follow-up was
+            scheduled. Choose a date so they appear in your follow-ups.
+          </p>
+        </div>
+      </div>
+      <Table
+        rows={q.data.data.map((r) => ({ ...r, id: r.lead_id }))}
+        columns={[
+          {
+            key: "lead",
+            label: "Lead",
+            render: (r) => (
+              <Link to={"/leads/" + r.lead_id}>
+                {formatLeadNo(r.lead_no)} · {r.name}
+              </Link>
+            ),
+          },
+          {
+            key: "called_at",
+            label: "Call",
+            render: (r) => date(r.called_at),
+          },
+          {
+            key: "actions",
+            label: "Actions",
+            render: (r) => (
+              <Button variant="secondary" onClick={() => setLead(r)}>
+                Schedule follow-up
+              </Button>
+            ),
+          },
+        ]}
+      />
+      {lead && (
+        <Modal
+          title={`Schedule follow-up · ${formatLeadNo(lead.lead_no)}`}
+          onClose={() => setLead(null)}
+        >
+          <ActivityForm
+            entity="followups"
+            leadId={lead.lead_id}
+            onSave={async (data) => {
+              await api("/followups", { method: "POST", body: data });
+              invalidateWorkspace(qc);
+              toast("Follow-up scheduled");
+              setLead(null);
+            }}
+          />
+        </Modal>
+      )}
+    </section>
+  );
+}
 export default function RecordsPage({
   entity,
   title,
@@ -151,13 +227,18 @@ export default function RecordsPage({
   viewSwitch = null,
 }) {
   const [page, setPage] = useState(1),
-    [view, setView] = useState(""),
+    [view, setView] = useState(entity === "followups" ? "pending" : ""),
     [modal, setModal] = useState(null);
   const qc = useQueryClient(),
     toast = useToast();
   const params = new URLSearchParams({
     page,
     ...(view ? (entity === "followups" ? { view } : { status: view }) : {}),
+    // Open follow-ups are listed soonest first, overdue at the top.
+    ...(entity === "followups" &&
+    ["pending", "overdue", "due", "upcoming"].includes(view)
+      ? { sort: "due_at", direction: "asc" }
+      : {}),
   });
   const q = useQuery({
     queryKey: [entity, params.toString()],
@@ -202,7 +283,15 @@ export default function RecordsPage({
           {
             key: "status",
             label: "Status",
-            render: (r) => <Badge value={r.status} />,
+            render: (r) => (
+              <Badge
+                value={
+                  entity === "followups"
+                    ? followUpStateLabel(followUpState(r))
+                    : r.status
+                }
+              />
+            ),
           },
         ]),
     { key: "notes", label: "Notes" },
@@ -234,6 +323,7 @@ export default function RecordsPage({
         </Button>
       </div>
       {viewSwitch}
+      {entity === "followups" && <UnscheduledFollowUps />}
       <section className="panel">
         {entity !== "deals" && (
           <div className="toolbar">
@@ -245,13 +335,22 @@ export default function RecordsPage({
                 setPage(1);
               }}
             >
-              <option value="">All records</option>
-              {(entity === "followups"
-                ? ["due", "overdue", "upcoming", "completed"]
-                : ["scheduled", "completed", "cancelled", "no-show"]
-              ).map((v) => (
-                <option key={v}>{v}</option>
-              ))}
+              {entity === "followups" ? (
+                followUpViews.map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))
+              ) : (
+                <>
+                  <option value="">All records</option>
+                  {["scheduled", "completed", "cancelled", "no-show"].map(
+                    (v) => (
+                      <option key={v}>{v}</option>
+                    ),
+                  )}
+                </>
+              )}
             </select>
           </div>
         )}

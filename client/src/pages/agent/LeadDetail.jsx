@@ -14,14 +14,15 @@ import {
   RecordForm,
   useToast,
 } from "../../components/common/UI";
-import { statusLabel, lostReasonLabel } from "../../lib/pipeline";
+import { lostReasonLabel } from "../../lib/pipeline";
 import LeadStatusControl from "../../components/leads/LeadStatusControl";
 import LeadForm from "../../components/leads/LeadForm";
 import LeadPhone from "../../components/leads/LeadPhone";
 import OutcomeForm from "../../components/calls/OutcomeForm";
 import CallDialog from "../../components/calls/CallDialog";
 import { ActivityForm } from "../../components/common/RecordsPage";
-import { callMethodLabel } from "../../lib/calls";
+import { followUpNotice } from "../../lib/calls";
+import TimelineItem from "../../components/leads/TimelineItem";
 import LeadKycDocuments from "../../components/documents/LeadKycDocuments";
 export default function LeadDetail() {
   const { id } = useParams(),
@@ -31,7 +32,10 @@ export default function LeadDetail() {
   const [modal, setModal] = useState(""),
     [error, setError] = useState(""),
     [call, setCall] = useState(null),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    // A follow-up that failed after its call was saved: saved again on its
+    // own, so the call is never logged twice.
+    [retry, setRetry] = useState(null);
   const manualPending = useRef(false);
   // Server configuration: fetched once, not again for every lead opened.
   const capabilities = useQuery({
@@ -52,11 +56,29 @@ export default function LeadDetail() {
     queryFn: ({ signal }) => api("/users", { signal }),
     enabled: user.role === "admin",
   });
-  const refresh = () => {
+  const refresh = (message = "Saved") => {
     invalidateWorkspace(qc);
-    toast("Saved");
+    toast(message);
+    setRetry(null);
     setModal("");
     setCall(null);
+  };
+  // After a call is saved: say whether its follow-up was scheduled, or open
+  // the follow-up form with the chosen time if that part failed.
+  const afterCall = (result) => {
+    if (!result?.followup_error)
+      return refresh(followUpNotice(result, date) || "Saved");
+    invalidateWorkspace(qc);
+    setCall(null);
+    setRetry({
+      error: result.followup_error,
+      initial: {
+        due_at: result.followup_due_at,
+        status: "pending",
+        notes: result.followup_notes || "",
+      },
+    });
+    setModal("followups");
   };
   async function act(fn) {
     setError("");
@@ -205,60 +227,14 @@ export default function LeadDetail() {
             <div className="empty">No activity yet. Start a conversation.</div>
           ) : (
             timeline.data.map((item) => (
-              <article className="timeline-item" key={item.kind + item.id}>
-                <div className="timeline-dot" />
-                <div>
-                  <div className="timeline-title">
-                    <b>
-                      {item.kind === "lead_status_history"
-                        ? "Stage changed"
-                        : item.kind === "assignments"
-                          ? "Lead assigned"
-                          : item.kind}
-                    </b>
-                    <small>{date(item.created_at)}</small>
-                  </div>
-                  <p>
-                    {item.kind === "lead_status_history"
-                      ? `${statusLabel(item.from_status)} → ${statusLabel(item.to_status)}`
-                      : item.body ||
-                        item.notes ||
-                        item.outcome ||
-                        item.stage ||
-                        item.status ||
-                        "Assignment updated"}
-                  </p>
-                  {item.kind === "lead_status_history" && item.lost_reason && (
-                    <small>
-                      Lost reason: {lostReasonLabel(item.lost_reason)}
-                    </small>
-                  )}
-                  {item.due_at && <small>Due {date(item.due_at)}</small>}
-                  {item.scheduled_at && (
-                    <small>Visit {date(item.scheduled_at)}</small>
-                  )}
-                  {item.kind === "calls" && (
-                    <>
-                      <p>
-                        {callMethodLabel(item)} call · {item.status}
-                        {item.method === "manual" &&
-                          ` · ${item.answered ? "Answered" : "Unanswered"}`}
-                        {` · ${item.duration_seconds || 0}s`}
-                      </p>
-                      <small>Started {date(item.started_at)}</small>
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          setCall(item);
-                          setModal("outcome");
-                        }}
-                      >
-                        {item.outcome ? "Edit outcome" : "Add outcome"}
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </article>
+              <TimelineItem
+                key={item.kind + item.id}
+                item={item}
+                onOutcome={(c) => {
+                  setCall(c);
+                  setModal("outcome");
+                }}
+              />
             ))
           )}
         </section>
@@ -269,7 +245,7 @@ export default function LeadDetail() {
           lead={lead}
           role={user.role}
           onClose={() => setModal("")}
-          onSaved={refresh}
+          onSaved={afterCall}
         />
       )}
       {modal && modal !== "dial" && (
@@ -290,6 +266,7 @@ export default function LeadDetail() {
           onClose={() => {
             if (manualPending.current || busy) return;
             setModal("");
+            setRetry(null);
             setCall(null);
           }}
         >
@@ -347,11 +324,11 @@ export default function LeadDetail() {
                 setBusy(value);
               }}
               onSave={async (data) => {
-                await api(`/leads/${id}/calls/manual`, {
+                const result = await api(`/leads/${id}/calls/manual`, {
                   method: "POST",
                   body: data,
                 });
-                refresh();
+                afterCall(result);
               }}
             />
           ) : modal === "call" ? (
@@ -381,19 +358,31 @@ export default function LeadDetail() {
             <OutcomeForm
               call={call}
               onSave={async (data) => {
-                await api("/calls/" + call.id, { method: "PATCH", body: data });
-                refresh();
+                const result = await api("/calls/" + call.id, {
+                  method: "PATCH",
+                  body: data,
+                });
+                afterCall(result);
               }}
             />
           ) : (
-            <ActivityForm
-              entity={modal}
-              leadId={id}
-              onSave={async (data) => {
-                await api("/" + modal, { method: "POST", body: data });
-                refresh();
-              }}
-            />
+            <>
+              {modal === "followups" && retry && (
+                <div role="alert" className="error">
+                  The call was saved, but its follow-up was not: {retry.error}{" "}
+                  Check the time and save the follow-up again.
+                </div>
+              )}
+              <ActivityForm
+                entity={modal}
+                leadId={id}
+                initial={modal === "followups" ? retry?.initial : undefined}
+                onSave={async (data) => {
+                  await api("/" + modal, { method: "POST", body: data });
+                  refresh(retry ? "Follow-up scheduled" : "Saved");
+                }}
+              />
+            </>
           )}
         </Modal>
       )}

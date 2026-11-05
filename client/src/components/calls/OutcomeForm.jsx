@@ -17,13 +17,47 @@ export const outcomes = [
   "Site visit scheduled",
   "Deal discussion",
 ];
+// A call that ends with a promise to follow up schedules that follow-up, so it
+// appears under Follow-ups. Optional for other outcomes.
+export const followUpOutcome = "Follow-up required";
+export const needsFollowUp = (outcome, call = {}, manual = false) =>
+  outcome === followUpOutcome && (manual || call.outcome !== followUpOutcome);
+function checkFollowUp(data, ctx, call, manual) {
+  if (!data.follow_up_at) {
+    if (needsFollowUp(data.outcome, call, manual))
+      ctx.addIssue({
+        code: "custom",
+        path: ["follow_up_at"],
+        message: "Choose when to follow up",
+      });
+    return;
+  }
+  let at = NaN;
+  try {
+    at = Date.parse(localISO(data.follow_up_at));
+  } catch {
+    /* Invalid local input is reported below. */
+  }
+  if (
+    !Number.isFinite(at) ||
+    at <= Date.now() - 60000 ||
+    at >= Date.now() + 366 * 86400000
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["follow_up_at"],
+      message: "Choose a follow-up time in the future, within a year",
+    });
+}
 function outcomeSchema(call, manual, role) {
   const base = z.object({
     outcome: z.enum(outcomes),
     notes: z.string().max(4000, "Use 4000 characters or fewer"),
+    follow_up_at: z.string(),
   });
   if (!manual)
     return base.superRefine((data, ctx) => {
+      checkFollowUp(data, ctx, call, manual);
       if (
         call.method === "manual" &&
         call.answered === false &&
@@ -43,6 +77,7 @@ function outcomeSchema(call, manual, role) {
       duration_seconds: z.coerce.number().int().min(0).max(59),
     })
     .superRefine((data, ctx) => {
+      checkFollowUp(data, ctx, call, manual);
       const total = data.duration_minutes * 60 + data.duration_seconds;
       if (total > 7200 || (data.answered === "yes" && total < 1))
         ctx.addIssue({
@@ -118,6 +153,7 @@ export default function OutcomeForm({
     defaultValues: {
       outcome: call.outcome || "",
       notes: call.notes || "",
+      follow_up_at: "",
       ...(manual
         ? {
             answered: "yes",
@@ -154,8 +190,10 @@ export default function OutcomeForm({
     pending.current = true;
     onPending?.(true);
     try {
+      const { follow_up_at: followUp, ...rest } = data;
       await onSave({
-        ...data,
+        ...rest,
+        ...(followUp ? { follow_up_at: localISO(followUp) } : {}),
         ...(manual
           ? {
               answered: data.answered === "yes",
@@ -289,6 +327,18 @@ export default function OutcomeForm({
           <span className="field-error">
             {errors.outcome && "Choose a call outcome"}
           </span>
+        </label>
+        <label>
+          {needsFollowUp(watch("outcome"), call, manual)
+            ? "Follow-up date and time (Pakistan time)"
+            : "Schedule a follow-up (optional, Pakistan time)"}
+          <input
+            aria-label="Follow-up date and time"
+            type="datetime-local"
+            required={needsFollowUp(watch("outcome"), call, manual)}
+            {...register("follow_up_at")}
+          />
+          <span className="field-error">{errors.follow_up_at?.message}</span>
         </label>
         <label>
           Agent notes

@@ -502,6 +502,11 @@ describe("daily reports", () => {
 
 describe("checkout rules", () => {
   it("are installed off and start only from a date an administrator sets", async () => {
+    // Saving a start date checks it against today, so this test uses the next
+    // Monday and Tuesday after the day it runs.
+    const { mon, tue } = await one(
+      "select (d+(8-extract(isodow from d))::int)::text mon,(d+(9-extract(isodow from d))::int)::text tue from (select public.attendance_local_date(now()) d) x",
+    );
     expect(installedRulesFrom).toBeNull();
     expect(
       (
@@ -510,8 +515,8 @@ describe("checkout rules", () => {
         )
       ).column_default,
     ).toBeNull();
-    await checkIn(agent, MON, "10:00");
-    expect(await state(agent, pk(MON, "15:00"))).toMatchObject({
+    await checkIn(agent, mon, "10:00");
+    expect(await state(agent, pk(mon, "15:00"))).toMatchObject({
       rules_active: false,
       required: false,
       can_request_early: false,
@@ -520,16 +525,16 @@ describe("checkout rules", () => {
     expect(
       (
         await fails(
-          sql("select public.task_settings_save($1,$2,'t') r", [agent, TUE]),
+          sql("select public.task_settings_save($1,$2,'t') r", [agent, tue]),
         )
       ).code,
     ).toBe("HA403");
-    await sql("select public.task_settings_save($1,$2,'t') r", [admin, TUE]);
-    expect(await checkOut(agent, MON, "15:00")).toMatchObject({
+    await sql("select public.task_settings_save($1,$2,'t') r", [admin, tue]);
+    expect(await checkOut(agent, mon, "15:00")).toMatchObject({
       state: "checked_out",
     });
-    await checkIn(agent, TUE, "10:00");
-    expect(await state(agent, pk(TUE, "15:00"))).toMatchObject({
+    await checkIn(agent, tue, "10:00");
+    expect(await state(agent, pk(tue, "15:00"))).toMatchObject({
       rules_active: true,
       required: true,
       can_check_out: false,
