@@ -368,6 +368,37 @@ export const insightQuery = z
     message: "Date range must be increasing",
     path: ["to"],
   });
+// Report drill-down (update 050). The database checks which metrics, keys
+// and filters each report has; "none" as a key means "not set" (for example
+// lost leads without an agent).
+export const reportDrilldownQuery = z
+  .object({
+    report: z.enum(["summary", "sources", "agents", "funnel", "lost"]),
+    metric: z.string().regex(/^[a-z_]{1,40}$/),
+    key: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/)
+      .optional(),
+    from: offsetTime,
+    to: offsetTime,
+    agent: uuid.optional(),
+    source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
+    search: z.string().max(100).optional(),
+    status: z.enum(statuses).optional(),
+    owner: z.union([uuid, z.literal("none")]).optional(),
+    sort: z.enum(["recent", "created", "activity", "call"]).optional(),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce
+      .number()
+      .int()
+      .refine((v) => v === 25 || v === 50)
+      .default(25),
+  })
+  .strict()
+  .refine((v) => Date.parse(v.from) < Date.parse(v.to), {
+    message: "Date range must be increasing",
+    path: ["to"],
+  });
 export const notificationRead = z
   .object({ ids: z.array(uuid).min(1).max(100).optional() })
   .strict();

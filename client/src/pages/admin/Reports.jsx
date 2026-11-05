@@ -1,8 +1,18 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, download, pkr, reportSearch } from "../../lib/api";
-import { lostReasonLabel, statusLabel } from "../../lib/pipeline";
+import { lostReasonLabel, statusLabel, statuses } from "../../lib/pipeline";
+import {
+  canOpenSummary,
+  drillInfo,
+  relatedNumbers,
+  reportNumber,
+  sourceName,
+} from "../../lib/reportDrilldown";
 import { Button, Table, ErrorBox, Loader } from "../../components/common/UI";
+import ReportDrilldown from "../../components/reports/ReportDrilldown";
+import "../../styles/reports.css";
 const tabs = [
   ["summary", "Summary"],
   ["sources", "Lead sources"],
@@ -10,7 +20,6 @@ const tabs = [
   ["funnel", "Sales funnel"],
   ["lost", "Lost reasons"],
 ];
-const sourceName = (s) => (s === "CSV" ? "CSV / Excel" : s);
 const percent = (part, whole) =>
   whole ? `${Math.round((part / whole) * 1000) / 10}%` : "—";
 const minutes = (m) =>
@@ -19,6 +28,13 @@ const minutes = (m) =>
     : m < 60
       ? `${m} min`
       : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
+const day = /^\d{4}-\d{2}-\d{2}$/;
+const longDate = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
 function Bar({ value, max, label }) {
   return (
     <span className="report-bar" title={label}>
@@ -26,58 +42,132 @@ function Bar({ value, max, label }) {
     </span>
   );
 }
-function BarList({ title, rows }) {
+// A report number that opens the records behind it.
+function Open({ label, value, onOpen, children }) {
+  return (
+    <button
+      type="button"
+      className="report-link"
+      aria-label={`${label}: ${value ?? 0}. Show the records`}
+      onClick={onOpen}
+    >
+      {children ?? value ?? 0}
+    </button>
+  );
+}
+function BarList({ title, rows, empty, onOpen }) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   return (
     <section className="report-block">
       <h3>{title}</h3>
       {rows.length ? (
         rows.map((r) => (
-          <div className="report-row" key={r.key}>
+          <button
+            type="button"
+            className="report-row report-row-button"
+            key={r.key ?? "none"}
+            aria-label={`${r.label}: ${r.count}. Show the leads`}
+            onClick={() => onOpen(r.key)}
+          >
             <span>{r.label}</span>
             <Bar value={r.count} max={max} label={`${r.label}: ${r.count}`} />
             <b>{r.count}</b>
-          </div>
+          </button>
         ))
       ) : (
-        <p className="empty">No lost leads in this range.</p>
+        <p className="empty">{empty}</p>
       )}
     </section>
   );
 }
-function Summary({ data }) {
+function Summary({ data, onOpen }) {
+  const byStatus = data?.by_status || {};
+  const rows = Object.entries(data || {})
+    .filter(([, v]) => typeof v === "number")
+    .map(([key, value]) => ({
+      id: key,
+      metric: key.replaceAll("_", " "),
+      value: key === "revenue" ? pkr(value) : value,
+    }));
   return (
     <>
       <Table
-        rows={Object.entries(data || {})
-          .filter(([, v]) => typeof v === "number")
-          .map(([key, value]) => ({
-            id: key,
-            metric: key.replaceAll("_", " "),
-            value: key === "revenue" ? pkr(value) : value,
-          }))}
+        rows={rows}
         columns={[
-          { key: "metric", label: "Metric" },
-          { key: "value", label: "Value" },
+          {
+            key: "metric",
+            label: "Metric",
+            render: (r) =>
+              canOpenSummary(r.id) ? (
+                <Open
+                  label={r.metric}
+                  value={r.value}
+                  onOpen={() => onOpen(r.id)}
+                >
+                  {r.metric}
+                </Open>
+              ) : (
+                r.metric
+              ),
+          },
+          {
+            key: "value",
+            label: "Value",
+            render: (r) =>
+              canOpenSummary(r.id) ? (
+                <Open
+                  label={r.metric}
+                  value={r.value}
+                  onOpen={() => onOpen(r.id)}
+                />
+              ) : (
+                r.value
+              ),
+          },
         ]}
       />
+      {data?.by_status && (
+        <BarList
+          title="Leads created in this range, by current status"
+          rows={statuses.map((s) => ({
+            key: s,
+            label: statusLabel(s),
+            count: byStatus[s] || 0,
+          }))}
+          onOpen={(s) => onOpen("by_status", s)}
+        />
+      )}
       <h2>Metric definitions</h2>
       <p>
         Calls count when completed, using end time. Visits count when completed,
         using scheduled time. Won deals count once per lead, using close date;
         revenue sums their recorded value. Lead totals use creation time.
         Operational reminders and visits show current due or scheduled records.
+        Select any number to see the records behind it.
       </p>
     </>
   );
 }
-function Sources({ rows }) {
+function Sources({ rows, onOpen }) {
   const max = Math.max(1, ...rows.map((r) => r.leads));
+  const cell = (key, label, format) => ({
+    key,
+    label,
+    render: (r) => (
+      <Open
+        label={`${sourceName(r.source)} ${label}`}
+        value={r[key]}
+        onOpen={() => onOpen(key, r.source ?? null)}
+      >
+        {format ? format(r[key]) : r[key]}
+      </Open>
+    ),
+  });
   return (
     <>
       <p className="field-hint">
         Leads created in this range, grouped by source, and how far each group
-        has got so far.
+        has got so far. Select a source or a number to see its leads.
       </p>
       <Table
         rows={rows.map((r) => ({ ...r, id: r.source }))}
@@ -85,7 +175,15 @@ function Sources({ rows }) {
           {
             key: "source",
             label: "Source",
-            render: (r) => <b>{sourceName(r.source)}</b>,
+            render: (r) => (
+              <Open
+                label={`${sourceName(r.source)} leads`}
+                value={r.leads}
+                onOpen={() => onOpen("leads", r.source ?? null)}
+              >
+                <b>{sourceName(r.source)}</b>
+              </Open>
+            ),
           },
           {
             key: "leads",
@@ -93,34 +191,48 @@ function Sources({ rows }) {
             render: (r) => (
               <span className="report-cell">
                 <Bar value={r.leads} max={max} label={`${r.leads} leads`} />
-                {r.leads}
+                <Open
+                  label={`${sourceName(r.source)} leads`}
+                  value={r.leads}
+                  onOpen={() => onOpen("leads", r.source ?? null)}
+                />
               </span>
             ),
           },
-          { key: "contacted", label: "Contacted" },
-          { key: "visited", label: "Visited" },
-          { key: "won", label: "Won" },
-          { key: "lost", label: "Lost" },
+          cell("contacted", "Contacted"),
+          cell("visited", "Visited"),
+          cell("won", "Won"),
+          cell("lost", "Lost"),
           {
             key: "conversion",
             label: "Conversion",
             render: (r) => percent(r.won, r.leads),
           },
-          {
-            key: "revenue",
-            label: "Won revenue",
-            render: (r) => pkr(r.revenue),
-          },
+          cell("revenue", "Won revenue", pkr),
         ]}
       />
     </>
   );
 }
-function Agents({ rows }) {
+function Agents({ rows, onOpen }) {
+  const open = (metric, label, render) => ({
+    key: metric,
+    label,
+    render: (r) => (
+      <Open
+        label={`${r.name} ${label}`}
+        value={r[metric]}
+        onOpen={() => onOpen(metric, r.agent_id)}
+      >
+        {render ? render(r) : r[metric]}
+      </Open>
+    ),
+  });
   return (
     <>
       <p className="field-hint">
         Activity in this range. First-call speed counts working hours only.
+        Select an agent or a number to see the records.
       </p>
       <Table
         rows={rows.map((r) => ({ ...r, id: r.agent_id }))}
@@ -129,65 +241,81 @@ function Agents({ rows }) {
             key: "name",
             label: "Agent",
             render: (r) => (
-              <b>
-                {r.name}
-                {!r.active && " (inactive)"}
-              </b>
+              <Open
+                label={`${r.name} assigned`}
+                value={r.assigned}
+                onOpen={() => onOpen("assigned", r.agent_id)}
+              >
+                <b>
+                  {r.name}
+                  {!r.active && " (inactive)"}
+                </b>
+              </Open>
             ),
           },
-          { key: "assigned", label: "Assigned" },
-          { key: "first_calls", label: "First calls" },
-          {
-            key: "on_time",
-            label: "On time",
-            render: (r) =>
-              percent(r.on_time_first_calls, r.first_calls_with_deadline),
-          },
-          {
-            key: "speed",
-            label: "Avg first call",
-            render: (r) => minutes(r.avg_first_call_minutes),
-          },
-          {
-            key: "missed_first_calls",
-            label: "Missed first calls",
-            render: (r) =>
-              r.missed_first_calls ? (
-                <span className="badge overdue">{r.missed_first_calls}</span>
-              ) : (
-                0
-              ),
-          },
+          open("assigned", "Assigned"),
+          open("first_calls", "First calls"),
+          open("first_calls_with_deadline", "On time", (r) =>
+            percent(r.on_time_first_calls, r.first_calls_with_deadline),
+          ),
+          open("avg_first_call_minutes", "Avg first call", (r) =>
+            minutes(r.avg_first_call_minutes),
+          ),
+          open("missed_first_calls", "Missed first calls", (r) =>
+            r.missed_first_calls ? (
+              <span className="badge overdue">{r.missed_first_calls}</span>
+            ) : (
+              0
+            ),
+          ),
           {
             key: "calls",
             label: "Calls (answered)",
-            render: (r) => `${r.calls} (${r.connected_calls})`,
+            render: (r) => (
+              <span className="report-pair">
+                <Open
+                  label={`${r.name} calls`}
+                  value={r.calls}
+                  onOpen={() => onOpen("calls", r.agent_id)}
+                />
+                <Open
+                  label={`${r.name} answered calls`}
+                  value={r.connected_calls}
+                  onOpen={() => onOpen("connected_calls", r.agent_id)}
+                >
+                  ({r.connected_calls})
+                </Open>
+              </span>
+            ),
           },
-          {
-            key: "talk",
-            label: "Talk time",
-            render: (r) => minutes(r.talk_minutes),
-          },
-          { key: "visits_completed", label: "Visits done" },
-          { key: "won_deals", label: "Won deals" },
-          { key: "revenue", label: "Revenue", render: (r) => pkr(r.revenue) },
-          { key: "lost", label: "Lost" },
+          open("talk_minutes", "Talk time", (r) => minutes(r.talk_minutes)),
+          open("visits_completed", "Visits done"),
+          open("won_deals", "Won deals"),
+          open("revenue", "Revenue", (r) => pkr(r.revenue)),
+          open("lost", "Lost"),
         ]}
       />
     </>
   );
 }
-function Funnel({ data }) {
+function Funnel({ data, onOpen }) {
   const stages = Array.isArray(data?.stages) ? data.stages : [];
   return (
     <>
       <p className="field-hint">
         Leads created in this range and the furthest stage each has reached.
+        Select a stage to see its leads.
       </p>
       {data?.total ? (
         <div className="report-funnel">
           {stages.map((s, i) => (
-            <div className="report-row" key={s.stage}>
+            <button
+              type="button"
+              className="report-row report-row-button"
+              key={s.stage}
+              aria-label={`${statusLabel(s.stage)}: ${s.reached} leads. Show the leads`}
+              onClick={() => onOpen("stage", s.stage)}
+            >
               <span>{statusLabel(s.stage)}</span>
               <Bar
                 value={s.reached}
@@ -200,9 +328,14 @@ function Funnel({ data }) {
                 {i > 0 &&
                   ` · ${percent(s.reached, stages[i - 1].reached)} of previous`}
               </small>
-            </div>
+            </button>
           ))}
-          <div className="report-row lost">
+          <button
+            type="button"
+            className="report-row report-row-button lost"
+            aria-label={`Lost: ${data.lost} leads. Show the leads`}
+            onClick={() => onOpen("lost")}
+          >
             <span>Lost</span>
             <Bar
               value={data.lost}
@@ -211,7 +344,7 @@ function Funnel({ data }) {
             />
             <b>{data.lost}</b>
             <small>{percent(data.lost, data.total)} of all</small>
-          </div>
+          </button>
         </div>
       ) : (
         <p className="empty">No leads were created in this range.</p>
@@ -219,50 +352,96 @@ function Funnel({ data }) {
     </>
   );
 }
-function Lost({ data }) {
+function Lost({ data, onOpen }) {
   const list = (rows) => (Array.isArray(rows) ? rows : []);
+  const empty = "No lost leads in this range.";
   return (
     <>
       <p className="field-hint">
-        Leads marked lost in this range: {data?.total ?? 0}.
+        Leads marked lost in this range:{" "}
+        {data?.total ? (
+          <Open
+            label="Lost leads"
+            value={data.total}
+            onOpen={() => onOpen("total")}
+          />
+        ) : (
+          0
+        )}
+        .
       </p>
       <div className="report-blocks">
         <BarList
           title="By reason"
+          empty={empty}
           rows={list(data?.by_reason).map((r) => ({
-            key: r.reason,
+            key: r.reason ?? null,
             label: lostReasonLabel(r.reason),
             count: r.count,
           }))}
+          onOpen={(key) => onOpen("reason", key)}
         />
         <BarList
           title="By source"
+          empty={empty}
           rows={list(data?.by_source).map((r) => ({
-            key: r.source,
+            key: r.source ?? null,
             label: sourceName(r.source),
             count: r.count,
           }))}
+          onOpen={(key) => onOpen("source", key)}
         />
         <BarList
           title="By agent"
+          empty={empty}
           rows={list(data?.by_agent).map((r) => ({
-            key: r.agent_id || "unassigned",
+            key: r.agent_id ?? null,
             label: r.name,
             count: r.count,
           }))}
+          onOpen={(key) => onOpen("agent", key)}
         />
       </div>
     </>
   );
 }
+// The tab, filters and any open drill-down live in the address, so returning
+// from a lead's details brings back the same report and list.
+const drillParams = ["dm", "dk", "dq", "ds", "do", "dsort", "dp"];
 export default function Reports() {
   const today = new Date(Date.now() + 5 * 3600000).toISOString().slice(0, 10);
-  const [tab, setTab] = useState("summary"),
-    [from, setFrom] = useState(today.slice(0, 7) + "-01"),
-    [to, setTo] = useState(today),
-    [agent, setAgent] = useState(""),
-    [source, setSource] = useState(""),
-    [error, setError] = useState("");
+  const [url, setUrl] = useSearchParams();
+  const client = useQueryClient();
+  const [error, setError] = useState("");
+  const tab = tabs.some(([v]) => v === url.get("tab"))
+    ? url.get("tab")
+    : "summary";
+  const from = day.test(url.get("from") || "")
+    ? url.get("from")
+    : today.slice(0, 7) + "-01";
+  const to = day.test(url.get("to") || "") ? url.get("to") : today;
+  const agent = url.get("agent") || "";
+  const source = url.get("source") || "";
+  // setUrl's updater sees the address of the last render, so two quick
+  // changes (a tab, then a date) would lose the first. Each change builds on
+  // the latest one instead.
+  const latest = useRef(url);
+  useLayoutEffect(() => {
+    latest.current = url;
+  }, [url]);
+  const change = useCallback(
+    (values) => {
+      const next = new URLSearchParams(latest.current);
+      for (const [k, v] of Object.entries(values))
+        if (v === undefined || v === null || v === "") next.delete(k);
+        else next.set(k, String(v));
+      latest.current = next;
+      setUrl(next, { replace: true });
+    },
+    [setUrl],
+  );
+  const closeDrill = () =>
+    change(Object.fromEntries(drillParams.map((k) => [k, null])));
   // Each report uses only the filters that apply to it.
   const usesAgent = tab !== "agents",
     usesSource = !["sources", "agents"].includes(tab);
@@ -283,7 +462,71 @@ export default function Reports() {
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
   });
+  const agentList = (Array.isArray(users.data) ? users.data : []).filter(
+    (u) => u.role === "agent",
+  );
   const rows = Array.isArray(q.data) ? q.data : [];
+  // Agent names for titles, including former agents the report still lists.
+  const names = Object.fromEntries([
+    ...(Array.isArray(users.data) ? users.data : []).map((u) => [u.id, u.name]),
+    ...(tab === "agents" ? rows : []).map((r) => [r.agent_id, r.name]),
+    ...(tab === "lost" && Array.isArray(q.data?.by_agent)
+      ? q.data.by_agent
+      : []
+    )
+      .filter((r) => r.agent_id)
+      .map((r) => [r.agent_id, r.name]),
+  ]);
+  // A drill-down: metric (dm) and key (dk; "none" means not set).
+  const metric = url.get("dm");
+  const rawKey = url.get("dk");
+  const drillKey =
+    rawKey === null ? undefined : rawKey === "none" ? null : rawKey;
+  const openDrill = (m, key) =>
+    change({
+      dm: m,
+      dk: key === undefined ? null : key === null ? "none" : key,
+      dq: null,
+      ds: null,
+      do: null,
+      dsort: null,
+      dp: null,
+    });
+  const drillState = {
+    search: url.get("dq") || "",
+    status: url.get("ds") || "",
+    owner: url.get("do") || "",
+    sort: url.get("dsort") || "",
+    page: Number(url.get("dp")) || 1,
+  };
+  const setDrillState = useCallback(
+    (values) =>
+      change({
+        ...("search" in values ? { dq: values.search } : {}),
+        ...("status" in values ? { ds: values.status } : {}),
+        ...("owner" in values ? { do: values.owner } : {}),
+        ...("sort" in values ? { dsort: values.sort } : {}),
+        ...("page" in values
+          ? { dp: values.page > 1 ? values.page : null }
+          : {}),
+      }),
+    [change],
+  );
+  const filterText = [
+    `${longDate.format(new Date(from))} – ${longDate.format(new Date(to))}`,
+    usesAgent
+      ? agent
+        ? `Agent: ${names[agent] || "selected"}`
+        : "All agents"
+      : null,
+    usesSource
+      ? source
+        ? `Source: ${sourceName(source)}`
+        : "All sources"
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <>
       <div className="page-heading">
@@ -322,7 +565,10 @@ export default function Reports() {
             aria-selected={tab === value}
             className={tab === value ? "active" : ""}
             onClick={() => {
-              setTab(value);
+              change({
+                tab: value === "summary" ? null : value,
+                ...Object.fromEntries(drillParams.map((k) => [k, null])),
+              });
               setError("");
             }}
           >
@@ -337,7 +583,9 @@ export default function Reports() {
             <input
               type="date"
               value={from}
-              onChange={(e) => e.target.value && setFrom(e.target.value)}
+              onChange={(e) =>
+                e.target.value && change({ from: e.target.value })
+              }
             />
           </label>
           <label>
@@ -345,30 +593,28 @@ export default function Reports() {
             <input
               type="date"
               value={to}
-              onChange={(e) => e.target.value && setTo(e.target.value)}
+              onChange={(e) => e.target.value && change({ to: e.target.value })}
             />
           </label>
           {usesAgent && (
             <select
               aria-label="Report agent"
               value={agent}
-              onChange={(e) => setAgent(e.target.value)}
+              onChange={(e) => change({ agent: e.target.value })}
             >
               <option value="">All agents</option>
-              {(Array.isArray(users.data) ? users.data : [])
-                .filter((u) => u.role === "agent")
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
+              {agentList.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
             </select>
           )}
           {usesSource && (
             <select
               aria-label="Report source"
               value={source}
-              onChange={(e) => setSource(e.target.value)}
+              onChange={(e) => change({ source: e.target.value })}
             >
               <option value="">All sources</option>
               {["manual", "CSV", "Meta", "WhatsApp", "other"].map((s) => (
@@ -383,17 +629,38 @@ export default function Reports() {
         {q.isPending ? (
           <Loader />
         ) : q.error ? null : tab === "summary" ? (
-          <Summary data={q.data} />
+          <Summary data={q.data} onOpen={openDrill} />
         ) : tab === "sources" ? (
-          <Sources rows={rows} />
+          <Sources rows={rows} onOpen={openDrill} />
         ) : tab === "agents" ? (
-          <Agents rows={rows} />
+          <Agents rows={rows} onOpen={openDrill} />
         ) : tab === "funnel" ? (
-          <Funnel data={q.data} />
+          <Funnel data={q.data} onOpen={openDrill} />
         ) : (
-          <Lost data={q.data} />
+          <Lost data={q.data} onOpen={openDrill} />
         )}
       </section>
+      {metric && q.data && (
+        <ReportDrilldown
+          key={[tab, metric, rawKey, JSON.stringify(params)].join("|")}
+          report={tab}
+          metric={metric}
+          drillKey={drillKey}
+          info={drillInfo(tab, metric, drillKey, names)}
+          shown={reportNumber(tab, q.data, metric, drillKey)}
+          related={relatedNumbers(tab, q.data, metric, drillKey)}
+          filters={params}
+          filterText={filterText}
+          state={drillState}
+          onState={setDrillState}
+          onSelect={openDrill}
+          onRefreshReport={() =>
+            client.invalidateQueries({ queryKey: ["reports", tab] })
+          }
+          agents={agentList}
+          onClose={closeDrill}
+        />
+      )}
     </>
   );
 }
