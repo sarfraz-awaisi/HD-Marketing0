@@ -19,6 +19,7 @@ import {
   ScrollText,
   Settings,
   ShieldAlert,
+  Store,
   Target,
   Trash2,
   UserCog,
@@ -28,7 +29,8 @@ import {
 } from "lucide-react";
 // Sidebar sections per role. Paths, labels and role access are unchanged from
 // the previous flat menu; only the grouping and icons are new. Properties
-// became Inventory in update 041 (/properties redirects there).
+// became Inventory in update 041 (/properties redirects there). Update 049
+// adds the dealer network for administrators and agents (never staff).
 export const adminNavigation = [
   { label: "", links: [["/", "Overview", LayoutDashboard]] },
   {
@@ -50,6 +52,10 @@ export const adminNavigation = [
       ["/inventory", "Inventory", Building2],
       ["/documents", "Documentation & policies", BookOpen],
     ],
+  },
+  {
+    label: "Dealer Affiliate Network",
+    links: [["/dealers", "Dealers", Store]],
   },
   {
     label: "Team",
@@ -91,6 +97,10 @@ export const agentNavigation = [
       ["/inventory", "Inventory", Building2],
       ["/documents", "Documentation & policies", BookOpen],
     ],
+  },
+  {
+    label: "Dealer Affiliate Network",
+    links: [["/dealers", "My dealers", Store]],
   },
   {
     label: "My work",

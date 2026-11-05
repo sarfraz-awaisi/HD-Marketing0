@@ -48,6 +48,7 @@ import {
 import { employeesAdminRouter } from "./employees.routes.js";
 import { shiftsAdminRouter } from "./shifts.routes.js";
 import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
+import { dealersRouter } from "./dealers.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
 import {
@@ -93,6 +94,7 @@ export function crmRouter(db, options = {}) {
   router.use("/admin/attendance", adminOnly, attendanceAdminRouter(db));
   router.use("/tasks", tasksRouter(db));
   router.use("/admin/tasks", adminOnly, tasksAdminRouter(db));
+  router.use("/dealers", dealersRouter(db));
   router.use("/admin", adminOnly, employeesAdminRouter(db));
   router.use(inventoryRouter(db));
   const upload = multer({
