@@ -595,28 +595,39 @@ describe("who did what on the timeline", () => {
 
 describe("calls waiting for a follow-up date", () => {
   it("are exactly the leads the production check lists, for administrators and for each agent", async () => {
-    const legacy = (id, owner, outcome = "Follow-up required", hoursAgo = 20) =>
-      pg.query("select log_manual_call($1,$2,$3::jsonb,'legacy')", [
-        id,
-        owner,
-        JSON.stringify(
-          call({
-            outcome,
-            started_at: new Date(Date.now() - hoursAgo * 3600000).toISOString(),
-          }),
-        ),
+    // Each row gets an explicit, distinct time, so "before" and "after" never
+    // depend on how fast the rows are written (fast runners can give two
+    // rows the same timestamp).
+    const legacy = async (
+      id,
+      owner,
+      outcome = "Follow-up required",
+      hoursAgo = 20,
+    ) => {
+      const at = new Date(Date.now() - hoursAgo * 3600000).toISOString();
+      const logged = (
+        await one("select log_manual_call($1,$2,$3::jsonb,'legacy') r", [
+          id,
+          owner,
+          JSON.stringify(call({ outcome, started_at: at })),
+        ])
+      ).r;
+      await pg.query("update calls set created_at=$2 where id=$1", [
+        logged.id,
+        at,
       ]);
-    const followup = (id, owner, status = "pending") =>
+    };
+    const followup = (id, owner, status, hoursAgo) =>
       pg.query(
-        "insert into followups(lead_id,agent_id,due_at,status) values($1,$2,now()+interval '2 days',$3)",
-        [id, owner, status],
+        "insert into followups(lead_id,agent_id,due_at,status,created_at) values($1,$2,now()+interval '2 days',$3,now()-make_interval(hours=>$4))",
+        [id, owner, status, hoursAgo],
       );
     const make = async (owner = ali) => customer(owner);
     // Waiting: a follow-up was asked for and nothing covers it.
     const plain = await make();
     await legacy(plain, ali);
     const oldDone = await make();
-    await followup(oldDone, ali, "completed");
+    await followup(oldDone, ali, "completed", 40);
     await legacy(oldDone, ali);
     const twice = await make();
     await legacy(twice, ali, "Follow-up required", 30);
@@ -625,11 +636,11 @@ describe("calls waiting for a follow-up date", () => {
     await legacy(saras, sara);
     // Not waiting: covered, superseded, closed or deleted.
     const pendingBefore = await make();
-    await followup(pendingBefore, ali);
+    await followup(pendingBefore, ali, "pending", 40);
     await legacy(pendingBefore, ali);
     const cancelledAfter = await make();
     await legacy(cancelledAfter, ali);
-    await followup(cancelledAfter, ali, "cancelled");
+    await followup(cancelledAfter, ali, "cancelled", 10);
     const laterCall = await make();
     await legacy(laterCall, ali, "Follow-up required", 30);
     await legacy(laterCall, ali, "Interested", 10);
