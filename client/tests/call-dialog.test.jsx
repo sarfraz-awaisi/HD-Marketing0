@@ -22,7 +22,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ToastProvider } from "../src/components/common/UI";
 import Leads from "../src/pages/admin/Leads";
 import LeadDetail from "../src/pages/agent/LeadDetail";
-import { localInput } from "../src/lib/api";
+import { localISO, localInput } from "../src/lib/api";
 
 const mocks = vi.hoisted(() => ({ api: vi.fn(), auth: { user: null } }));
 vi.mock("../src/context/AuthContext", () => ({ useAuth: () => mocks.auth }));
@@ -267,6 +267,19 @@ describe("call button and call dialog", () => {
     fireEvent.change(within(dialog).getByLabelText("Call outcome"), {
       target: { value: "Follow-up required" },
     });
+    // Follow-up required schedules the follow-up, so it needs a time: the
+    // form is not sent without one.
+    const followUpField = within(dialog).getByLabelText(
+      "Follow-up date and time",
+    );
+    expect(followUpField).toBeRequired();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save call" }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(manualPosts()).toHaveLength(0);
+    const followUp = localInput(
+      new Date(Date.now() + 2 * 86400000).toISOString(),
+    );
+    fireEvent.change(followUpField, { target: { value: followUp } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save call" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
@@ -274,6 +287,7 @@ describe("call button and call dialog", () => {
     expect(manualPosts()[0][1].body).toMatchObject({
       outcome: "Follow-up required",
       duration_seconds: 30,
+      follow_up_at: localISO(followUp),
     });
     fireEvent.click(screen.getByRole("button", { name: "Log a call" }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();

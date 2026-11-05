@@ -49,6 +49,12 @@ beforeEach(async () => {
   await pg.exec(
     "insert into attendance_policies(name,shift_start,shift_end,work_days,grace_minutes,effective_from) values('HD Marketing standard','10:00','18:00','{1,2,3,4,5,6}',15,'2026-10-01');update attendance_periods set starts_on='2026-10-01';update crm_settings set task_rules_from=null;",
   );
+  // The disabled account left on a fixed date before the test week, rather
+  // than on whatever day the tests run.
+  await pg.query(
+    "update attendance_periods set ends_on='2026-10-31' where user_id=$1",
+    [gone],
+  );
 });
 const app = () => createApp(trustedMfaFixture(db));
 const as = (user) => ({ Authorization: "Bearer " + user });

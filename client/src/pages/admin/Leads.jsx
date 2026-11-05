@@ -7,6 +7,7 @@ import { useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
+import { followUpNotice } from "../../lib/calls";
 import { useAuth } from "../../context/AuthContext";
 import {
   Button,
@@ -617,10 +618,10 @@ function LeadList({ importId, initialCall }) {
           lead={dialLead}
           role={user.role}
           onClose={() => setDialLead(null)}
-          onSaved={() => {
+          onSaved={(result) => {
             setDialLead(null);
             invalidateWorkspace(qc);
-            toast("Call saved");
+            toast(followUpNotice(result, date) || "Call saved");
           }}
         />
       )}
