@@ -13,10 +13,14 @@ import {
   Pagination,
   Table,
 } from "../common/UI";
+import "../../styles/reports.css";
 // The records behind one report number (update 050). The server lists them
 // with the report's own conditions and the report's filters; search, status
 // and agent only narrow that list. "Called by" is the person the records
 // show made the call, never assumed from the lead's agent.
+// own (update 051): an agent's own numbers. The server lists only their
+// work; a lead now handled by someone else ("hidden") comes with its number
+// and the agent's own record only, and has no details to open.
 const limit = 25;
 const sorts = [
   ["recent", "Newest first"],
@@ -231,6 +235,7 @@ export default function ReportDrilldown({
   onSelect,
   onRefreshReport,
   agents,
+  own = false,
   onClose,
 }) {
   const note = report === "summary" ? summaryNotes[metric] : null;
@@ -269,6 +274,7 @@ export default function ReportDrilldown({
   }, [data]);
   const [one, many] = kindNouns[data?.kind] || kindNouns.lead;
   const narrowed = !!(state.search || state.status || state.owner);
+  const gone = (r, render) => (r.hidden ? "—" : render());
   const value = (v) => (v == null ? null : Number(v));
   const mismatch =
     checked && value(checked.value) !== value(checked.report_value);
@@ -283,6 +289,12 @@ export default function ReportDrilldown({
       <div className="drill-context">
         <p>{info.about}</p>
         <p className="field-hint">{filterText}</p>
+        {own && (
+          <p className="field-hint">
+            Only your own work is listed. A lead now handled by another agent
+            shows only its number and your record.
+          </p>
+        )}
       </div>
       {related.length > 1 && (
         <div
@@ -335,19 +347,21 @@ export default function ReportDrilldown({
                 </option>
               ))}
             </select>
-            <select
-              aria-label="Assigned agent"
-              value={state.owner || ""}
-              onChange={(e) => onState({ owner: e.target.value, page: 1 })}
-            >
-              <option value="">Any assigned agent</option>
-              <option value="none">Unassigned</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+            {!own && (
+              <select
+                aria-label="Assigned agent"
+                value={state.owner || ""}
+                onChange={(e) => onState({ owner: e.target.value, page: 1 })}
+              >
+                <option value="">Any assigned agent</option>
+                <option value="none">Unassigned</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <select
               aria-label="Sort by"
               value={state.sort || "recent"}
@@ -411,36 +425,55 @@ export default function ReportDrilldown({
                     {
                       key: "lead",
                       label: "Lead",
-                      render: (r) => (
-                        <span className="drill-cell">
-                          <Link
-                            to={`/leads/${r.lead.id}`}
-                            aria-label={`Open lead ${r.lead.number} ${r.lead.name}`}
-                          >
-                            {r.lead.number}
-                          </Link>
-                          <b>{r.lead.name}</b>
-                          <small>{r.lead.masked_phone || "No number"}</small>
-                          <small>{r.lead.source}</small>
-                        </span>
-                      ),
+                      render: (r) =>
+                        r.hidden ? (
+                          <span className="drill-cell">
+                            <b>{r.lead.number}</b>
+                            <small>Now handled by another agent</small>
+                          </span>
+                        ) : (
+                          <span className="drill-cell">
+                            <Link
+                              to={`/leads/${r.lead.id}`}
+                              aria-label={`Open lead ${r.lead.number} ${r.lead.name}`}
+                            >
+                              {r.lead.number}
+                            </Link>
+                            <b>{r.lead.name}</b>
+                            <small>{r.lead.masked_phone || "No number"}</small>
+                            <small>{r.lead.source}</small>
+                          </span>
+                        ),
                     },
                     {
                       key: "status",
                       label: "Status and reason",
-                      render: (r) => (
-                        <span className="drill-cell">
-                          <Badge value={r.lead.status} />
-                          <Why row={r} report={report} metric={metric} />
-                        </span>
-                      ),
-                    },
-                    {
-                      key: "agent",
-                      label: "Assigned agent",
                       render: (r) =>
-                        person(r.lead.assigned_agent, "Unassigned"),
+                        r.hidden ? (
+                          <span className="drill-cell">
+                            <small>Not your lead now</small>
+                            {data.kind === "lead" && r.at && (
+                              <small>Your latest call {date(r.at)}</small>
+                            )}
+                            <Why row={r} report={report} metric={metric} />
+                          </span>
+                        ) : (
+                          <span className="drill-cell">
+                            <Badge value={r.lead.status} />
+                            <Why row={r} report={report} metric={metric} />
+                          </span>
+                        ),
                     },
+                    ...(own
+                      ? []
+                      : [
+                          {
+                            key: "agent",
+                            label: "Assigned agent",
+                            render: (r) =>
+                              person(r.lead.assigned_agent, "Unassigned"),
+                          },
+                        ]),
                     ...(data.kind !== "lead"
                       ? [
                           {
@@ -458,7 +491,9 @@ export default function ReportDrilldown({
                       key: "last_call",
                       label: "Last call",
                       render: (r) =>
-                        r.last_call ? (
+                        r.hidden ? (
+                          "—"
+                        ) : r.last_call ? (
                           <span className="drill-cell">
                             <span>{date(r.last_call.started_at)}</span>
                             <small>{callText(r.last_call)}</small>
@@ -474,50 +509,54 @@ export default function ReportDrilldown({
                     {
                       key: "next",
                       label: "Follow-up and visit",
-                      render: (r) => (
-                        <span className="drill-cell">
-                          {r.next_followup ? (
-                            <span>
-                              Next follow-up {date(r.next_followup.due_at)}
-                              {r.next_followup.overdue && (
-                                <b className="badge overdue"> overdue</b>
-                              )}
-                            </span>
-                          ) : (
-                            <small>No follow-up pending</small>
-                          )}
-                          {r.latest_visit && (
-                            <small>
-                              Visit {statusLabel(r.latest_visit.status)}{" "}
-                              {date(r.latest_visit.scheduled_at)}
-                              {r.latest_visit.property &&
-                                ` · ${r.latest_visit.property}`}
-                            </small>
-                          )}
-                          {r.deal && (
-                            <small>
-                              Deal {statusLabel(r.deal.stage)} ·{" "}
-                              {pkr(r.deal.expected_value)}
-                            </small>
-                          )}
-                        </span>
-                      ),
+                      render: (r) =>
+                        gone(r, () => (
+                          <span className="drill-cell">
+                            {r.next_followup ? (
+                              <span>
+                                Next follow-up {date(r.next_followup.due_at)}
+                                {r.next_followup.overdue && (
+                                  <b className="badge overdue"> overdue</b>
+                                )}
+                              </span>
+                            ) : (
+                              <small>No follow-up pending</small>
+                            )}
+                            {r.latest_visit && (
+                              <small>
+                                Visit {statusLabel(r.latest_visit.status)}{" "}
+                                {date(r.latest_visit.scheduled_at)}
+                                {r.latest_visit.property &&
+                                  ` · ${r.latest_visit.property}`}
+                              </small>
+                            )}
+                            {r.deal && (
+                              <small>
+                                Deal {statusLabel(r.deal.stage)} ·{" "}
+                                {pkr(r.deal.expected_value)}
+                              </small>
+                            )}
+                          </span>
+                        )),
                     },
                     {
                       key: "dates",
                       label: "Created · last activity",
-                      render: (r) => (
-                        <span className="drill-cell">
-                          <span>{date(r.lead.created_at)}</span>
-                          <small>{date(r.lead.last_activity_at)}</small>
-                        </span>
-                      ),
+                      render: (r) =>
+                        gone(r, () => (
+                          <span className="drill-cell">
+                            <span>{date(r.lead.created_at)}</span>
+                            <small>{date(r.lead.last_activity_at)}</small>
+                          </span>
+                        )),
                     },
                     {
                       key: "open",
                       label: "Calls",
                       render: (r) =>
-                        r.calls ? (
+                        r.hidden ? (
+                          "—"
+                        ) : r.calls ? (
                           <Button
                             variant="secondary"
                             aria-label={`Call history for ${r.lead.number}`}

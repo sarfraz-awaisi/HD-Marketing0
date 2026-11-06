@@ -1,5 +1,13 @@
 import React from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   fireEvent,
   render,
@@ -13,7 +21,8 @@ import App from "../src/App";
 import { ToastProvider } from "../src/components/common/UI";
 import { firstCallState, lateBy } from "../src/lib/firstCall";
 // Update 038 screens: admin review list, team calling, agent call queue,
-// first-call lead filter and working hours.
+// first-call lead filter and working hours. Update 051: dashboard numbers
+// open the records behind them.
 const mocks = vi.hoisted(() => ({ api: vi.fn(), user: null }));
 vi.mock("../src/context/AuthContext", () => ({
   useAuth: () => ({ user: mocks.user, loading: false, logout: vi.fn() }),
@@ -312,7 +321,13 @@ describe("admin review of missed first calls", () => {
     const aliRow = (await within(table).findByText("Ali Agent")).closest("tr");
     expect(within(aliRow).getByText("No calls yet today")).toBeInTheDocument();
     const saraRow = within(table).getByText("Sara Agent").closest("tr");
-    expect(within(saraRow).getByText("6 (4 answered)")).toBeInTheDocument();
+    expect(saraRow).toHaveTextContent("6 (4 answered)");
+    // Each number opens the records behind it (update 051).
+    expect(
+      within(saraRow).getByRole("button", {
+        name: "Sara Agent: calls today: 6. Show the records",
+      }),
+    ).toBeInTheDocument();
     expect(within(saraRow).queryByText("No calls yet today")).toBeNull();
     expect(screen.getByText("75%")).toBeInTheDocument();
     expect(screen.getByText("1 h 35 min")).toBeInTheDocument();
@@ -407,5 +422,179 @@ describe("working hours", () => {
       first_call_grace_minutes: 120,
       idle_days: 7,
     });
+  });
+});
+
+describe("dashboard numbers open their records (update 051)", () => {
+  // jsdom has no modal dialogs.
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLDialogElement.prototype,
+    "showModal",
+  );
+  beforeAll(() => {
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value() {
+        this.setAttribute("open", "");
+      },
+    });
+  });
+  afterAll(() => {
+    if (original)
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", original);
+    else delete HTMLDialogElement.prototype.showModal;
+  });
+  const call = (who) => ({
+    id: "call-" + who.id,
+    started_at: "2026-10-19T06:00:00Z",
+    status: "completed",
+    outcome: "Interested",
+    duration_seconds: 120,
+    recorded_agent: { id: who.id, name: who.name, role: "agent" },
+    caller: { id: who.id, name: who.name, role: "agent" },
+  });
+  const drills = () =>
+    mocks.api.mock.calls
+      .map(([path]) => path)
+      .filter((path) => path.startsWith("/reports/drilldown?"))
+      .map((path) => Object.fromEntries(new URLSearchParams(path.slice(19))));
+  beforeEach(() => {
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) => {
+      if (!path.startsWith("/reports/drilldown?")) return base(path, options);
+      const q = Object.fromEntries(new URLSearchParams(path.slice(19)));
+      const who = q.key === sara.id ? sara : ali;
+      return {
+        report: q.report,
+        metric: q.metric,
+        key: q.key,
+        kind: "call",
+        measure: "count",
+        scope: mocks.user.role === "admin" ? "all" : "own",
+        count: 2,
+        leads: 2,
+        records: 2,
+        value: 2,
+        report_value: 2,
+        page: 1,
+        limit: 25,
+        data: [
+          {
+            id: "c1",
+            kind: "call",
+            at: "2026-10-19T06:00:00Z",
+            lead: {
+              id: late.id,
+              number: "HD-000042",
+              name: "Ayesha Khan",
+              masked_phone: "+92******567",
+              source: "CSV",
+              status: "contacted",
+              created_at: "2026-10-18T06:00:00Z",
+              last_activity_at: "2026-10-19T06:00:00Z",
+              assigned_agent: { id: who.id, name: who.name, role: "agent" },
+            },
+            record: call(who),
+            last_call: call(who),
+            calls: 1,
+          },
+          {
+            id: "c2",
+            kind: "call",
+            at: "2026-10-19T05:00:00Z",
+            hidden: true,
+            lead: { number: "HD-000043" },
+            record: call(who),
+          },
+        ],
+      };
+    });
+  });
+  it("lets an administrator open any agent's calling numbers", async () => {
+    open("/");
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Sara Agent: calls today: 6. Show the records",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("heading", { name: "Sara Agent: Calls today" }),
+    ).toBeInTheDocument();
+    expect(await within(dialog).findByText("Ayesha Khan")).toBeInTheDocument();
+    expect(drills().at(-1)).toMatchObject({
+      report: "today",
+      metric: "calls_today",
+      key: sara.id,
+    });
+    expect(
+      within(dialog).getByRole("combobox", { name: "Assigned agent" }),
+    ).toBeInTheDocument();
+    // The neighbouring numbers of the same agent, to switch between them.
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: /Answered calls today 4/ }),
+    );
+    await waitFor(() =>
+      expect(drills().at(-1)).toMatchObject({
+        metric: "connected_today",
+        key: sara.id,
+      }),
+    );
+  });
+  it("lets an agent open only their own numbers", async () => {
+    mocks.user = { ...ali };
+    open("/");
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Missed first calls: 1. Show the records",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("heading", { name: "Missed first calls" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/Only your own work is listed/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(
+        "Your open leads not called yet whose first-call deadline has passed.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Assigned agent" }),
+    ).toBeNull();
+    const request = drills().at(-1);
+    expect(request).toMatchObject({
+      report: "today",
+      metric: "missed",
+      key: ali.id,
+    });
+    expect(request).not.toHaveProperty("agent");
+    expect(request).not.toHaveProperty("owner");
+    // A lead now handled by someone else: its number and the agent's own
+    // call only, with nothing to open.
+    const hidden = (await within(dialog).findByText("HD-000043")).closest("tr");
+    expect(
+      within(hidden).getByText("Now handled by another agent"),
+    ).toBeInTheDocument();
+    expect(within(hidden).queryByRole("link")).toBeNull();
+    expect(within(hidden).queryByRole("button")).toBeNull();
+    expect(
+      within(dialog).getByRole("link", { name: /Open lead HD-000042/ }),
+    ).toHaveAttribute("href", "/leads/" + late.id);
+  });
+  it("opens this month's figures from the summary tiles", async () => {
+    open("/");
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Completed calls: / }),
+    );
+    await waitFor(() =>
+      expect(drills().at(-1)).toMatchObject({
+        report: "summary",
+        metric: "completed_calls",
+      }),
+    );
+    expect(drills().at(-1)).not.toHaveProperty("key");
   });
 });

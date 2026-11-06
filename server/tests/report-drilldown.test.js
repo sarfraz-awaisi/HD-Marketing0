@@ -4,9 +4,10 @@ import { createApp } from "../src/app.js";
 import { trustedMfaFixture } from "./trusted-mfa-fixture.js";
 import { resetPeople, startCrmDatabase } from "./crm-fixture.js";
 // Update 050: report drill-down. Every report number must open exactly the
-// records it counted. The sweep compares every metric of every report with
+// records it counted. The sweeps compare every metric of every report with
 // the unchanged report functions over a varied, seeded data set; the other
-// tests check particular cases whose answers are known.
+// tests check particular cases whose answers are known. Update 051 lets
+// agents open their own numbers and adds Today's calling numbers.
 const admin = "50000000-0000-4000-8000-000000000001",
   ali = "50000000-0000-4000-8000-000000000002",
   sara = "50000000-0000-4000-8000-000000000003",
@@ -308,6 +309,15 @@ describe("every report number opens exactly its records", () => {
     "revenue",
     "lost",
   ];
+  const todayMetrics = [
+    "calls_today",
+    "connected_today",
+    "first_calls_today",
+    "waiting",
+    "missed",
+    "idle",
+    "followups_overdue",
+  ];
   it("matches every metric of every report, with and without filters", async () => {
     const { now, deleted } = await seed();
     const ranges = [
@@ -436,6 +446,119 @@ describe("every report number opens exactly its records", () => {
     ])
       expect(counted, name).toContain(name);
     expect(checks.length).toBeGreaterThan(400);
+  }, 240000);
+  // Update 051: an agent's numbers are their own, and each opens exactly its
+  // records. Work on a lead that is now someone else's still counts, as in
+  // the reports, but shows only the lead number and the agent's record.
+  it("matches every one of an agent's own numbers, and Today's calling", async () => {
+    const { now, deleted } = await seed();
+    const r = range(pktDay(now - 20 * 86400000), pktDay(now + 86400000));
+    const checks = [];
+    for (const agent of [ali, kamran]) {
+      for (const f of [{}, { source: "Meta" }]) {
+        const mine = { agent, ...r, ...f };
+        for (const metric of summaryMetrics)
+          checks.push({ report: "summary", metric, ...mine });
+        for (const key of stages.concat("lost"))
+          checks.push({ report: "summary", metric: "by_status", key, ...mine });
+        for (const key of stages)
+          checks.push({ report: "funnel", metric: "stage", key, ...mine });
+        for (const metric of ["total", "lost"])
+          checks.push({ report: "funnel", metric, ...mine });
+        checks.push({ report: "lost", metric: "total", ...mine });
+        const lost = await rpc("report_lost", {
+          p_actor: agent,
+          p_from: r.from,
+          p_to: r.to,
+          p_agent: null,
+          p_source: f.source || null,
+        });
+        for (const [metric, list, field] of [
+          ["reason", lost.by_reason, "reason"],
+          ["source", lost.by_source, "source"],
+          ["agent", lost.by_agent, "agent_id"],
+        ])
+          for (const row of list)
+            checks.push({ report: "lost", metric, key: row[field], ...mine });
+      }
+      for (const row of await rpc("report_sources", {
+        p_actor: agent,
+        p_from: r.from,
+        p_to: r.to,
+        p_agent: null,
+      }))
+        for (const metric of [
+          "leads",
+          "contacted",
+          "visited",
+          "won",
+          "lost",
+          "revenue",
+        ])
+          checks.push({
+            report: "sources",
+            metric,
+            key: row.source,
+            agent,
+            ...r,
+          });
+      for (const metric of agentMetrics)
+        checks.push({ report: "agents", metric, key: agent, agent, ...r });
+      for (const metric of todayMetrics)
+        checks.push({ report: "today", metric, key: agent, agent, ...r });
+    }
+    // Administrators open every agent's Today's calling numbers.
+    for (const key of [ali, sara, kamran])
+      for (const metric of todayMetrics)
+        checks.push({ report: "today", metric, key, agent: admin, ...r });
+    const counted = new Set();
+    let hidden = 0;
+    const value = (v) => (v == null ? null : Number(v));
+    for (const { agent: actor, ...check } of checks) {
+      const label = JSON.stringify({ actor, ...check, from: undefined });
+      const rows = [];
+      let first;
+      for (let page = 1; ; page++) {
+        const result = await drill({ ...check, page }, actor);
+        first ??= result;
+        rows.push(...result.data);
+        if (result.data.length < result.limit) break;
+      }
+      expect(value(first.value), label).toBe(value(first.report_value));
+      if (first.measure === "count")
+        expect(first.count, label).toBe(value(first.value));
+      if (first.kind === "lead") expect(first.leads, label).toBe(first.count);
+      expect(rows, label).toHaveLength(first.count);
+      expect(first.scope, label).toBe(actor === admin ? "all" : "own");
+      for (const row of rows)
+        if (row.hidden) {
+          hidden += 1;
+          expect(actor, label).not.toBe(admin);
+          expect(Object.keys(row.lead), label).toEqual(["number"]);
+          for (const detail of ["calls", "last_call", "next_followup", "deal"])
+            expect(row, label).not.toHaveProperty(detail);
+        } else {
+          expect(deleted, label).not.toContain(row.lead.id);
+          if (actor !== admin)
+            expect(row.lead.assigned_agent?.id, label).toBe(actor);
+        }
+      if (first.count) counted.add(`${check.report}.${check.metric}`);
+    }
+    for (const name of [
+      "summary.leads",
+      "summary.leads_contacted",
+      "agents.calls",
+      "agents.assigned",
+      "funnel.stage",
+      "today.calls_today",
+      "today.connected_today",
+      "today.waiting",
+      "today.missed",
+      "today.followups_overdue",
+    ])
+      expect(counted, name).toContain(name);
+    expect(hidden).toBeGreaterThan(0);
+    expect(checks.length).toBeGreaterThan(250);
   }, 240000);
 });
 
@@ -1002,15 +1125,13 @@ describe("access and requests", () => {
     expect(JSON.stringify(res.body)).not.toMatch(/\+92300\d{7}/);
     expect(await writes()).toEqual(before);
   });
-  it("refuses agents and staff, through the API and in the database", async () => {
+  it("refuses staff, through the API and in the database", async () => {
     await newLead({ name: "Private", created: "2026-11-02T06:00:00Z" });
-    for (const user of [ali, staff]) {
-      const res = await request(app()).get(query()).set(as(user));
-      expect(res.status, user).toBe(403);
-      expect(JSON.stringify(res.body)).not.toMatch(/Private/);
-    }
+    const res = await request(app()).get(query()).set(as(staff));
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(res.body)).not.toMatch(/Private/);
     await expect(
-      drill({ report: "funnel", metric: "stage", key: "new", ...nov }, ali),
+      drill({ report: "funnel", metric: "stage", key: "new", ...nov }, staff),
     ).rejects.toThrow(/Administrator access required/);
   });
   it("rejects unknown numbers, keys and filters the report does not use", async () => {
@@ -1052,9 +1173,9 @@ describe("access and requests", () => {
   });
   it("is reachable only by the server, never by browsers", async () => {
     const rows = await all(
-      "select p.proname,has_function_privilege('anon',p.oid,'execute') anon,has_function_privilege('authenticated',p.oid,'execute') signed_in,has_function_privilege('service_role',p.oid,'execute') server,p.provolatile from pg_proc p where p.pronamespace='public'::regnamespace and p.proname like 'report\\_%' and p.proname in ('report_person','report_recorded_by','report_call_json','report_records','report_metric_value','report_drill_row','report_drilldown') order by 1",
+      "select p.proname,has_function_privilege('anon',p.oid,'execute') anon,has_function_privilege('authenticated',p.oid,'execute') signed_in,has_function_privilege('service_role',p.oid,'execute') server,p.provolatile from pg_proc p where p.pronamespace='public'::regnamespace and p.proname like 'report\\_%' and p.proname in ('report_person','report_recorded_by','report_call_json','report_records','report_metric_value','report_drill_row','report_drilldown','report_today_records','report_today_value') order by 1",
     );
-    expect(rows.map((r) => r.proname)).toHaveLength(7);
+    expect(rows.map((r) => r.proname)).toHaveLength(9);
     for (const r of rows) {
       expect([r.anon, r.signed_in], r.proname).toEqual([false, false]);
       expect(r.server, r.proname).toBe(r.proname === "report_drilldown");
@@ -1064,5 +1185,166 @@ describe("access and requests", () => {
     expect(rows.find((r) => r.proname === "report_drilldown").provolatile).toBe(
       "v",
     );
+  });
+});
+
+describe("an agent's own work (update 051)", () => {
+  const nov = range("2026-11-01", "2026-11-04");
+  const get = (user, q) =>
+    request(app())
+      .get("/api/reports/drilldown?" + new URLSearchParams({ ...nov, ...q }))
+      .set(as(user));
+  const writes = () =>
+    one(
+      "select (select count(*)::int from audit_log) audit,(select count(*)::int from crm_private.phone_reveals) reveals",
+    );
+  it("opens only the agent's own numbers, with masked numbers and no writes", async () => {
+    await newLead({ name: "Ali's buyer", created: "2026-11-02T06:00:00Z" });
+    await newLead({
+      name: "Sara's buyer",
+      owner: sara,
+      created: "2026-11-02T06:00:00Z",
+    });
+    const before = await writes();
+    for (const [user, name] of [
+      [ali, "Ali's buyer"],
+      [sara, "Sara's buyer"],
+    ]) {
+      const res = await get(user, { report: "summary", metric: "leads" });
+      expect(res.status, user).toBe(200);
+      expect(res.body).toMatchObject({ scope: "own", count: 1 });
+      expect(res.body.report_value).toBe(1);
+      expect(names(res.body.data)).toEqual([name]);
+      expect(res.body.data[0].lead.masked_phone).toMatch(/^\+92\*{6}\d{3}$/);
+      expect(JSON.stringify(res.body)).not.toMatch(/\+92300\d{7}/);
+    }
+    const everyone = await get(admin, { report: "summary", metric: "leads" });
+    expect(everyone.body).toMatchObject({ scope: "all", count: 2 });
+    expect(await writes()).toEqual(before);
+  });
+  it("refuses another agent's numbers and the agent filters", async () => {
+    for (const q of [
+      { report: "agents", metric: "calls", key: sara },
+      { report: "today", metric: "calls_today", key: sara },
+      { report: "summary", metric: "leads", agent: sara },
+      { report: "summary", metric: "leads", agent: ali },
+      { report: "summary", metric: "leads", owner: "none" },
+      { report: "today", metric: "calls_today", key: ali, source: "Meta" },
+    ]) {
+      const res = await get(ali, q);
+      expect(res.status, JSON.stringify(q)).toBe(400);
+      expect(res.body.error, JSON.stringify(q)).toMatch(/^Choose /);
+    }
+    expect(
+      (await get(ali, { report: "agents", metric: "calls", key: ali })).status,
+    ).toBe(200);
+  });
+  it("shows work on a lead that is now someone else's as its number and the record only", async () => {
+    const lead = await newLead({
+      name: "Handed over",
+      created: "2026-11-02T06:00:00Z",
+    });
+    await call(lead, ali, "2026-11-02T08:00:00Z", { actor: ali });
+    await rpc("assign_lead", {
+      p_lead: lead,
+      p_actor: admin,
+      p_agent: sara,
+      p_request: "test",
+    });
+    const { number, status } = await one(
+      "select format_lead_no(lead_no) number,status from leads where id=$1",
+      [lead],
+    );
+    const q = { report: "agents", metric: "calls", key: ali };
+    const mine = await get(ali, q);
+    expect(mine.body).toMatchObject({ count: 1, report_value: 1 });
+    const [row] = mine.body.data;
+    expect(row).toMatchObject({ hidden: true, kind: "call", lead: { number } });
+    expect(Object.keys(row.lead)).toEqual(["number"]);
+    expect(row.record).toMatchObject({
+      caller: { id: ali },
+      recorded_agent: { id: ali },
+    });
+    expect(JSON.stringify(mine.body)).not.toMatch(/Handed over|\*{6}|Sara/);
+    // Found by its number only, and left out when a status is chosen.
+    expect((await get(ali, { ...q, search: "Handed" })).body.count).toBe(0);
+    expect((await get(ali, { ...q, search: number })).body.count).toBe(1);
+    expect((await get(ali, { ...q, status })).body.count).toBe(0);
+    // Administrators see the lead in full, under its agent now.
+    const full = await get(admin, { ...q, status });
+    expect(full.body.data[0]).toMatchObject({
+      lead: { name: "Handed over", assigned_agent: { id: sara } },
+    });
+    expect(full.body.data[0]).not.toHaveProperty("hidden");
+  });
+  it("opens Today's calling numbers, matching call_activity, for administrators and the agent", async () => {
+    const today = Date.parse(pkt(pktDay(Date.now())));
+    const at = (s) =>
+      new Date(Math.max(today, Date.now() - 600000) + s * 1000).toISOString();
+    const answered = await newLead({ name: "Answered today" });
+    const failed = await newLead({ name: "No answer today" });
+    const waiting = await newLead({ name: "Waiting" });
+    const late = await newLead({ name: "Late" });
+    await call(answered, ali, at(60), { actor: ali });
+    await call(failed, ali, at(120), { status: "failed", actor: admin });
+    await pg.query(
+      "update leads set call_due_at=now()+interval '2 hours' where id=$1",
+      [waiting],
+    );
+    await pg.query(
+      "update leads set call_due_at=now()-interval '2 hours' where id=$1",
+      [late],
+    );
+    await pg.query(
+      "insert into followups(lead_id,agent_id,due_at,status) values($1,$2,now()-interval '1 day','pending')",
+      [answered, ali],
+    );
+    const activity = (await rpc("call_activity", { p_actor: admin })).agents;
+    const mine = activity.find((a) => a.agent_id === ali);
+    const metrics = [
+      "calls_today",
+      "connected_today",
+      "first_calls_today",
+      "waiting",
+      "missed",
+      "idle",
+      "followups_overdue",
+    ];
+    for (const user of [admin, ali])
+      for (const metric of metrics) {
+        const res = await get(user, { report: "today", metric, key: ali });
+        expect(res.status, metric).toBe(200);
+        expect(res.body.report_value, metric).toBe(mine[metric]);
+        expect(res.body.count, metric).toBe(mine[metric]);
+      }
+    const list = async (metric) =>
+      names((await get(ali, { report: "today", metric, key: ali })).body.data);
+    expect(await list("calls_today")).toEqual([
+      "Answered today",
+      "No answer today",
+    ]);
+    expect(await list("connected_today")).toEqual(["Answered today"]);
+    expect(await list("waiting")).toContain("Waiting");
+    expect(await list("missed")).toContain("Late");
+    expect(await list("followups_overdue")).toEqual(["Answered today"]);
+    // The administrator logged the unanswered call.
+    const calls = await get(ali, {
+      report: "today",
+      metric: "calls_today",
+      key: ali,
+    });
+    expect(
+      calls.body.data.find((r) => r.lead.name === "No answer today").record
+        .caller.id,
+    ).toBe(admin);
+    // Sara's numbers stay closed to Ali; administrators open them.
+    expect(
+      (await get(sara, { report: "today", metric: "waiting", key: ali }))
+        .status,
+    ).toBe(400);
+    expect(
+      (await get(admin, { report: "today", metric: "waiting", key: sara }))
+        .status,
+    ).toBe(200);
   });
 });

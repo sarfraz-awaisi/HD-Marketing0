@@ -373,7 +373,7 @@ export const insightQuery = z
 // lost leads without an agent).
 export const reportDrilldownQuery = z
   .object({
-    report: z.enum(["summary", "sources", "agents", "funnel", "lost"]),
+    report: z.enum(["summary", "sources", "agents", "funnel", "lost", "today"]),
     metric: z.string().regex(/^[a-z_]{1,40}$/),
     key: z
       .string()

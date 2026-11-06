@@ -30,7 +30,8 @@ import {
 // Sidebar sections per role. Paths, labels and role access are unchanged from
 // the previous flat menu; only the grouping and icons are new. Properties
 // became Inventory in update 041 (/properties redirects there). Update 049
-// adds the dealer network for administrators and agents (never staff).
+// adds the dealer network for administrators and agents (never staff);
+// update 051 gives agents My performance, their own reports.
 export const adminNavigation = [
   { label: "", links: [["/", "Overview", LayoutDashboard]] },
   {
@@ -107,6 +108,7 @@ export const agentNavigation = [
     links: [
       ["/my-tasks", "My tasks", ListChecks],
       ["/targets", "My targets", Target],
+      ["/reports", "My performance", BarChart3],
       ["/attendance", "My attendance", CalendarCheck],
     ],
   },

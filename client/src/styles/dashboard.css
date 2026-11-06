@@ -110,8 +110,19 @@
   color: inherit;
   box-shadow: none;
 }
-a.kpi:hover .kpi-label {
+a.kpi:hover .kpi-label,
+button.kpi:hover .kpi-label {
   color: var(--ink);
+}
+/* A tile whose number opens the records behind it (update 051). */
+button.kpi {
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.kpi .kpi-value {
+  text-decoration: underline dotted;
+  text-underline-offset: 5px;
 }
 .kpi-top {
   display: flex;

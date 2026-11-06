@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { dueLabel, firstCallState } from "../../lib/firstCall";
 import { ErrorBox, Loader, Table } from "../common/UI";
+import "../../styles/reports.css";
 export const useCallActivity = () =>
   useQuery({
     queryKey: ["call-activity"],
@@ -21,10 +22,35 @@ const workdayStarted = (activity, now = new Date()) => {
   }).format(now);
   return local >= activity.work_start;
 };
-// Admin view: how each agent's calling is going today.
-export function TeamCallActivity() {
+// A number that opens the records behind it (update 051), where the page
+// offers that (onOpen).
+function Count({ value, label, onOpen, children }) {
+  if (!onOpen) return children ?? value;
+  return (
+    <button
+      type="button"
+      className="report-link"
+      aria-label={`${label}: ${value}. Show the records`}
+      onClick={onOpen}
+    >
+      {children ?? value}
+    </button>
+  );
+}
+// Admin view: how each agent's calling is going today. onOpen(metric, agent)
+// shows the records behind a number.
+export function TeamCallActivity({ onOpen }) {
   const q = useCallActivity();
   const started = workdayStarted(q.data);
+  const count = (a, metric, label, children) => (
+    <Count
+      value={a[metric]}
+      label={`${a.name}: ${label}`}
+      onOpen={onOpen && (() => onOpen(metric, a.agent_id))}
+    >
+      {children}
+    </Count>
+  );
   return (
     <section className="panel team-calls" aria-labelledby="team-calls-title">
       <div className="panel-heading">
@@ -64,33 +90,63 @@ export function TeamCallActivity() {
             {
               key: "calls_today",
               label: "Calls today",
-              render: (a) => `${a.calls_today} (${a.connected_today} answered)`,
+              render: (a) => (
+                <span>
+                  {count(a, "calls_today", "calls today")} (
+                  {count(
+                    a,
+                    "connected_today",
+                    "answered calls today",
+                    `${a.connected_today} answered`,
+                  )}
+                  )
+                </span>
+              ),
             },
-            { key: "first_calls_today", label: "First calls today" },
-            { key: "waiting", label: "Waiting for first call" },
+            {
+              key: "first_calls_today",
+              label: "First calls today",
+              render: (a) => count(a, "first_calls_today", "first calls today"),
+            },
+            {
+              key: "waiting",
+              label: "Waiting for first call",
+              render: (a) => count(a, "waiting", "waiting for a first call"),
+            },
             {
               key: "missed",
               label: "Missed first calls",
               render: (a) =>
-                a.missed ? (
-                  <span className="badge overdue">{a.missed}</span>
-                ) : (
-                  0
+                count(
+                  a,
+                  "missed",
+                  "missed first calls",
+                  a.missed ? (
+                    <span className="badge overdue">{a.missed}</span>
+                  ) : (
+                    0
+                  ),
                 ),
             },
             {
               key: "followups_overdue",
               label: "Overdue follow-ups",
               render: (a) =>
-                a.followups_overdue ? (
-                  <span className="badge overdue">{a.followups_overdue}</span>
-                ) : (
-                  0
+                count(
+                  a,
+                  "followups_overdue",
+                  "overdue follow-ups",
+                  a.followups_overdue ? (
+                    <span className="badge overdue">{a.followups_overdue}</span>
+                  ) : (
+                    0
+                  ),
                 ),
             },
             {
               key: "idle",
               label: `No activity ${q.data.idle_days}+ days`,
+              render: (a) => count(a, "idle", "no recent activity"),
             },
           ]}
         />
@@ -99,7 +155,8 @@ export function TeamCallActivity() {
   );
 }
 // Agent view: today's numbers and the leads still waiting for a first call.
-export function MyCalls() {
+// onOpen(metric, agent) shows the records behind a number.
+export function MyCalls({ onOpen }) {
   const activity = useCallActivity();
   // Names and deadlines only: the dashboard never loads contact numbers.
   const queue = useQuery({
@@ -121,15 +178,21 @@ export function MyCalls() {
       {me && (
         <div className="my-call-stats">
           {[
-            ["Calls today", me.calls_today],
-            ["First calls today", me.first_calls_today],
-            ["Waiting for first call", me.waiting],
-            ["Missed first calls", me.missed],
-            ["Overdue follow-ups", me.followups_overdue],
-          ].map(([label, value]) => (
+            ["Calls today", "calls_today"],
+            ["First calls today", "first_calls_today"],
+            ["Waiting for first call", "waiting"],
+            ["Missed first calls", "missed"],
+            ["Overdue follow-ups", "followups_overdue"],
+          ].map(([label, metric]) => (
             <div key={label}>
               <span>{label}</span>
-              <strong>{value}</strong>
+              <strong>
+                <Count
+                  value={me[metric]}
+                  label={label}
+                  onOpen={onOpen && (() => onOpen(metric, me.agent_id))}
+                />
+              </strong>
             </div>
           ))}
         </div>

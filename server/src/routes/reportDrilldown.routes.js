@@ -2,9 +2,11 @@ import { Router } from "express";
 import { reportLimit } from "../middleware/rateLimit.js";
 import { reportDrilldownQuery } from "../utils/validators.js";
 import { salesRpc } from "./sales.routes.js";
-// Report drill-down (update 050): the records behind one report number, for
-// administrators only (mounted behind adminOnly; the database checks again).
-// The database repeats the report's own conditions and writes nothing.
+// Report drill-down (update 050): the records behind one report number.
+// Administrators open anyone's; agents only their own (update 051): the
+// database sets the agent to the signed-in agent and refuses everyone else.
+// Staff are refused before this router. The database repeats the report's
+// own conditions and writes nothing.
 // Contact numbers stay masked here: a full number is shown, and its reveal
 // audited, only when the lead itself is opened, so browsing reports (paging,
 // searching, refreshing) never reveals numbers in bulk.
