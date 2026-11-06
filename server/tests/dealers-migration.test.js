@@ -8,6 +8,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const admin = "49100000-0000-4000-8000-000000000001",
   agent = "49100000-0000-4000-8000-000000000002";
 const dir = new URL("../../supabase/migrations/", import.meta.url);
+// Times relative to now: an agent may log a call only within the last 48 hours.
+const hoursFromNow = (h) => new Date(Date.now() + h * 3600e3).toISOString();
 const migration = async (file) =>
   (await readFile(new URL(file, dir), "utf8")).replace(
     "create extension if not exists pgcrypto;",
@@ -49,7 +51,7 @@ beforeAll(async () => {
     agent,
     JSON.stringify({
       answered: true,
-      started_at: "2026-11-04T10:00:00Z",
+      started_at: hoursFromNow(-1),
       duration_seconds: 60,
       outcome: "Interested",
       notes: "",
@@ -57,7 +59,7 @@ beforeAll(async () => {
     }),
   ]);
   for (const [table, data] of [
-    ["followups", { lead_id: lead, due_at: "2026-11-10T10:00:00Z" }],
+    ["followups", { lead_id: lead, due_at: hoursFromNow(96) }],
     ["notes", { lead_id: lead, body: "Prefers DHA" }],
   ])
     await db.query("select crm_mutate($1,null,$2::jsonb,$3,'t')", [

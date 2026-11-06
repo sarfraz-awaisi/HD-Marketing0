@@ -26,7 +26,10 @@ const migration = async (name) =>
   );
 const setup =
   "create role anon;create role authenticated;create role service_role bypassrls;create schema auth;create table auth.users(id uuid primary key,email text unique,email_confirmed_at timestamptz,raw_user_meta_data jsonb default '{}');create schema storage;create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);";
-const range = ["2026-10-31T19:00:00Z", "2026-11-30T19:00:00Z"];
+// Times relative to now: an administrator may log a call only within the last
+// 30 days.
+const hoursFromNow = (h) => new Date(Date.now() + h * 3600e3).toISOString();
+const range = [hoursFromNow(-24 * 15), hoursFromNow(24 * 15)];
 // The read-only release check, as it is run in the SQL Editor.
 const check = async () =>
   (
@@ -81,19 +84,19 @@ beforeAll(async () => {
       admin,
     ])
   ).id;
-  await db.query("update leads set created_at='2026-11-03T06:00:00Z'");
+  await db.query("update leads set created_at=$1", [hoursFromNow(-72)]);
   await db.query("select log_manual_call($1,$2,$3::jsonb,'t')", [
     lead,
     admin,
     JSON.stringify({
       answered: true,
-      started_at: "2026-11-04T10:00:00Z",
+      started_at: hoursFromNow(-1),
       duration_seconds: 60,
       outcome: "Interested",
     }),
   ]);
   await db.query("select crm_mutate('followups',null,$1::jsonb,$2,'t')", [
-    JSON.stringify({ lead_id: lead, due_at: "2026-11-10T10:00:00Z" }),
+    JSON.stringify({ lead_id: lead, due_at: hoursFromNow(96) }),
     agent,
   ]);
 }, 120000);
