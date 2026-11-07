@@ -3,10 +3,15 @@ import { Phone } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import DealTagPicker from "./DealTagPicker";
+import TemperaturePicker from "./TemperaturePicker";
 import { Button, ErrorBox } from "../common/UI";
 import { localISO, localInput } from "../../lib/api";
 import { unansweredOutcomes } from "../../lib/calls";
+import {
+  otherTags,
+  tagTemperature,
+  temperatureOf,
+} from "../../lib/temperature";
 export const outcomes = [
   "No answer",
   "Busy",
@@ -126,7 +131,12 @@ export default function OutcomeForm({
   dial,
   onDialStart,
 }) {
-  const [tags, setTags] = useState(call.deal_tags || []);
+  // The temperature is chosen here; any other tag an earlier version saved
+  // with this call is kept as it is.
+  const [temperature, setTemperature] = useState(
+    tagTemperature(call.deal_tags),
+  );
+  const keptTags = otherTags(call.deal_tags);
   const pending = useRef(false);
   // Dialler timer: started when the agent presses Call, stopped by End call
   // (or by saving), and copied into the editable duration fields.
@@ -167,6 +177,9 @@ export default function OutcomeForm({
   const unanswered = manual
     ? watch("answered") === "no"
     : call.method === "manual" && call.answered === false;
+  // A temperature is recorded only after speaking to the customer.
+  const spoke = (answered, outcome) =>
+    answered && !unansweredOutcomes.includes(outcome);
   const answerField = register("answered");
   function startDial() {
     setValue("started_at", localInput(new Date().toISOString()));
@@ -200,7 +213,18 @@ export default function OutcomeForm({
               started_at: localISO(data.started_at),
             }
           : {}),
-        deal_tags: tags,
+        deal_tags: [
+          ...keptTags,
+          ...(temperature &&
+          spoke(
+            manual
+              ? data.answered === "yes"
+              : !(call.method === "manual" && call.answered === false),
+            data.outcome,
+          )
+            ? [temperatureOf(temperature).tag]
+            : []),
+        ],
       });
     } catch (e) {
       setError("root", { message: e.message });
@@ -349,7 +373,9 @@ export default function OutcomeForm({
           />
           <span className="field-error">{errors.notes?.message}</span>
         </label>
-        <DealTagPicker value={tags} onChange={setTags} />
+        {spoke(!unanswered, watch("outcome")) && (
+          <TemperaturePicker value={temperature} onChange={setTemperature} />
+        )}
         <ErrorBox error={errors.root?.message} />
         <Button disabled={isSubmitting}>
           {isSubmitting ? "Saving…" : manual ? "Save call" : "Save outcome"}

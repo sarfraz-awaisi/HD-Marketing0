@@ -1,0 +1,189 @@
+/* Agents' Assigned leads and Lead pipeline (update 052). */
+.lead-toolbar {
+  align-items: flex-start;
+}
+.lead-search {
+  position: relative;
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.lead-search input {
+  width: 100%;
+  padding-right: 40px;
+}
+.lead-search .icon-button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-width: 32px;
+  min-height: 32px;
+}
+.lead-search-help {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+.active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.filter-chip,
+.filter-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.filter-reset {
+  border-color: transparent;
+  background: none;
+  color: var(--info);
+  text-decoration: underline;
+}
+.filter-chip:hover {
+  border-color: var(--ink-3);
+}
+.filter-chip:focus-visible,
+.filter-reset:focus-visible,
+.temperature-count:focus-visible,
+.temperature-clear:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}
+.file-number,
+.lead-contact,
+.lead-followup,
+.lead-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+.file-number small,
+.lead-contact small,
+.lead-followup small,
+.lead-status small {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+.file-number small {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Temperature: a word and an emoji, never colour alone. */
+.temperature {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.temperature.hot {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.temperature.warm {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.temperature.cold {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.temperature.none {
+  padding-inline: 0;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+/* The pipeline's wider rows: the Call button sits under the number, so
+   every column, View details included, fits a laptop screen. */
+.pipeline-table .lead-record-table .lead-phone-call {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.pipeline-table .lead-record-table:has(th[data-field="phone"]) {
+  min-width: 940px;
+}
+.pipeline-table .lead-record-table [data-field="phone"] {
+  min-width: 150px;
+}
+.pipeline-table .lead-record-table [data-field="name"] {
+  min-width: 170px;
+}
+.pipeline-table .lead-record-table [data-field="details"] .button {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.temperature-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.temperature-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface, #fff);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+.temperature-count b {
+  font-size: 18px;
+  color: var(--ink);
+}
+.temperature-count[aria-pressed="true"] {
+  border-color: var(--brand-navy);
+  box-shadow: inset 0 0 0 1px var(--brand-navy);
+}
+.temperature-picker small {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.temperature-clear {
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--info);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .lead-search {
+    flex-basis: 100%;
+  }
+  .temperature-count {
+    flex: 1 1 calc(50% - 10px);
+    justify-content: space-between;
+  }
+}

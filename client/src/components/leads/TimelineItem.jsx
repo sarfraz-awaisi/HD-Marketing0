@@ -2,6 +2,7 @@ import { date } from "../../lib/api";
 import { callMethodLabel } from "../../lib/calls";
 import { followUpState, followUpStateLabel } from "../../lib/followups";
 import { lostReasonLabel, statusLabel } from "../../lib/pipeline";
+import { temperatureOf, temperatureText } from "../../lib/temperature";
 import { Badge, Button } from "../common/UI";
 // One entry in a lead's activity timeline: what happened, who did it, and the
 // details that matter for that kind of activity. The server adds actor_name
@@ -58,7 +59,7 @@ export default function TimelineItem({ item, onOutcome }) {
               <p className="timeline-tags" aria-label="Lead tags">
                 {item.deal_tags.map((tag) => (
                   <span key={tag} className="badge plain">
-                    {tag}
+                    {temperatureOf(tag) ? `${temperatureText(tag)} lead` : tag}
                   </span>
                 ))}
               </p>

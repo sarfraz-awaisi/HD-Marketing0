@@ -1,6 +1,6 @@
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   LogOut,
@@ -116,6 +116,44 @@ export default function Layout() {
     retry: false,
   });
   const trail = breadcrumb(navigation, pathname);
+  // One menu link. Child links match their own page exactly; `active`
+  // also marks a child for pages under it, such as a lead's details.
+  const navLink = (to, label, Icon, { child = false, active } = {}) => (
+    <NavLink
+      end={to === "/" || child}
+      key={to}
+      className={
+        child
+          ? ({ isActive }) =>
+              "fx-nav nav-child" + ((active ?? isActive) ? " active" : "")
+          : "fx-nav"
+      }
+      to={to}
+      title={collapsed ? label : undefined}
+      onPointerEnter={() => preloadRoute(to)}
+      onFocus={() => preloadRoute(to)}
+      onClick={() => setOpen(false)}
+    >
+      <Icon size={18} aria-hidden="true" />
+      <span className="nav-text">{label}</span>
+      {to === "/incoming-social" && social.data?.unassigned > 0 && (
+        <span
+          className="nav-count"
+          aria-label={`${social.data.unassigned} unassigned social leads`}
+        >
+          {social.data.unassigned}
+        </span>
+      )}
+      {to === "/security-alerts" && security.data?.count != null && (
+        <span
+          className="nav-count"
+          aria-label={`${security.data.count} unreviewed security alerts`}
+        >
+          {security.data.count}
+        </span>
+      )}
+    </NavLink>
+  );
   async function signOut() {
     await logout();
     qc.clear();
@@ -160,38 +198,21 @@ export default function Layout() {
                   {group.label}
                 </span>
               )}
-              {group.links.map(([to, label, Icon]) => (
-                <NavLink
-                  end={to === "/"}
-                  key={to}
-                  className="fx-nav"
-                  to={to}
-                  title={collapsed ? label : undefined}
-                  onPointerEnter={() => preloadRoute(to)}
-                  onFocus={() => preloadRoute(to)}
-                  onClick={() => setOpen(false)}
-                >
-                  <Icon size={18} aria-hidden="true" />
-                  <span className="nav-text">{label}</span>
-                  {to === "/incoming-social" && social.data?.unassigned > 0 && (
-                    <span
-                      className="nav-count"
-                      aria-label={`${social.data.unassigned} unassigned social leads`}
-                    >
-                      {social.data.unassigned}
-                    </span>
-                  )}
-                  {to === "/security-alerts" &&
-                    security.data?.count != null && (
-                      <span
-                        className="nav-count"
-                        aria-label={`${security.data.count} unreviewed security alerts`}
-                      >
-                        {security.data.count}
-                      </span>
-                    )}
-                </NavLink>
-              ))}
+              {group.links.map(([to, label, Icon, children]) =>
+                children ? (
+                  <NavGroup
+                    key={to}
+                    label={label}
+                    Icon={Icon}
+                    links={children}
+                    collapsed={collapsed}
+                    pathname={pathname}
+                    renderLink={navLink}
+                  />
+                ) : (
+                  navLink(to, label, Icon)
+                ),
+              )}
             </div>
           ))}
         </nav>
@@ -482,6 +503,47 @@ export default function Layout() {
         <footer className="watermark">
           HD Marketing · {user.name} · {user.id.slice(0, 8)}
         </footer>
+      </div>
+    </div>
+  );
+}
+// A menu link with child links (update 052): its button opens and closes
+// them, and the group opens by itself when one of its pages is shown. The
+// narrow, icon-only menu shows the child links on their own.
+function NavGroup({ label, Icon, links, collapsed, pathname, renderLink }) {
+  const matches = links
+    .map(([to]) => to)
+    .filter((to) => pathname === to || pathname.startsWith(to + "/"));
+  const current =
+    matches.find((to) => to === pathname) ||
+    matches.sort((a, b) => b.length - a.length)[0];
+  const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (current) setOpen(true);
+  }, [current]);
+  const id = useId();
+  const children = links.map(([to, childLabel, ChildIcon]) =>
+    renderLink(to, childLabel, ChildIcon, {
+      child: true,
+      active: to === current,
+    }),
+  );
+  if (collapsed) return children;
+  return (
+    <div className="nav-parent-group">
+      <button
+        type="button"
+        className="fx-nav nav-parent"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <Icon size={18} aria-hidden="true" />
+        <span className="nav-text">{label}</span>
+        <ChevronDown size={16} className="nav-caret" aria-hidden="true" />
+      </button>
+      <div id={id} className="nav-children" hidden={!open}>
+        {children}
       </div>
     </div>
   );

@@ -193,7 +193,7 @@ describe("P1 manual calling screens", () => {
       screen.getByLabelText("Agent notes"),
       "Fixture follow-through",
     );
-    await user.click(screen.getByLabelText("Hot lead"));
+    await user.click(screen.getByLabelText("Hot"));
     await user.click(screen.getByRole("button", { name: "Save call" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),

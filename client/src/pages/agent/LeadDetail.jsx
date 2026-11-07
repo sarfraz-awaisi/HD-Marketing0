@@ -1,7 +1,7 @@
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
 import { useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, date, pkr } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
@@ -27,6 +27,7 @@ import LeadKycDocuments from "../../components/documents/LeadKycDocuments";
 export default function LeadDetail() {
   const { id } = useParams(),
     { user } = useAuth(),
+    location = useLocation(),
     qc = useQueryClient(),
     toast = useToast();
   const [modal, setModal] = useState(""),
@@ -99,11 +100,16 @@ export default function LeadDetail() {
       <Link
         className="back-link"
         to={
-          lead.import_id
-            ? `/leads?import_id=${lead.import_id}`
-            : user.role === "agent"
-              ? "/leads?view=all"
-              : "/leads"
+          // The list this lead was opened from, with its search and filters
+          // (update 052); else the lead's file or all leads.
+          typeof location.state?.back === "string" &&
+          location.state.back.startsWith("/leads")
+            ? location.state.back
+            : lead.import_id
+              ? `/leads?import_id=${lead.import_id}`
+              : user.role === "agent"
+                ? "/leads?view=all"
+                : "/leads"
         }
       >
         ← Back to leads

@@ -78,7 +78,7 @@ export default function ImportedFiles({ assignable = false }) {
       <div className="page-heading file-page-heading">
         <div>
           <span className="eyebrow">LEADS ORGANIZED BY FILE</span>
-          <h1>{admin ? "Task assign" : "My leads"}</h1>
+          <h1>{admin ? "Task assign" : "Assigned leads"}</h1>
           <p>
             {admin
               ? "Assign an imported CSV or Excel file and its leads to an agent."

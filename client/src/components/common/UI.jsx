@@ -111,6 +111,10 @@ export function Table({
   rows,
   onRow,
   showSerial = false,
+  // A lead's own number for the # column instead of its place on the page
+  // (update 052), and what to say when nothing matches.
+  serialOf,
+  empty,
   page = 1,
   pageSize = 20,
   count,
@@ -152,7 +156,8 @@ export function Table({
       {
         key: "__serial",
         label: "#",
-        render: (_row, index) => (page - 1) * pageSize + index + 1,
+        render: (row, index) =>
+          serialOf ? serialOf(row) : (page - 1) * pageSize + index + 1,
       },
       ...columns,
     ];
@@ -162,7 +167,7 @@ export function Table({
         {showSerial && count !== undefined && (
           <p className="lead-count">Showing 0–0 of {count} leads</p>
         )}
-        No records to show. Adjust your filters or add a record.
+        {empty || "No records to show. Adjust your filters or add a record."}
       </div>
     );
   return (

@@ -58,6 +58,28 @@ export const followUpAt = z.iso.datetime({ offset: true }).refine(
   { message: "Choose a follow-up time in the future, within a year" },
 );
 export const followUpOutcome = "Follow-up required";
+// A call saves at most one temperature, and only after a conversation
+// (update 052). Its other tags are kept as they are.
+export const temperatureTags = ["Hot lead", "Warm lead", "Cold lead"];
+const unansweredOutcomes = ["No answer", "Busy", "Wrong number"];
+function checkTemperature(data, ctx, answered) {
+  const chosen = data.deal_tags.filter((tag) => temperatureTags.includes(tag));
+  if (chosen.length > 1)
+    ctx.addIssue({
+      code: "custom",
+      path: ["deal_tags"],
+      message: "Choose one lead temperature: Hot, Warm or Cold",
+    });
+  else if (
+    chosen.length &&
+    (!answered || unansweredOutcomes.includes(data.outcome))
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["deal_tags"],
+      message: "Record a lead temperature only after speaking to the customer",
+    });
+}
 export function manualCall(role) {
   return z
     .object({
@@ -110,6 +132,7 @@ export function manualCall(role) {
           path: ["deal_tags"],
           message: "Choose distinct deal tags",
         });
+      checkTemperature(data, ctx, data.answered);
     })
     .transform(({ duration_minutes, duration_seconds, ...data }) => ({
       ...data,
@@ -197,6 +220,41 @@ export const schemas = {
     .object({ name: text.min(1).optional(), active: z.boolean().optional() })
     .strict(),
 };
+// An edited call outcome. Separate from schemas.calls, which PATCH also
+// uses with .partial(), so it can carry the temperature check.
+export const callOutcome = schemas.calls.superRefine((data, ctx) =>
+  checkTemperature(data, ctx, true),
+);
+// An agent's own leads (update 052): Assigned leads or the Lead pipeline.
+// Search accepts names, contact numbers in any common format, and #15.
+export const agentLeadsQuery = z
+  .object({
+    view: z.enum(["assigned", "pipeline"]).default("assigned"),
+    import_id: uuid.optional(),
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @#()+._-]*$/u)
+      .optional(),
+    status: z.enum(statuses).optional(),
+    temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
+    source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
+    call: z.enum(["uncalled", "missed"]).optional(),
+    sort: z
+      .enum([
+        "file",
+        "activity",
+        "added",
+        "call_due",
+        "contact",
+        "followup",
+        "temperature",
+      ])
+      .optional(),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+  })
+  .strict();
 export const listQuery = z
   .object({
     page: z.coerce.number().int().min(1).max(100000).default(1),

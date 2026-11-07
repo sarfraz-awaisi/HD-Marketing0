@@ -81,7 +81,8 @@ beforeEach(() => {
   mocks.api.mockImplementation(async (path, options) => {
     if (path.endsWith("/calls/manual") && options?.method === "POST")
       return { id: "call-1", ...options.body };
-    if (path.startsWith("/leads?")) return { data: rows, count: rows.length };
+    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+      return { data: rows, count: rows.length };
     if (path === "/leads/" + baseLead.id) return rows[0];
     if (path.endsWith("/timeline") || path === "/users") return [];
     if (path === "/call-capabilities") return { manual: true, mock: false };
@@ -160,7 +161,7 @@ describe("call button and call dialog", () => {
           (o) => o.textContent,
         ),
       ).toEqual(["Connected", "Not connected"]);
-      expect(within(dialog).getByLabelText("Hot lead")).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Hot")).toBeInTheDocument();
       expect(phoneRequests()).toHaveLength(0);
     },
   );
@@ -194,7 +195,7 @@ describe("call button and call dialog", () => {
     fireEvent.change(screen.getByLabelText("Agent notes"), {
       target: { value: "Wants a 10 marla house; call back Friday." },
     });
-    fireEvent.click(screen.getByLabelText("Warm lead"));
+    fireEvent.click(screen.getByLabelText("Warm"));
     fireEvent.click(screen.getByRole("button", { name: "Save call" }));
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),

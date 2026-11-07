@@ -185,7 +185,7 @@ beforeEach(() => {
         updated_at: "2026-10-17T05:00:00Z",
       };
     if (path === "/account-security") return { configured: true };
-    if (path.startsWith("/leads?"))
+    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
       return {
         data: [{ ...late, email: null, source: "CSV", phone: "+923001234567" }],
         count: 1,
@@ -349,23 +349,37 @@ describe("agent call queue", () => {
       within(panel).getByRole("link", { name: "All leads to call ↗" }),
     ).toHaveAttribute("href", "/leads?view=all&call=uncalled");
     expect(
-      mocks.api.mock.calls.some(([path]) => path.startsWith("/leads?")),
+      mocks.api.mock.calls.some(
+        ([path]) => path.startsWith("/leads?") || path.startsWith("/my-leads?"),
+      ),
     ).toBe(false);
     expect(reviewPaths()).toEqual([]);
   });
   it("filters the lead list by first-call state", async () => {
     mocks.user = { ...ali };
     open("/leads?view=all&call=missed");
-    expect(await screen.findByText("Missed first call")).toBeInTheDocument();
-    const first = mocks.api.mock.calls.find(([path]) =>
-      path.startsWith("/leads?"),
+    expect(
+      await screen.findByText("Missed first call", { selector: ".badge" }),
+    ).toBeInTheDocument();
+    // The filter in use, removable on its own.
+    expect(
+      screen.getByRole("button", { name: "Remove filter Missed first call" }),
+    ).toBeInTheDocument();
+    const first = mocks.api.mock.calls.find(
+      ([path]) => path.startsWith("/leads?") || path.startsWith("/my-leads?"),
     )[0];
+    // Agents' Assigned leads (update 052): the database sorts a first-call
+    // filter by deadline, the longest waiting first.
+    expect(first.split("?")[0]).toBe("/my-leads");
     const query = new URLSearchParams(first.split("?")[1]);
-    expect(Object.fromEntries(query)).toMatchObject({
+    expect(Object.fromEntries(query)).toEqual({
+      view: "assigned",
+      page: "1",
       call: "missed",
-      sort: "call_due_at",
-      direction: "asc",
     });
+    expect(screen.getByRole("combobox", { name: "Sort leads" })).toHaveValue(
+      "call_due",
+    );
     fireEvent.change(
       screen.getByRole("combobox", { name: "Filter by first call" }),
       { target: { value: "" } },
@@ -373,7 +387,9 @@ describe("agent call queue", () => {
     await waitFor(() =>
       expect(
         mocks.api.mock.calls.some(
-          ([path]) => path.startsWith("/leads?") && !path.includes("call="),
+          ([path]) =>
+            (path.startsWith("/leads?") || path.startsWith("/my-leads?")) &&
+            !path.includes("call="),
         ),
       ).toBe(true),
     );

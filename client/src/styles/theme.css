@@ -168,6 +168,59 @@ small {
 .sidebar .fx-nav::before {
   display: none;
 }
+/* A menu link with child links (update 052): the parent opens and closes
+   them; children sit indented under it. */
+.sidebar nav .nav-parent {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+  width: 100%;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sidebar nav .nav-parent svg {
+  color: var(--ink-4);
+}
+.sidebar nav .nav-parent:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+.sidebar nav .nav-parent:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}
+.nav-caret {
+  margin-left: auto;
+  transition: transform var(--dur) var(--ease-out);
+}
+.nav-parent[aria-expanded="false"] .nav-caret {
+  transform: rotate(-90deg);
+}
+.nav-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 0 18px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.nav-children[hidden] {
+  display: none;
+}
+.sidebar nav a.nav-child {
+  min-height: 34px;
+  font-size: var(--text-sm);
+}
 .nav-count {
   margin-left: auto;
   min-width: 22px;
