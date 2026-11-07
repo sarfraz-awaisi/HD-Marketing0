@@ -89,7 +89,8 @@ beforeEach(() => {
       ];
     if (path.startsWith("/properties"))
       return { data: [{ id: propertyId, title: "Pipeline house" }], count: 1 };
-    if (path.startsWith("/leads?")) return { data: [currentLead], count: 1 };
+    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+      return { data: [currentLead], count: 1 };
     return { data: [], count: 0 };
   });
 });
@@ -241,7 +242,9 @@ describe("F1 pipeline screens", () => {
     ).not.toBeInTheDocument();
   });
 
-  it.each(["admin", "agent"])(
+  // Agents' Assigned leads has neither filter (update 052); the Lead
+  // pipeline filters by status instead.
+  it.each(["admin"])(
     "filters the leads list by lost reason as %s",
     async (role) => {
       mocks.auth.user.role = role;

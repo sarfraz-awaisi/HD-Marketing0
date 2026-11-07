@@ -544,7 +544,13 @@ describe("P1 API and production capabilities", () => {
     vi.stubEnv("NODE_ENV", "production");
     const response = await post(
       createApp(trustedMfaFixture(database())),
-      payload({ answered: false, outcome: "Busy", duration_seconds: 0 }),
+      // No temperature: it is recorded only after a conversation (052).
+      payload({
+        answered: false,
+        outcome: "Busy",
+        duration_seconds: 0,
+        deal_tags: [],
+      }),
     );
     expect(response.status).toBe(201);
     expect(response.body.status).toBe("failed");

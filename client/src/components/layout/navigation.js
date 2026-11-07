@@ -14,6 +14,7 @@ import {
   KeyRound,
   LayoutDashboard,
   ListChecks,
+  ListOrdered,
   PhoneCall,
   Plug,
   ScrollText,
@@ -21,6 +22,7 @@ import {
   ShieldAlert,
   Store,
   Target,
+  TrendingUp,
   Trash2,
   UserCog,
   UserRound,
@@ -31,7 +33,9 @@ import {
 // the previous flat menu; only the grouping and icons are new. Properties
 // became Inventory in update 041 (/properties redirects there). Update 049
 // adds the dealer network for administrators and agents (never staff);
-// update 051 gives agents My performance, their own reports.
+// update 051 gives agents My performance, their own reports. A link may
+// carry child links, shown under it in a group that opens and closes: an
+// agent's My leads holds Assigned leads and the Lead pipeline (update 052).
 export const adminNavigation = [
   { label: "", links: [["/", "Overview", LayoutDashboard]] },
   {
@@ -86,7 +90,15 @@ export const agentNavigation = [
   {
     label: "Sales",
     links: [
-      ["/leads", "My leads", Users],
+      [
+        "/leads",
+        "My leads",
+        Users,
+        [
+          ["/leads", "Assigned leads", ListOrdered],
+          ["/leads/pipeline", "Lead pipeline", TrendingUp],
+        ],
+      ],
       ["/followups", "Follow-ups", Clock],
       ["/visits", "Site visits", CalendarDays],
       ["/deals", "My deals", Handshake],
@@ -144,21 +156,46 @@ export const navigationFor = (role) =>
     : role === "staff"
       ? staffNavigation
       : agentNavigation;
+// Every page a menu offers, child links with their parent's name.
+export function menuPages(navigation) {
+  return navigation.flatMap((group) =>
+    group.links.flatMap(([to, label, , children]) =>
+      children
+        ? children.map(([childTo, childLabel]) => ({
+            to: childTo,
+            label: childLabel,
+            parent: label,
+            section: group.label,
+          }))
+        : [{ to, label, section: group.label }],
+    ),
+  );
+}
 // Section and page names for the breadcrumb: an exact menu match, else the
 // menu item the path sits under (for example /leads/:id under Leads).
 export function breadcrumb(navigation, pathname) {
   let found = null;
-  for (const group of navigation)
-    for (const [to, label] of group.links) {
-      const exact = pathname === to;
-      const under = to !== "/" && pathname.startsWith(to + "/");
-      if (exact || (under && (!found || to.length > found.to.length)))
-        found = { to, label, section: group.label, exact };
-    }
+  for (const page of menuPages(navigation)) {
+    const exact = pathname === page.to;
+    const under = page.to !== "/" && pathname.startsWith(page.to + "/");
+    if (exact && !found?.exact) found = { ...page, exact };
+    else if (
+      under &&
+      !found?.exact &&
+      (!found || page.to.length > found.to.length)
+    )
+      found = { ...page, exact };
+  }
   if (!found) return [];
-  const trail = [found.section, found.label].filter(Boolean);
-  if (!found.exact) trail.push(detailLabel(found.to));
-  return trail;
+  // A page under a child link is named after the parent: Sales › My leads ›
+  // Lead details.
+  if (!found.exact)
+    return [
+      found.section,
+      found.parent || found.label,
+      detailLabel(found.to),
+    ].filter(Boolean);
+  return [found.section, found.parent, found.label].filter(Boolean);
 }
 function detailLabel(base) {
   return (

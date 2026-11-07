@@ -21,6 +21,7 @@ import {
 } from "../../components/common/UI";
 import LeadForm from "../../components/leads/LeadForm";
 import ImportedFiles from "../../components/leads/ImportedFiles";
+import AgentLeadList from "../../components/leads/AgentLeadList";
 import LeadPhone from "../../components/leads/LeadPhone";
 import CallDialog from "../../components/calls/CallDialog";
 import {
@@ -45,8 +46,13 @@ export default function Leads() {
   const { user } = useAuth();
   const [params] = useSearchParams();
   const importId = params.get("import_id");
-  if (user.role === "agent" && !importId && params.get("view") !== "all")
-    return <ImportedFiles />;
+  // Agents: their assigned files, then Assigned leads (update 052).
+  if (user.role === "agent")
+    return importId || params.get("view") === "all" ? (
+      <AgentLeadList key={importId || "all"} importId={importId} />
+    ) : (
+      <ImportedFiles />
+    );
   return (
     <LeadList
       key={importId || "all"}

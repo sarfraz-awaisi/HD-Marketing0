@@ -33,7 +33,8 @@ beforeEach(() => {
   rows = [lead];
   mocks.auth.user = { id: agent, role: "agent", name: "Agent" };
   mocks.api.mockImplementation(async (path) => {
-    if (path.startsWith("/leads?")) return { data: rows, count: rows.length };
+    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+      return { data: rows, count: rows.length };
     if (path === "/leads/" + lead.id) return lead;
     if (path.endsWith("/timeline") || path === "/users") return [];
     if (path === "/call-capabilities") return { manual: true, mock: false };
@@ -85,7 +86,10 @@ describe("automatic visible lead contacts", () => {
       }),
     ).not.toBeInTheDocument();
     expect(extraPhoneCalls()).toHaveLength(0);
-    expect(screen.getAllByText(/HD-000123/).length).toBeGreaterThan(0);
+    // Agents' Assigned leads shows # instead of the HD number (update 052).
+    if (role === "agent" && page === "list")
+      expect(screen.queryByText(/HD-000123/)).not.toBeInTheDocument();
+    else expect(screen.getAllByText(/HD-000123/).length).toBeGreaterThan(0);
     if (page === "list") {
       expect(
         screen.getByRole("columnheader", { name: "#" }),
@@ -122,7 +126,9 @@ describe("automatic visible lead contacts", () => {
     for (const row of rows)
       expect(screen.getByText(row.phone)).toBeInTheDocument();
     expect(
-      mocks.api.mock.calls.filter(([p]) => p.startsWith("/leads?")),
+      mocks.api.mock.calls.filter(
+        ([p]) => p.startsWith("/leads?") || p.startsWith("/my-leads?"),
+      ),
     ).toHaveLength(1);
     expect(extraPhoneCalls()).toHaveLength(0);
   });
@@ -190,7 +196,7 @@ describe("automatic visible lead contacts", () => {
       mocks.auth.user.role = role;
       const original = mocks.api.getMockImplementation();
       mocks.api.mockImplementation((p, o) =>
-        p.startsWith("/leads?")
+        p.startsWith("/leads?") || p.startsWith("/my-leads?")
           ? Promise.reject(
               new Error(
                 "Visible lead numbers need database migration 021 after 020.",

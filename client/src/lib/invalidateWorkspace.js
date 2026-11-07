@@ -1,5 +1,6 @@
 const leadKeys = new Set([
   "leads",
+  "my-leads",
   "deleted-leads",
   "deleted-lead-imports",
   "security-alerts",

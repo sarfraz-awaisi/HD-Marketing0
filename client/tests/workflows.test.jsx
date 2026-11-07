@@ -54,7 +54,7 @@ describe("critical forms", () => {
       screen.getByLabelText("Call outcome"),
       "Interested",
     );
-    await user.click(screen.getByLabelText("Hot lead"));
+    await user.click(screen.getByLabelText("Hot"));
     await user.type(screen.getByLabelText("Agent notes"), "Visit requested");
     await user.click(screen.getByText("Save outcome"));
     await waitFor(() =>

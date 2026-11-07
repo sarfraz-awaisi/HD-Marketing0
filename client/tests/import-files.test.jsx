@@ -157,7 +157,7 @@ beforeEach(() => {
       if (!file) throw new Error("File not found");
       return file;
     }
-    if (path.startsWith("/leads?")) {
+    if (path.startsWith("/leads?") || path.startsWith("/my-leads?")) {
       const q = new URLSearchParams(path.split("?")[1]);
       return {
         data: leads.filter(
@@ -165,7 +165,8 @@ beforeEach(() => {
             (mocks.auth.user.role === "admin" ||
               lead.assigned_agent === mocks.auth.user.id) &&
             (!q.get("import_id") || lead.import_id === q.get("import_id")) &&
-            (!q.get("status") || lead.status === q.get("status")),
+            (!q.get("status") || lead.status === q.get("status")) &&
+            (!q.get("source") || lead.source === q.get("source")),
         ),
         count: leads.length,
       };
@@ -337,18 +338,20 @@ describe("file assignment screens", () => {
     expect(
       mocks.api.mock.calls.some(
         ([path]) =>
-          path.startsWith("/leads?") &&
+          (path.startsWith("/leads?") || path.startsWith("/my-leads?")) &&
           new URLSearchParams(path.split("?")[1]).get("import_id") === first,
       ),
     ).toBe(true);
-    await user.selectOptions(
-      screen.getByLabelText("Filter by status"),
-      "contacted",
-    );
-    await screen.findByText(/No records to show/);
+    // Assigned leads keeps the source filter (update 052); every request
+    // stays within the file.
+    await user.selectOptions(screen.getByLabelText("Filter by source"), "Meta");
+    await screen.findByText(/No leads match your search or filters/);
     expect(
       mocks.api.mock.calls
-        .filter(([path]) => path.startsWith("/leads?"))
+        .filter(
+          ([path]) =>
+            path.startsWith("/leads?") || path.startsWith("/my-leads?"),
+        )
         .every(([path]) => path.includes("import_id=" + first)),
     ).toBe(true);
     await user.click(screen.getByRole("link", { name: /Assigned files/ }));

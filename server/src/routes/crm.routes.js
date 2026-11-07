@@ -23,6 +23,8 @@ import {
   followUpOutcome,
   phoneRevealQuery,
   bulkAssignment,
+  callOutcome,
+  agentLeadsQuery,
   leadIds,
   auditQuery,
 } from "../utils/validators.js";
@@ -39,7 +41,7 @@ import { importLeadFile, fileRpc } from "../services/importFiles.js";
 import { documentsRouter } from "./documents.routes.js";
 import { accountsRouter } from "./accounts.routes.js";
 import { securityRouter } from "./security.routes.js";
-import { salesRouter } from "./sales.routes.js";
+import { salesRouter, salesRpc } from "./sales.routes.js";
 import {
   attendanceRouter,
   attendanceAdminRouter,
@@ -413,6 +415,36 @@ export function crmRouter(db, options = {}) {
   );
   // Returns lead IDs only: an expensive count-and-filter search, limited like
   // reports so distributing a batch to many agents leaves room for changes.
+  // An agent's own leads (update 052): Assigned leads, or the Lead pipeline
+  // of leads with an answered call. Search, filters, counts and pages are
+  // worked out in the database across every page; the database refuses
+  // anyone but an active agent. Numbers are shown as in the leads list.
+  router.get("/my-leads", async (req, res) => {
+    if (req.user.role !== "agent")
+      return res.status(403).json({ error: "Agent access required" });
+    const { import_id, ...q } = agentLeadsQuery.parse(req.query);
+    if (
+      import_id &&
+      !(await fileRpc(db, "lead_import_summary", {
+        p_import: import_id,
+        p_actor: req.user.id,
+      }))
+    )
+      throw Object.assign(new Error("File not found"), { status: 404 });
+    const result = await salesRpc(
+      db,
+      "agent_lead_list",
+      {
+        p_actor: req.user.id,
+        p_query: { ...q, ...(import_id ? { import: import_id } : {}) },
+      },
+      "052 after 051",
+    );
+    res.set("Cache-Control", "no-store").json({
+      ...result,
+      data: await leadContacts(db, req, result.data),
+    });
+  });
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
     const q = listQuery.parse(req.query);
     let query = db
@@ -968,7 +1000,7 @@ export function crmRouter(db, options = {}) {
       );
       let followUp;
       if (table === "calls") {
-        ({ follow_up_at: followUp, ...data } = schemas.calls.parse(req.body));
+        ({ follow_up_at: followUp, ...data } = callOutcome.parse(req.body));
         data.outcome_submitted_at = new Date().toISOString();
         data.missing_outcome = false;
         // Choosing Follow-up required for a call schedules the follow-up.

@@ -13,6 +13,7 @@ export const routeLoaders = {
   Leads: once(() => import("../pages/admin/Leads")),
   ImportedFiles: once(() => import("../components/leads/ImportedFiles")),
   LeadDetail: once(() => import("../pages/agent/LeadDetail")),
+  LeadPipeline: once(() => import("../pages/agent/LeadPipeline")),
   Inventory: once(() => import("../pages/shared/Inventory")),
   Dealers: once(() => import("../pages/shared/Dealers")),
   Targets: once(() => import("../pages/admin/Targets")),
@@ -43,6 +44,7 @@ export const routeLoaders = {
 const routes = {
   "/": "Dashboard",
   "/leads": "Leads",
+  "/leads/pipeline": "LeadPipeline",
   "/deleted-leads": "DeletedLeads",
   "/tasks": "ImportedFiles",
   "/inventory": "Inventory",
