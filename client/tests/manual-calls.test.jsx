@@ -213,7 +213,7 @@ describe("P1 manual calling screens", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Lead status")).toHaveValue("contacted");
   });
-  it.each(["No answer", "Busy", "Wrong number"])(
+  it.each(["No answer", "Busy", "Wrong number", "Number off"])(
     "logs unanswered %s with zero duration and leaves the lead New",
     async (outcome) => {
       const user = userEvent.setup();
@@ -228,6 +228,7 @@ describe("P1 manual calling screens", () => {
         "No answer",
         "Busy",
         "Wrong number",
+        "Number off",
       ]);
       await user.selectOptions(screen.getByLabelText("Call outcome"), outcome);
       await user.click(screen.getByRole("button", { name: "Save call" }));

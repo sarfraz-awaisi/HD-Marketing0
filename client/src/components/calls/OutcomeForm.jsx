@@ -1,27 +1,22 @@
-import { useEffect, useRef, useState } from "react";
-import { Phone } from "lucide-react";
+import "../../styles/calls.css";
+import { useEffect, useId, useRef, useState } from "react";
+import { MessageCircle, Phone } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import TemperaturePicker from "./TemperaturePicker";
 import { Button, ErrorBox } from "../common/UI";
 import { localISO, localInput } from "../../lib/api";
-import { unansweredOutcomes } from "../../lib/calls";
+import { callOutcomes, unansweredOutcomes } from "../../lib/calls";
+import { whatsappLink } from "../../lib/whatsapp";
 import {
   otherTags,
   tagTemperature,
   temperatureOf,
 } from "../../lib/temperature";
-export const outcomes = [
-  "No answer",
-  "Busy",
-  "Wrong number",
-  "Interested",
-  "Not interested",
-  "Follow-up required",
-  "Site visit scheduled",
-  "Deal discussion",
-];
+// Number off is offered only for a call that did not connect (update 053).
+export const outcomes = callOutcomes;
+const connectedOutcomes = outcomes.filter((o) => o !== "Number off");
 // A call that ends with a promise to follow up schedules that follow-up, so it
 // appears under Follow-ups. Optional for other outcomes.
 export const followUpOutcome = "Follow-up required";
@@ -95,7 +90,7 @@ function outcomeSchema(call, manual, role) {
         ctx.addIssue({
           code: "custom",
           path: ["outcome"],
-          message: "Choose No answer, Busy or Wrong number",
+          message: "Choose No answer, Busy, Wrong number or Number off",
         });
       let started = NaN;
       try {
@@ -122,14 +117,28 @@ function outcomeSchema(call, manual, role) {
 function clock(seconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
+// One part of the form, under its own heading.
+function Section({ title, className = "", children }) {
+  const id = useId();
+  return (
+    <section className={`call-section ${className}`} aria-labelledby={id}>
+      <h3 id={id}>{title}</h3>
+      {children}
+    </section>
+  );
+}
+// Logs a call or its outcome. With `customer` (the Call dialog) it starts
+// with the customer's details, a Call button that also times the call, and
+// WhatsApp; `onCancel` adds a Cancel button beside Save.
 export default function OutcomeForm({
   call = {},
   onSave,
   manual = false,
   role = "agent",
   onPending,
-  dial,
+  customer,
   onDialStart,
+  onCancel,
 }) {
   // The temperature is chosen here; any other tag an earlier version saved
   // with this call is kept as it is.
@@ -180,7 +189,11 @@ export default function OutcomeForm({
   // A temperature is recorded only after speaking to the customer.
   const spoke = (answered, outcome) =>
     answered && !unansweredOutcomes.includes(outcome);
+  const outcome = watch("outcome");
+  const followUpRequired = needsFollowUp(outcome, call, manual);
   const answerField = register("answered");
+  const phone = customer?.phone;
+  const whatsapp = whatsappLink(phone);
   function startDial() {
     setValue("started_at", localInput(new Date().toISOString()));
     setDialStart(Date.now());
@@ -227,6 +240,7 @@ export default function OutcomeForm({
         ],
       });
     } catch (e) {
+      // Everything entered stays in the form, ready to save again.
       setError("root", { message: e.message });
     } finally {
       pending.current = false;
@@ -235,151 +249,205 @@ export default function OutcomeForm({
   });
   return (
     <form
+      className="call-form"
       onSubmit={(event) => {
         if (dialing) endDial();
         return submit(event);
       }}
     >
       <fieldset disabled={isSubmitting}>
-        {manual && dial && (
-          <section className="call-dialer" aria-label="Dialler">
-            <a
-              className="button fx-btn call-dialer-button"
-              href={`tel:${dial}`}
-              onClick={startDial}
-            >
-              <Phone size={18} aria-hidden="true" />
-              {dialStart === null ? "Call" : "Call again"} {dial}
-            </a>
-            {dialStart === null ? (
-              <p>
-                Your computer asks which app to use, such as Microsoft Phone
-                Link. On a phone, the dialler opens.
-              </p>
-            ) : dialing ? (
-              <div className="call-dialer-live">
-                <span className="call-dialer-dot" aria-hidden="true" />
-                <span role="timer" aria-label="Call time">
-                  Call time {clock(dialSeconds)}
+        {customer && (
+          <Section title="Customer details" className="call-customer">
+            <div className="call-customer-row">
+              <div className="call-customer-who">
+                <span className="avatar" aria-hidden="true">
+                  {customer.name?.[0]}
                 </span>
-                <Button type="button" variant="secondary" onClick={endDial}>
-                  End call
-                </Button>
+                <div>
+                  <b>{customer.name}</b>
+                  <span className="call-customer-phone">
+                    {phone || "Number unavailable"}
+                  </span>
+                  {customer.details && <small>{customer.details}</small>}
+                </div>
               </div>
-            ) : (
-              <p>
-                Call ended after {clock(dialSeconds)}. The time is filled in
-                below; change it if needed.
-              </p>
-            )}
-          </section>
-        )}
-        {manual && (
-          <>
-            {!dial && (
-              <p className="notice">
-                Call the customer using your company phone, then record the
-                result here. Times are in Pakistan (Asia/Karachi).
-              </p>
-            )}
-            <div className="form-grid">
-              <label>
-                Call connected?
-                <select
-                  aria-label="Call connected?"
-                  {...answerField}
-                  onChange={(event) => {
-                    answerField.onChange(event);
-                    setValue("outcome", "");
-                  }}
-                >
-                  <option value="yes">Connected</option>
-                  <option value="no">Not connected</option>
-                </select>
-              </label>
-              <label>
-                Call start (Pakistan time)
-                <input
-                  aria-label="Call start (Pakistan time)"
-                  type="datetime-local"
-                  required
-                  {...register("started_at")}
-                />
-                <span className="field-error">
-                  {errors.started_at?.message}
-                </span>
-              </label>
-              <label>
-                Duration minutes
-                <input
-                  aria-label="Duration minutes"
-                  type="number"
-                  min="0"
-                  max="120"
-                  step="1"
-                  {...register("duration_minutes")}
-                />
-                <span className="field-error">
-                  {errors.duration_minutes?.message}
-                </span>
-              </label>
-              <label>
-                Duration seconds
-                <input
-                  aria-label="Duration seconds"
-                  type="number"
-                  min="0"
-                  max="59"
-                  step="1"
-                  {...register("duration_seconds")}
-                />
-                <span className="field-error">
-                  {errors.duration_seconds?.message}
-                </span>
-              </label>
+              <div className="call-customer-actions">
+                {phone && (
+                  <a
+                    className="button call-action call-action-phone"
+                    href={`tel:${phone}`}
+                    aria-label={`${dialStart === null ? "Call" : "Call again"} ${phone}`}
+                    onClick={startDial}
+                  >
+                    <Phone size={17} aria-hidden="true" />
+                    {dialStart === null ? "Call" : "Call again"}
+                  </a>
+                )}
+                {whatsapp ? (
+                  <a
+                    className="button call-action call-action-whatsapp"
+                    href={whatsapp}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`WhatsApp ${customer.name} (opens in a new tab)`}
+                  >
+                    <MessageCircle size={17} aria-hidden="true" />
+                    WhatsApp
+                  </a>
+                ) : (
+                  <span className="call-action-unavailable">
+                    WhatsApp needs a valid number
+                  </span>
+                )}
+              </div>
             </div>
-          </>
+            {dialStart !== null &&
+              (dialing ? (
+                <div className="call-dialer-live">
+                  <span className="call-dialer-dot" aria-hidden="true" />
+                  <span role="timer" aria-label="Call time">
+                    Call time {clock(dialSeconds)}
+                  </span>
+                  <Button type="button" variant="secondary" onClick={endDial}>
+                    End call
+                  </Button>
+                </div>
+              ) : (
+                <p className="call-dialer-ended" role="status">
+                  Call ended after {clock(dialSeconds)}. The duration is filled
+                  in below; change it if needed.
+                </p>
+              ))}
+          </Section>
         )}
-        <label>
-          Call outcome
-          <select aria-label="Call outcome" {...register("outcome")}>
-            <option value="">Select an outcome</option>
-            {(unanswered ? unansweredOutcomes : outcomes).map((o) => (
-              <option key={o}>{o}</option>
-            ))}
-          </select>
-          <span className="field-error">
-            {errors.outcome && "Choose a call outcome"}
-          </span>
-        </label>
-        <label>
-          {needsFollowUp(watch("outcome"), call, manual)
-            ? "Follow-up date and time (Pakistan time)"
-            : "Schedule a follow-up (optional, Pakistan time)"}
-          <input
-            aria-label="Follow-up date and time"
-            type="datetime-local"
-            required={needsFollowUp(watch("outcome"), call, manual)}
-            {...register("follow_up_at")}
-          />
-          <span className="field-error">{errors.follow_up_at?.message}</span>
-        </label>
-        <label>
-          Agent notes
-          <textarea
-            {...register("notes")}
-            rows="4"
-            placeholder="What did you talk about? Add any other comments."
-          />
-          <span className="field-error">{errors.notes?.message}</span>
-        </label>
-        {spoke(!unanswered, watch("outcome")) && (
-          <TemperaturePicker value={temperature} onChange={setTemperature} />
-        )}
+        <Section title="Call information">
+          {manual && !customer && (
+            <p className="notice">
+              Call the customer using your company phone, then record the result
+              here. Times are in Pakistan (Asia/Karachi).
+            </p>
+          )}
+          <div className="call-grid">
+            {manual && (
+              <>
+                <label>
+                  Call connected?
+                  <select
+                    aria-label="Call connected?"
+                    {...answerField}
+                    onChange={(event) => {
+                      answerField.onChange(event);
+                      setValue("outcome", "");
+                    }}
+                  >
+                    <option value="yes">Connected</option>
+                    <option value="no">Not connected</option>
+                  </select>
+                </label>
+                <label>
+                  Call start (Pakistan time)
+                  <input
+                    aria-label="Call start (Pakistan time)"
+                    type="datetime-local"
+                    required
+                    {...register("started_at")}
+                  />
+                  <span className="field-error">
+                    {errors.started_at?.message}
+                  </span>
+                </label>
+                <fieldset className="call-duration">
+                  <legend>Duration</legend>
+                  <label>
+                    <input
+                      aria-label="Duration minutes"
+                      type="number"
+                      min="0"
+                      max="120"
+                      step="1"
+                      {...register("duration_minutes")}
+                    />
+                    <span>min</span>
+                  </label>
+                  <label>
+                    <input
+                      aria-label="Duration seconds"
+                      type="number"
+                      min="0"
+                      max="59"
+                      step="1"
+                      {...register("duration_seconds")}
+                    />
+                    <span>sec</span>
+                  </label>
+                  <span className="field-error">
+                    {errors.duration_minutes?.message ||
+                      errors.duration_seconds?.message}
+                  </span>
+                </fieldset>
+              </>
+            )}
+            <label>
+              Call outcome
+              <select aria-label="Call outcome" {...register("outcome")}>
+                <option value="">Select an outcome</option>
+                {(unanswered
+                  ? unansweredOutcomes
+                  : call.outcome === "Number off"
+                    ? outcomes
+                    : connectedOutcomes
+                ).map((o) => (
+                  <option key={o}>{o}</option>
+                ))}
+              </select>
+              <span className="field-error">
+                {errors.outcome && "Choose a call outcome"}
+              </span>
+            </label>
+          </div>
+        </Section>
+        <Section title="Lead qualification">
+          {spoke(!unanswered, outcome) && (
+            <TemperaturePicker value={temperature} onChange={setTemperature} />
+          )}
+          <label>
+            Agent notes
+            <textarea
+              {...register("notes")}
+              rows="3"
+              placeholder="What did you talk about? Add any other comments."
+            />
+            <span className="field-error">{errors.notes?.message}</span>
+          </label>
+          <label>
+            {followUpRequired
+              ? "Next follow-up (Pakistan time)"
+              : "Next follow-up (optional, Pakistan time)"}
+            <input
+              aria-label="Follow-up date and time"
+              type="datetime-local"
+              required={followUpRequired}
+              {...register("follow_up_at")}
+            />
+            <span className="field-error">{errors.follow_up_at?.message}</span>
+          </label>
+        </Section>
         <ErrorBox error={errors.root?.message} />
-        <Button disabled={isSubmitting}>
-          {isSubmitting ? "Saving…" : manual ? "Save call" : "Save outcome"}
-        </Button>
+        <div className="call-form-actions">
+          {onCancel && (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={isSubmitting}
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+          )}
+          <Button disabled={isSubmitting}>
+            {isSubmitting ? "Saving…" : manual ? "Save call" : "Save outcome"}
+          </Button>
+        </div>
       </fieldset>
     </form>
   );

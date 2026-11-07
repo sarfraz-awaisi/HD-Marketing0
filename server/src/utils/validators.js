@@ -33,6 +33,7 @@ export const outcomes = [
   "No answer",
   "Busy",
   "Wrong number",
+  "Number off",
   "Interested",
   "Not interested",
   "Follow-up required",
@@ -61,7 +62,8 @@ export const followUpOutcome = "Follow-up required";
 // A call saves at most one temperature, and only after a conversation
 // (update 052). Its other tags are kept as they are.
 export const temperatureTags = ["Hot lead", "Warm lead", "Cold lead"];
-const unansweredOutcomes = ["No answer", "Busy", "Wrong number"];
+// Calls that did not connect (update 053 adds Number off: phone switched off).
+const unansweredOutcomes = ["No answer", "Busy", "Wrong number", "Number off"];
 function checkTemperature(data, ctx, answered) {
   const chosen = data.deal_tags.filter((tag) => temperatureTags.includes(tag));
   if (chosen.length > 1)
@@ -105,15 +107,18 @@ export function manualCall(role) {
           path: ["duration_seconds"],
           message: "Use a valid call duration up to 120 minutes",
         });
-      if (
-        !data.answered &&
-        !["No answer", "Busy", "Wrong number"].includes(data.outcome)
-      )
+      if (!data.answered && !unansweredOutcomes.includes(data.outcome))
         ctx.addIssue({
           code: "custom",
           path: ["outcome"],
           message:
-            "Choose No answer, Busy or Wrong number for an unanswered call",
+            "Choose No answer, Busy, Wrong number or Number off for an unanswered call",
+        });
+      if (data.answered && data.outcome === "Number off")
+        ctx.addIssue({
+          code: "custom",
+          path: ["outcome"],
+          message: "Number off is for a call that did not connect",
         });
       const started = Date.parse(data.started_at);
       const oldest = Date.now() - (role === "admin" ? 30 * 24 : 48) * 3600000;
@@ -226,7 +231,7 @@ export const callOutcome = schemas.calls.superRefine((data, ctx) =>
   checkTemperature(data, ctx, true),
 );
 // An agent's own leads (update 052): Assigned leads or the Lead pipeline.
-// Search accepts names, contact numbers in any common format, and #15.
+// Search: a customer's name or contact number in any common format (053).
 export const agentLeadsQuery = z
   .object({
     view: z.enum(["assigned", "pipeline"]).default("assigned"),
@@ -239,6 +244,8 @@ export const agentLeadsQuery = z
       .optional(),
     status: z.enum(statuses).optional(),
     temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
+    // The outcome of the lead's latest call (update 053).
+    outcome: z.enum(outcomes).optional(),
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     call: z.enum(["uncalled", "missed"]).optional(),
     sort: z

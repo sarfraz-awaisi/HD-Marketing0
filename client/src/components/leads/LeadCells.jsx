@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { date } from "../../lib/api";
 import { temperatureOf } from "../../lib/temperature";
 // Table cells shared by an agent's Assigned leads and Lead pipeline
-// (update 052). `back` is the list's address, so Back to leads returns to
-// the same search, filters and page.
+// (updates 052 and 053). `back` is the list's address, so Back to leads
+// returns to the same search, filters and page.
 export function CustomerCell({ lead, back }) {
   return (
     <Link className="customer-link" to={"/leads/" + lead.id} state={{ back }}>
@@ -15,34 +16,61 @@ export function CustomerCell({ lead, back }) {
     </Link>
   );
 }
-// The lead's place in its file, the same on every page and after any filter.
-export function FileNumber({ lead, withFile = false }) {
-  if (!lead.file_row)
-    return (
-      <span className="file-number">
-        <span aria-label="No file number">—</span>
-        {withFile && <small>No file</small>}
-      </span>
-    );
+export function DetailsLink({ lead, back }) {
   return (
-    <span className="file-number">
-      <b>{lead.file_row}</b>
-      {withFile && <small title={lead.file_name}>{lead.file_name}</small>}
+    <Link
+      className="button secondary lead-details-link"
+      to={"/leads/" + lead.id}
+      state={{ back }}
+      aria-label={`View details for ${lead.name}`}
+    >
+      View details
+    </Link>
+  );
+}
+// The lead's latest call: its outcome, whether it connected, and when.
+export function LastCallCell({ lead }) {
+  if (!lead.last_call_at)
+    return <span className="lead-muted">Not called yet</span>;
+  return (
+    <span className="lead-last-call">
+      <span
+        className={`badge plain ${lead.last_call_connected ? "completed" : "warning"}`}
+      >
+        {lead.last_call_outcome || "Call in progress"}
+      </span>
+      <small>{date(lead.last_call_at)}</small>
     </span>
   );
 }
-// Contacted (an answered call), attempted (calls, none answered) or never.
-export function ContactCell({ lead }) {
-  if (lead.contact === "contacted")
-    return (
-      <span className="lead-contact">
-        <span className="badge plain completed">Contacted</span>
-        <small>{date(lead.last_contact_at)}</small>
+// The agent's own latest note, two lines at first; Read more shows it all.
+export function NoteCell({ lead }) {
+  const [open, setOpen] = useState(false);
+  if (!lead.note) return <span className="lead-muted">No notes yet</span>;
+  const long = lead.note.length > 90 || lead.note.includes("\n");
+  return (
+    <span className="lead-note">
+      <span className={open ? "lead-note-text open" : "lead-note-text"}>
+        {lead.note}
       </span>
-    );
-  if (lead.contact === "attempted")
-    return <span className="badge plain warning">Attempted, no answer</span>;
-  return <span className="badge plain">Never contacted</span>;
+      <small>
+        {date(lead.note_at)}
+        {long && (
+          <>
+            {" · "}
+            <button
+              type="button"
+              className="lead-note-more"
+              aria-expanded={open}
+              onClick={() => setOpen(!open)}
+            >
+              {open ? "Show less" : "Read more"}
+            </button>
+          </>
+        )}
+      </small>
+    </span>
+  );
 }
 const dayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Karachi",

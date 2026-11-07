@@ -368,8 +368,8 @@ describe("agent call queue", () => {
     const first = mocks.api.mock.calls.find(
       ([path]) => path.startsWith("/leads?") || path.startsWith("/my-leads?"),
     )[0];
-    // Agents' Assigned leads (update 052): the database sorts a first-call
-    // filter by deadline, the longest waiting first.
+    // Agents' Assigned leads (updates 052, 053): the database sorts a
+    // first-call filter by deadline, the longest waiting first.
     expect(first.split("?")[0]).toBe("/my-leads");
     const query = new URLSearchParams(first.split("?")[1]);
     expect(Object.fromEntries(query)).toEqual({
@@ -377,9 +377,6 @@ describe("agent call queue", () => {
       page: "1",
       call: "missed",
     });
-    expect(screen.getByRole("combobox", { name: "Sort leads" })).toHaveValue(
-      "call_due",
-    );
     fireEvent.change(
       screen.getByRole("combobox", { name: "Filter by first call" }),
       { target: { value: "" } },

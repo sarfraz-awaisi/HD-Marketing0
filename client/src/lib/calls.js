@@ -1,4 +1,23 @@
-export const unansweredOutcomes = ["No answer", "Busy", "Wrong number"];
+// Every call outcome. Number off (update 053: the phone is switched off) is
+// for a call that did not connect, like the three before it.
+export const callOutcomes = [
+  "No answer",
+  "Busy",
+  "Wrong number",
+  "Number off",
+  "Interested",
+  "Not interested",
+  "Follow-up required",
+  "Site visit scheduled",
+  "Deal discussion",
+];
+// Outcomes of a call that did not connect.
+export const unansweredOutcomes = [
+  "No answer",
+  "Busy",
+  "Wrong number",
+  "Number off",
+];
 export const callMethods = ["manual", "mock", "provider"];
 export function callMethodLabel(call) {
   const method =

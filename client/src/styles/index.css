@@ -3709,29 +3709,6 @@ audio {
 .button.call-button:hover {
   background: #e3f2e8;
 }
-.call-dialog-lead {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 12px 18px;
-  margin: -8px 0 18px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--bg);
-}
-.call-dialog-lead dt {
-  margin: 0 0 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.call-dialog-lead dd {
-  margin: 0;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
 .call-dialog-confirm {
   margin: 0 0 16px;
   padding: 14px 16px;
@@ -3743,34 +3720,6 @@ audio {
 .call-dialog-confirm p {
   margin: 0 0 10px;
   font-weight: 600;
-}
-.call-dialer {
-  display: grid;
-  gap: 10px;
-  margin: 0 0 18px;
-  padding: 16px;
-  border: 1px solid #e8dcc3;
-  border-radius: var(--radius);
-  background: var(--gold-light);
-}
-.call-dialer p {
-  margin: 0;
-  font-size: 13px;
-  color: var(--muted);
-}
-.button.call-dialer-button {
-  justify-self: start;
-  min-height: 48px;
-  padding: 12px 22px;
-  font-size: 15px;
-  text-decoration: none;
-  font-variant-numeric: tabular-nums;
-  background: #397751;
-  border-color: #397751;
-  color: #fff;
-}
-.button.call-dialer-button:hover {
-  background: #2d6443;
 }
 .call-dialer-live {
   display: flex;
@@ -3795,11 +3744,6 @@ audio {
 @media (prefers-reduced-motion: reduce) {
   .call-dialer-dot {
     animation: none;
-  }
-}
-@media (max-width: 560px) {
-  .button.call-dialer-button {
-    justify-self: stretch;
   }
 }
 
