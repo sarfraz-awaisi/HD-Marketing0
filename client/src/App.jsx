@@ -92,6 +92,8 @@ export default function App() {
                 <Route path="documents" element={<Documentation />} />
                 <Route path="documents/:id" element={<Documentation />} />
                 <Route path="targets" element={<Targets />} />
+                {/* Agents see their own numbers as My performance (051). */}
+                <Route path="reports" element={<Reports />} />
                 <Route path="followups" element={<FollowUps />} />
                 <Route path="visits" element={<SiteVisits />} />
                 <Route
@@ -132,7 +134,6 @@ export default function App() {
                 <Route path="tasks" element={<ImportedFiles assignable />} />
                 <Route path="calls" element={<CallReview />} />
                 <Route path="team" element={<Team />} />
-                <Route path="reports" element={<Reports />} />
                 <Route path="audit" element={<AuditLog />} />
                 <Route path="task-management" element={<TaskManagement />} />
                 <Route path="security-alerts" element={<SecurityAlerts />} />

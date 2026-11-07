@@ -2,6 +2,8 @@ import { lostReasonLabel, statusLabel, statuses } from "./pipeline";
 // Report drill-down (update 050): what each report number is called, what it
 // counts, and the number the report showed. The server lists the records
 // using the report's own conditions; these words describe the same rules.
+// Update 051: agents open their own numbers ("own", worded as "you"), and
+// the dashboard's Today's calling numbers open as the "today" report.
 export const sourceName = (s) =>
   s === "CSV" ? "CSV / Excel" : s || "No source";
 const summary = {
@@ -93,8 +95,25 @@ export const summaryLabel = (metric) =>
   summary[metric]?.[0] ||
   summaryNotes[metric]?.title ||
   metric.replaceAll("_", " ");
-export const canOpenSummary = (metric) =>
-  metric in summary || metric in summaryNotes;
+// Agents' summaries leave out the numbers that are not about their work.
+export const canOpenSummary = (metric, own = false) =>
+  metric in summary || (!own && metric in summaryNotes);
+// The same words for an agent looking at their own numbers.
+const yours = {
+  total_leads: [
+    "All my leads",
+    "Every lead assigned to you, whenever it was created.",
+  ],
+  assigned_leads: [
+    "My leads",
+    "Every lead assigned to you that matches the source filter, whenever it was created.",
+  ],
+};
+const personal = (text) =>
+  text
+    .replace(/\bThis agent's\b/g, "Your")
+    .replace(/\bthis agent's\b/g, "your")
+    .replace(/\bthis agent\b/g, "you");
 const sources = {
   leads: ["Leads", "Leads from this source created in this range."],
   contacted: [
@@ -169,6 +188,38 @@ const agents = {
     "This agent's current leads that were marked lost in this range.",
   ],
 };
+// call_activity (update 038): the dashboard's Today's calling numbers.
+const today = {
+  calls_today: [
+    "Calls today",
+    "Calls started today (Pakistan time) and recorded under this agent. “Called by” shows who actually made each call.",
+  ],
+  connected_today: [
+    "Answered calls today",
+    "Calls started today and recorded under this agent that were answered.",
+  ],
+  first_calls_today: [
+    "First calls today",
+    "This agent's leads that had their first call today.",
+  ],
+  waiting: [
+    "Waiting for a first call",
+    "This agent's leads not called yet whose first-call deadline has not passed.",
+  ],
+  missed: [
+    "Missed first calls",
+    "This agent's open leads not called yet whose first-call deadline has passed.",
+  ],
+  idle: [
+    "No recent activity",
+    "This agent's open leads with no activity for the set number of days and no follow-up planned.",
+  ],
+  followups_overdue: [
+    "Overdue follow-ups",
+    "Pending follow-ups on this agent's leads that are past their due time.",
+  ],
+};
+export const todayMetrics = Object.keys(today);
 export const kindNouns = {
   lead: ["lead", "leads"],
   call: ["call", "calls"],
@@ -177,9 +228,22 @@ export const kindNouns = {
   followup: ["follow-up", "follow-ups"],
   assignment: ["assignment", "assignments"],
 };
-// Title and definition of one report number. names: agent id -> name.
-export function drillInfo(report, metric, key, names = {}) {
+// Title and definition of one report number. names: agent id -> name; own:
+// an agent's own numbers.
+export function drillInfo(report, metric, key, names = {}, own = false) {
+  const info = wording(report, metric, key, names, own);
+  return own ? { ...info, about: personal(info.about) } : info;
+}
+function wording(report, metric, key, names, own) {
   const agent = key ? names[key] || "Former agent" : "No agent";
+  if (report === "today") {
+    const [title, about] = today[metric];
+    return { title: own ? title : `${agent}: ${title}`, about };
+  }
+  if (report === "summary" && own && yours[metric]) {
+    const [title, about] = yours[metric];
+    return { title, about };
+  }
   if (report === "summary") {
     if (metric === "by_status")
       return {
@@ -195,7 +259,7 @@ export function drillInfo(report, metric, key, names = {}) {
   }
   if (report === "agents") {
     const [title, about] = agents[metric];
-    return { title: `${agent}: ${title}`, about };
+    return { title: own ? title : `${agent}: ${title}`, about };
   }
   if (report === "funnel")
     return metric === "lost"
@@ -231,6 +295,8 @@ const find = (list, test) => (Array.isArray(list) ? list.find(test) : null);
 // The number the report shows for this drill-down, or undefined.
 export function reportNumber(report, data, metric, key) {
   if (!data) return undefined;
+  if (report === "today")
+    return find(data.agents, (a) => a.agent_id === key)?.[metric];
   if (report === "summary")
     return metric === "by_status" ? (data.by_status?.[key] ?? 0) : data[metric];
   if (report === "sources")
@@ -253,6 +319,12 @@ export function reportNumber(report, data, metric, key) {
 export function relatedNumbers(report, data, metric, key) {
   if (!data) return [];
   const item = (m, k, label, value) => ({ metric: m, key: k, label, value });
+  if (report === "today") {
+    const row = find(data.agents, (a) => a.agent_id === key);
+    return row
+      ? todayMetrics.map((m) => item(m, key, today[m][0], row[m]))
+      : [];
+  }
   if (report === "summary" && metric === "by_status")
     return statuses.map((s) =>
       item("by_status", s, statusLabel(s), data.by_status?.[s] ?? 0),

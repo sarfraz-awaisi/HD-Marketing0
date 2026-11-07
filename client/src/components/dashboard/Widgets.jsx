@@ -17,17 +17,26 @@ import {
 import { api, pkr } from "../../lib/api";
 import { statusLabel, statuses } from "../../lib/pipeline";
 // Compact figure tile: label and icon on top, the value, then a short note.
-export function KpiTile({ label, value, note, icon: Icon, tone = "gold", to }) {
+// to: a page it links to; onOpen: shows the records behind the number.
+export function KpiTile({
+  label,
+  value,
+  note,
+  icon: Icon,
+  tone = "gold",
+  to,
+  onOpen,
+}) {
   const body = (
     <>
-      <div className="kpi-top">
+      <span className="kpi-top">
         <span className="kpi-label">{label}</span>
         {Icon && (
           <span className={`kpi-icon ${tone}`} aria-hidden="true">
             <Icon size={17} />
           </span>
         )}
-      </div>
+      </span>
       <strong className="kpi-value">{value ?? "—"}</strong>
       {note && <small className="kpi-note">{note}</small>}
     </>
@@ -36,6 +45,15 @@ export function KpiTile({ label, value, note, icon: Icon, tone = "gold", to }) {
     <Link className="kpi fx-card" to={to}>
       {body}
     </Link>
+  ) : onOpen ? (
+    <button
+      type="button"
+      className="kpi fx-card"
+      aria-label={`${label}: ${value ?? "—"}. Show the records`}
+      onClick={onOpen}
+    >
+      {body}
+    </button>
   ) : (
     <section className="kpi fx-card">{body}</section>
   );

@@ -27,10 +27,13 @@ import {
 // Report drill-down (update 050). API responses are mocked;
 // server/tests/report-drilldown.test.js checks the records against each
 // report in the database.
-const mocks = vi.hoisted(() => ({ api: vi.fn() }));
+const mocks = vi.hoisted(() => ({ api: vi.fn(), user: null }));
 vi.mock("../src/lib/api", async (original) => ({
   ...(await original()),
   api: mocks.api,
+}));
+vi.mock("../src/context/AuthContext", () => ({
+  useAuth: () => ({ user: mocks.user, loading: false }),
 }));
 const admin = {
     id: "a0000000-0000-4000-8000-000000000001",
@@ -117,6 +120,7 @@ const requests = () =>
     .map((p) => Object.fromEntries(new URLSearchParams(p.split("?")[1])));
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.user = admin;
   drill = (params) => {
     const page = Number(params.page);
     return {
@@ -618,7 +622,74 @@ describe("other reports", () => {
   });
 });
 
+describe("an agent's own reports (update 051)", () => {
+  it("shows My performance with only the agent's numbers", async () => {
+    mocks.user = ali;
+    open("/reports");
+    expect(
+      await screen.findByRole("heading", { name: "My performance" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Report agent" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export CSV" })).toBeNull();
+    expect(
+      screen.getByRole("tab", { name: "My activity" }),
+    ).toBeInTheDocument();
+    // Numbers that are not about the agent's work are left out.
+    expect(await screen.findByText("leads contacted")).toBeInTheDocument();
+    expect(screen.queryByText("active agents")).toBeNull();
+    expect(mocks.api.mock.calls.some(([path]) => path === "/users")).toBe(
+      false,
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", {
+        name: "leads contacted: 18. Show the records",
+      })[1],
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText(/Only your own work is listed/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("combobox", { name: "Assigned agent" }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("columnheader", { name: "Assigned agent" }),
+    ).toBeNull();
+    await waitFor(() => expect(requests()).toHaveLength(1));
+    expect(requests()[0]).toMatchObject({
+      report: "summary",
+      metric: "leads_contacted",
+    });
+    expect(requests()[0]).not.toHaveProperty("agent");
+  });
+});
 describe("drill-down words", () => {
+  it("words an agent's own numbers as theirs, and today's calling", () => {
+    const names = { [ali.id]: "Ali Agent" };
+    expect(drillInfo("agents", "calls", ali.id, names, true)).toEqual({
+      title: "Calls",
+      about:
+        "Calls started in this range and recorded under you. “Called by” shows who actually made each call.",
+    });
+    expect(drillInfo("today", "waiting", ali.id, names)).toEqual({
+      title: "Ali Agent: Waiting for a first call",
+      about:
+        "This agent's leads not called yet whose first-call deadline has not passed.",
+    });
+    expect(drillInfo("summary", "total_leads", undefined, {}, true).title).toBe(
+      "All my leads",
+    );
+    const today = {
+      agents: [{ agent_id: ali.id, calls_today: 5, connected_today: 3 }],
+    };
+    expect(reportNumber("today", today, "connected_today", ali.id)).toBe(3);
+    expect(
+      relatedNumbers("today", today, "calls_today", ali.id).map((r) => [
+        r.label,
+        r.value,
+      ]),
+    ).toContainEqual(["Answered calls today", 3]);
+  });
   it("describes numbers and finds the report's own figure", () => {
     expect(drillInfo("funnel", "stage", "visit_done").title).toBe(
       "Visit done leads",

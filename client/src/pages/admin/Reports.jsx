@@ -1,6 +1,6 @@
-import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "../../context/AuthContext";
 import { api, download, pkr, reportSearch } from "../../lib/api";
 import { lostReasonLabel, statusLabel, statuses } from "../../lib/pipeline";
 import {
@@ -10,13 +10,16 @@ import {
   reportNumber,
   sourceName,
 } from "../../lib/reportDrilldown";
+import { drillParams, useDrillUrl } from "../../lib/useDrillUrl";
 import { Button, Table, ErrorBox, Loader } from "../../components/common/UI";
 import ReportDrilldown from "../../components/reports/ReportDrilldown";
 import "../../styles/reports.css";
+// Administrators see everyone's numbers. Agents see the same reports with
+// only their own work, as My performance (update 051).
 const tabs = [
   ["summary", "Summary"],
   ["sources", "Lead sources"],
-  ["agents", "Agents"],
+  ["agents", "Agents", "My activity"],
   ["funnel", "Sales funnel"],
   ["lost", "Lost reasons"],
 ];
@@ -80,10 +83,12 @@ function BarList({ title, rows, empty, onOpen }) {
     </section>
   );
 }
-function Summary({ data, onOpen }) {
+function Summary({ data, onOpen, own }) {
   const byStatus = data?.by_status || {};
   const rows = Object.entries(data || {})
-    .filter(([, v]) => typeof v === "number")
+    .filter(
+      ([k, v]) => typeof v === "number" && (!own || canOpenSummary(k, own)),
+    )
     .map(([key, value]) => ({
       id: key,
       metric: key.replaceAll("_", " "),
@@ -214,7 +219,7 @@ function Sources({ rows, onOpen }) {
     </>
   );
 }
-function Agents({ rows, onOpen }) {
+function Agents({ rows, onOpen, own }) {
   const open = (metric, label, render) => ({
     key: metric,
     label,
@@ -231,8 +236,9 @@ function Agents({ rows, onOpen }) {
   return (
     <>
       <p className="field-hint">
-        Activity in this range. First-call speed counts working hours only.
-        Select an agent or a number to see the records.
+        {own ? "Your activity" : "Activity"} in this range. First-call speed
+        counts working hours only. Select{own ? "" : " an agent or"} a number to
+        see the records.
       </p>
       <Table
         rows={rows.map((r) => ({ ...r, id: r.agent_id }))}
@@ -352,7 +358,7 @@ function Funnel({ data, onOpen }) {
     </>
   );
 }
-function Lost({ data, onOpen }) {
+function Lost({ data, onOpen, own }) {
   const list = (rows) => (Array.isArray(rows) ? rows : []);
   const empty = "No lost leads in this range.";
   return (
@@ -391,26 +397,36 @@ function Lost({ data, onOpen }) {
           }))}
           onOpen={(key) => onOpen("source", key)}
         />
-        <BarList
-          title="By agent"
-          empty={empty}
-          rows={list(data?.by_agent).map((r) => ({
-            key: r.agent_id ?? null,
-            label: r.name,
-            count: r.count,
-          }))}
-          onOpen={(key) => onOpen("agent", key)}
-        />
+        {!own && (
+          <BarList
+            title="By agent"
+            empty={empty}
+            rows={list(data?.by_agent).map((r) => ({
+              key: r.agent_id ?? null,
+              label: r.name,
+              count: r.count,
+            }))}
+            onOpen={(key) => onOpen("agent", key)}
+          />
+        )}
       </div>
     </>
   );
 }
 // The tab, filters and any open drill-down live in the address, so returning
 // from a lead's details brings back the same report and list.
-const drillParams = ["dm", "dk", "dq", "ds", "do", "dsort", "dp"];
 export default function Reports() {
   const today = new Date(Date.now() + 5 * 3600000).toISOString().slice(0, 10);
-  const [url, setUrl] = useSearchParams();
+  const { user } = useAuth();
+  const own = user.role !== "admin";
+  const {
+    url,
+    change,
+    drill,
+    open: openDrill,
+    close: closeDrill,
+    setState,
+  } = useDrillUrl();
   const client = useQueryClient();
   const [error, setError] = useState("");
   const tab = tabs.some(([v]) => v === url.get("tab"))
@@ -420,30 +436,11 @@ export default function Reports() {
     ? url.get("from")
     : today.slice(0, 7) + "-01";
   const to = day.test(url.get("to") || "") ? url.get("to") : today;
-  const agent = url.get("agent") || "";
+  // Agents' reports are always their own; the server sets the agent.
+  const agent = own ? "" : url.get("agent") || "";
   const source = url.get("source") || "";
-  // setUrl's updater sees the address of the last render, so two quick
-  // changes (a tab, then a date) would lose the first. Each change builds on
-  // the latest one instead.
-  const latest = useRef(url);
-  useLayoutEffect(() => {
-    latest.current = url;
-  }, [url]);
-  const change = useCallback(
-    (values) => {
-      const next = new URLSearchParams(latest.current);
-      for (const [k, v] of Object.entries(values))
-        if (v === undefined || v === null || v === "") next.delete(k);
-        else next.set(k, String(v));
-      latest.current = next;
-      setUrl(next, { replace: true });
-    },
-    [setUrl],
-  );
-  const closeDrill = () =>
-    change(Object.fromEntries(drillParams.map((k) => [k, null])));
   // Each report uses only the filters that apply to it.
-  const usesAgent = tab !== "agents",
+  const usesAgent = tab !== "agents" && !own,
     usesSource = !["sources", "agents"].includes(tab);
   const params = {
     from: new Date(from + "T00:00:00+05:00").toISOString(),
@@ -461,6 +458,7 @@ export default function Reports() {
   const users = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
+    enabled: !own,
   });
   const agentList = (Array.isArray(users.data) ? users.data : []).filter(
     (u) => u.role === "agent",
@@ -468,6 +466,7 @@ export default function Reports() {
   const rows = Array.isArray(q.data) ? q.data : [];
   // Agent names for titles, including former agents the report still lists.
   const names = Object.fromEntries([
+    [user.id, user.name],
     ...(Array.isArray(users.data) ? users.data : []).map((u) => [u.id, u.name]),
     ...(tab === "agents" ? rows : []).map((r) => [r.agent_id, r.name]),
     ...(tab === "lost" && Array.isArray(q.data?.by_agent)
@@ -478,47 +477,16 @@ export default function Reports() {
       .map((r) => [r.agent_id, r.name]),
   ]);
   // A drill-down: metric (dm) and key (dk; "none" means not set).
-  const metric = url.get("dm");
-  const rawKey = url.get("dk");
-  const drillKey =
-    rawKey === null ? undefined : rawKey === "none" ? null : rawKey;
-  const openDrill = (m, key) =>
-    change({
-      dm: m,
-      dk: key === undefined ? null : key === null ? "none" : key,
-      dq: null,
-      ds: null,
-      do: null,
-      dsort: null,
-      dp: null,
-    });
-  const drillState = {
-    search: url.get("dq") || "",
-    status: url.get("ds") || "",
-    owner: url.get("do") || "",
-    sort: url.get("dsort") || "",
-    page: Number(url.get("dp")) || 1,
-  };
-  const setDrillState = useCallback(
-    (values) =>
-      change({
-        ...("search" in values ? { dq: values.search } : {}),
-        ...("status" in values ? { ds: values.status } : {}),
-        ...("owner" in values ? { do: values.owner } : {}),
-        ...("sort" in values ? { dsort: values.sort } : {}),
-        ...("page" in values
-          ? { dp: values.page > 1 ? values.page : null }
-          : {}),
-      }),
-    [change],
-  );
+  const { metric, rawKey, key: drillKey } = drill;
   const filterText = [
     `${longDate.format(new Date(from))} – ${longDate.format(new Date(to))}`,
-    usesAgent
-      ? agent
-        ? `Agent: ${names[agent] || "selected"}`
-        : "All agents"
-      : null,
+    own
+      ? "Your work"
+      : usesAgent
+        ? agent
+          ? `Agent: ${names[agent] || "selected"}`
+          : "All agents"
+        : null,
     usesSource
       ? source
         ? `Source: ${sourceName(source)}`
@@ -531,33 +499,41 @@ export default function Reports() {
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">CLARITY ACROSS YOUR BUSINESS</span>
-          <h1>Reports</h1>
-          <p>Full-dataset reports. Date ranges use Pakistan time.</p>
+          <span className="eyebrow">
+            {own ? "YOUR OWN WORK" : "CLARITY ACROSS YOUR BUSINESS"}
+          </span>
+          <h1>{own ? "My performance" : "Reports"}</h1>
+          <p>
+            {own
+              ? "Your leads, calls and results. Select any number to see the records behind it. Date ranges use Pakistan time."
+              : "Full-dataset reports. Date ranges use Pakistan time."}
+          </p>
         </div>
-        <Button
-          disabled={!q.data}
-          onClick={async () => {
-            setError("");
-            try {
-              download(
-                await api(path + "/export?" + reportSearch(params), {
-                  download: true,
-                }),
-                tab === "summary"
-                  ? "hd-marketing-report.csv"
-                  : `hd-marketing-${tab}-report.csv`,
-              );
-            } catch (e) {
-              setError(e.message);
-            }
-          }}
-        >
-          Export CSV
-        </Button>
+        {!own && (
+          <Button
+            disabled={!q.data}
+            onClick={async () => {
+              setError("");
+              try {
+                download(
+                  await api(path + "/export?" + reportSearch(params), {
+                    download: true,
+                  }),
+                  tab === "summary"
+                    ? "hd-marketing-report.csv"
+                    : `hd-marketing-${tab}-report.csv`,
+                );
+              } catch (e) {
+                setError(e.message);
+              }
+            }}
+          >
+            Export CSV
+          </Button>
+        )}
       </div>
       <div className="review-tabs" role="tablist" aria-label="Report">
-        {tabs.map(([value, label]) => (
+        {tabs.map(([value, label, mine]) => (
           <button
             key={value}
             type="button"
@@ -572,7 +548,7 @@ export default function Reports() {
               setError("");
             }}
           >
-            {label}
+            {own ? mine || label : label}
           </button>
         ))}
       </div>
@@ -629,15 +605,15 @@ export default function Reports() {
         {q.isPending ? (
           <Loader />
         ) : q.error ? null : tab === "summary" ? (
-          <Summary data={q.data} onOpen={openDrill} />
+          <Summary data={q.data} onOpen={openDrill} own={own} />
         ) : tab === "sources" ? (
           <Sources rows={rows} onOpen={openDrill} />
         ) : tab === "agents" ? (
-          <Agents rows={rows} onOpen={openDrill} />
+          <Agents rows={rows} onOpen={openDrill} own={own} />
         ) : tab === "funnel" ? (
           <Funnel data={q.data} onOpen={openDrill} />
         ) : (
-          <Lost data={q.data} onOpen={openDrill} />
+          <Lost data={q.data} onOpen={openDrill} own={own} />
         )}
       </section>
       {metric && q.data && (
@@ -646,18 +622,19 @@ export default function Reports() {
           report={tab}
           metric={metric}
           drillKey={drillKey}
-          info={drillInfo(tab, metric, drillKey, names)}
+          info={drillInfo(tab, metric, drillKey, names, own)}
           shown={reportNumber(tab, q.data, metric, drillKey)}
           related={relatedNumbers(tab, q.data, metric, drillKey)}
           filters={params}
           filterText={filterText}
-          state={drillState}
-          onState={setDrillState}
+          state={drill.state}
+          onState={setState}
           onSelect={openDrill}
           onRefreshReport={() =>
             client.invalidateQueries({ queryKey: ["reports", tab] })
           }
           agents={agentList}
+          own={own}
           onClose={closeDrill}
         />
       )}

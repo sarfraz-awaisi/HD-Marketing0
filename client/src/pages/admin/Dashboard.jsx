@@ -1,6 +1,7 @@
+import { lazy, Suspense } from "react";
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   Users,
@@ -30,7 +31,21 @@ import {
 } from "../../components/dashboard/Widgets";
 import "../../styles/dashboard.css";
 import LeadReview from "../../components/sales/LeadReview";
-import { TeamCallActivity, MyCalls } from "../../components/sales/CallActivity";
+import {
+  TeamCallActivity,
+  MyCalls,
+  useCallActivity,
+} from "../../components/sales/CallActivity";
+import {
+  drillInfo,
+  relatedNumbers,
+  reportNumber,
+} from "../../lib/reportDrilldown";
+import { useDrillUrl } from "../../lib/useDrillUrl";
+// The records behind a dashboard number (update 051), loaded when opened.
+const ReportDrilldown = lazy(
+  () => import("../../components/reports/ReportDrilldown"),
+);
 // Working minutes as "2 h 15 min" (first-call speed counts working hours only).
 const workingTime = (minutes) =>
   minutes == null
@@ -89,6 +104,53 @@ function CurrentTargets() {
     </section>
   );
 }
+// The records behind a number opened from the dashboard (update 051): this
+// month's summary (the same figures as the summary report) or today's
+// calling. Administrators see everyone's records, agents only their own; the
+// server enforces both. Today's calling is already loaded by the page.
+function DashboardDrill({ drill, data, range, user, open, close, setState }) {
+  const admin = user.role === "admin";
+  const client = useQueryClient();
+  const activity = useCallActivity();
+  const report = drill.report === "today" ? "today" : "summary";
+  const team = Array.isArray(activity.data?.agents) ? activity.data.agents : [];
+  const names = Object.fromEntries([
+    [user.id, user.name],
+    ...team.map((a) => [a.agent_id, a.name]),
+  ]);
+  const numbers = report === "today" ? activity.data : data;
+  if (!numbers) return null;
+  return (
+    <Suspense fallback={null}>
+      <ReportDrilldown
+        key={[report, drill.metric, drill.rawKey].join("|")}
+        report={report}
+        metric={drill.metric}
+        drillKey={drill.key}
+        info={drillInfo(report, drill.metric, drill.key, names, !admin)}
+        shown={reportNumber(report, numbers, drill.metric, drill.key)}
+        related={relatedNumbers(report, numbers, drill.metric, drill.key)}
+        filters={range}
+        filterText={
+          report === "today"
+            ? "Today · Pakistan time"
+            : "This month · Pakistan time"
+        }
+        state={drill.state}
+        onState={setState}
+        onSelect={(metric, key) => open(metric, key, report)}
+        onRefreshReport={() =>
+          client.invalidateQueries({
+            queryKey: report === "today" ? ["call-activity"] : ["dashboard"],
+          })
+        }
+        agents={team.map((a) => ({ id: a.agent_id, name: a.name }))}
+        own={!admin}
+        onClose={close}
+      />
+    </Suspense>
+  );
+}
 export default function Dashboard() {
   const { user } = useAuth();
   const admin = user.role === "admin";
@@ -100,6 +162,10 @@ export default function Dashboard() {
     queryFn: ({ signal }) =>
       api("/dashboard?" + reportSearch(range), { signal }),
   });
+  // A number opened from this page; see DashboardDrill.
+  const { drill, open, close, setState } = useDrillUrl();
+  const openSummary = (metric) => open(metric, undefined, "summary");
+  const openToday = (metric, agent) => open(metric, agent, "today");
   const metrics = { ...snapshot, data: snapshot.data?.metrics };
   const followups = snapshot.data?.followups || [];
   const visits = snapshot.data?.visits || [];
@@ -164,6 +230,11 @@ export default function Dashboard() {
                 note={admin ? "Answered calls this month" : "Answered today"}
                 icon={Phone}
                 tone="green"
+                onOpen={() =>
+                  openSummary(
+                    admin ? "completed_calls" : "today_completed_calls",
+                  )
+                }
               />
               <KpiTile
                 label="Completed visits"
@@ -231,7 +302,16 @@ export default function Dashboard() {
                         {onTime == null ? "—" : `${onTime}%`}
                       </strong>
                       <small className="kpi-note">
-                        {`${d.on_time_first_calls ?? 0} of ${d.first_calls_with_deadline ?? 0} this month`}
+                        <button
+                          type="button"
+                          className="report-link"
+                          aria-label={`On-time first calls: ${d.on_time_first_calls ?? 0} of ${d.first_calls_with_deadline ?? 0}. Show the records`}
+                          onClick={() =>
+                            openSummary("first_calls_with_deadline")
+                          }
+                        >
+                          {`${d.on_time_first_calls ?? 0} of ${d.first_calls_with_deadline ?? 0} this month`}
+                        </button>
                       </small>
                     </div>
                   </div>
@@ -242,6 +322,7 @@ export default function Dashboard() {
                   note="Working hours · this month"
                   icon={Timer}
                   tone="gold"
+                  onOpen={() => openSummary("avg_first_call_minutes")}
                 />
               </div>
             </section>
@@ -329,10 +410,10 @@ export default function Dashboard() {
       {admin ? (
         <>
           <LeadReview />
-          <TeamCallActivity />
+          <TeamCallActivity onOpen={openToday} />
         </>
       ) : (
-        <MyCalls />
+        <MyCalls onOpen={openToday} />
       )}
       <div className="dash-cards fx-stagger">
         <section className="panel fx-card" aria-labelledby="attention-title">
@@ -447,6 +528,17 @@ export default function Dashboard() {
         )}
       </section>
       {!admin && <CurrentTargets />}
+      {drill.metric && (
+        <DashboardDrill
+          drill={drill}
+          data={d}
+          range={range}
+          user={user}
+          open={open}
+          close={close}
+          setState={setState}
+        />
+      )}
     </div>
   );
 }

@@ -89,8 +89,9 @@ export function crmRouter(db, options = {}) {
   router.use("/documents", documentsRouter(db));
   router.use(accountsRouter(db, options));
   router.use(securityRouter(db));
-  // Before the sales router's /reports/:type.
-  router.use("/reports/drilldown", adminOnly, reportDrilldownRouter(db));
+  // Before the sales router's /reports/:type. Administrators and agents
+  // (their own numbers, update 051); staff never reach it.
+  router.use("/reports/drilldown", reportDrilldownRouter(db));
   router.use(salesRouter(db));
   router.use("/attendance", attendanceRouter(db));
   router.use("/admin/attendance/shifts", adminOnly, shiftsAdminRouter(db));
