@@ -141,11 +141,31 @@ describe("call button and call dialog", () => {
           name: "Call " + baseLead.name,
         }),
       ).toBeInTheDocument();
-      expect(within(dialog).getByText("HD-000042")).toBeInTheDocument();
-      expect(within(dialog).getByText("DHA Phase 6")).toBeInTheDocument();
+      // Update 053: customer details, call information and qualification;
+      // no lead number, and WhatsApp beside Call.
+      for (const name of [
+        "Customer details",
+        "Call information",
+        "Lead qualification",
+      ])
+        expect(
+          within(dialog).getByRole("heading", { name }),
+        ).toBeInTheDocument();
+      expect(within(dialog).queryByText("HD-000042")).not.toBeInTheDocument();
+      expect(within(dialog).getByText(/DHA Phase 6/)).toBeInTheDocument();
+      expect(within(dialog).getByText(baseLead.phone)).toBeInTheDocument();
       expect(dialLink()).toHaveAttribute("href", "tel:" + baseLead.phone);
+      const whatsapp = within(dialog).getByRole("link", {
+        name: `WhatsApp ${baseLead.name} (opens in a new tab)`,
+      });
+      expect(whatsapp).toHaveAttribute("href", "https://wa.me/923001234567");
+      expect(whatsapp).toHaveAttribute("target", "_blank");
+      expect(whatsapp).toHaveAttribute("rel", "noopener noreferrer");
       expect(
-        within(dialog).getByText(/Microsoft Phone Link/),
+        within(dialog).queryByText(/Microsoft Phone Link/),
+      ).not.toBeInTheDocument();
+      expect(
+        within(dialog).getByRole("button", { name: "Cancel" }),
       ).toBeInTheDocument();
       for (const label of [
         "Call connected?",

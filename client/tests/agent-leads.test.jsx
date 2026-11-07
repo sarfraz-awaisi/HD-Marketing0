@@ -21,12 +21,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "../src/App";
 import { ToastProvider } from "../src/components/common/UI";
 import OutcomeForm from "../src/components/calls/OutcomeForm";
+import { whatsappLink } from "../src/lib/whatsapp";
 import {
   agentNavigation,
   adminNavigation,
   breadcrumb,
 } from "../src/components/layout/navigation";
-// Update 052: an agent's Assigned leads and Lead pipeline. API responses are
+// Updates 052 and 053: an agent's Assigned leads and Lead pipeline. API responses are
 // mocked; the server tests check the database's search, filters and access.
 const mocks = vi.hoisted(() => ({ api: vi.fn(), user: null }));
 vi.mock("../src/context/AuthContext", () => ({
@@ -53,12 +54,17 @@ const row = (n, extra = {}) => ({
   status: "contacted",
   source: "CSV",
   import_id: file,
-  file_row: n,
+  file_row: 400 + n,
   file_name: "Lahore buyers.csv",
   contact: "contacted",
   last_contact_at: "2026-11-05T10:00:00Z",
   last_contact_outcome: "Interested",
+  last_call_at: "2026-11-05T10:00:00Z",
+  last_call_outcome: "Interested",
+  last_call_connected: true,
   temperature: null,
+  note: null,
+  note_at: null,
   next_followup_at: null,
   created_at: "2026-11-01T10:00:00Z",
   ...extra,
@@ -88,16 +94,21 @@ beforeEach(() => {
   mocks.api.mockImplementation(async (path) => {
     if (path.startsWith("/my-leads?")) {
       const q = new URLSearchParams(path.split("?")[1]);
-      const data = leads.filter(
+      const search = (q.get("search") || "").toLowerCase();
+      const matched = leads.filter(
         (l) =>
-          (!q.get("search") || q.get("search") === "#" + l.file_row) &&
-          (!q.get("status") || l.status === q.get("status")) &&
+          (!search ||
+            l.name.toLowerCase().includes(search) ||
+            l.phone.includes(search)) &&
+          (!q.get("outcome") || l.last_call_outcome === q.get("outcome")) &&
           (!q.get("temperature") ||
             (l.temperature || "none") === q.get("temperature")),
       );
+      const page = Number(q.get("page")) || 1;
       return {
-        data,
-        count: data.length,
+        data: matched.slice((page - 1) * 20, page * 20),
+        count: matched.length,
+        page,
         limit: 20,
         ...(q.get("view") === "pipeline" ? { temperatures: counts } : {}),
       };
@@ -173,63 +184,78 @@ describe("the agent's My leads menu", () => {
   });
 });
 
+const cells = (table, column) =>
+  within(table)
+    .getAllByRole("row")
+    .slice(1)
+    .map((r) => within(r).getAllByRole("cell")[column].textContent);
+
 describe("Assigned leads", () => {
-  it("shows each lead's fixed # and no status, lost-reason or HD-number columns", async () => {
+  it("numbers rows 1, 2, 3 by position, page after page, with only the columns for calling", async () => {
+    const user = userEvent.setup();
+    leads = Array.from({ length: 23 }, (_, i) => row(i + 1));
     open(`/leads?import_id=${file}`);
     const table = await screen.findByRole("table");
-    expect(within(table).getAllByRole("columnheader")[0]).toHaveTextContent(
-      "#",
-    );
-    const rows = within(table).getAllByRole("row").slice(1);
     expect(
-      rows.map((r) => within(r).getAllByRole("cell")[0].textContent),
-    ).toEqual(["1", "15", "22"]);
-    expect(screen.queryByLabelText("Filter by status")).toBe(null);
-    expect(screen.queryByLabelText("Filter by lost reason")).toBe(null);
-    expect(screen.queryByRole("columnheader", { name: "Lead number" })).toBe(
-      null,
+      within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual([
+      "#",
+      "Customer",
+      "Phone",
+      "First call",
+      "Last contact",
+      "Actions",
+    ]);
+    expect(cells(table, 0).slice(0, 3)).toEqual(["1", "2", "3"]);
+    expect(within(table).queryByText(/Lahore buyers.csv/)).toBe(null);
+    expect(within(table).queryByText(/HD-0009/)).toBe(null);
+    expect(within(table).queryByText("401")).toBe(null);
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await waitFor(() =>
+      expect(cells(screen.getByRole("table"), 0)).toEqual(["21", "22", "23"]),
     );
-    expect(screen.queryByText(/HD-000901/)).toBe(null);
-    expect(screen.getByLabelText("Filter by source")).toBeInTheDocument();
+    for (const label of [
+      "Filter by status",
+      "Filter by lost reason",
+      "Filter by source",
+      "Sort leads",
+    ])
+      expect(screen.queryByLabelText(label)).toBe(null);
     expect(screen.getByLabelText("Filter by first call")).toBeInTheDocument();
-    expect(screen.getByLabelText("Sort leads")).toHaveValue("file");
     expect(screen.getByLabelText("Search leads")).toHaveAttribute(
       "placeholder",
-      "Search by name, phone or #…",
+      "Search by name or phone number…",
     );
-    expect(listCalls()[0]).toEqual({
-      view: "assigned",
-      page: "1",
-      import_id: file,
-    });
   });
-  it("searches every page by #, keeps the search when a lead is opened and closed, and resets", async () => {
+  it("numbers search results from 1, keeps the search when a lead is opened and closed, and resets", async () => {
     const user = userEvent.setup();
     open(`/leads?import_id=${file}`);
     await screen.findByRole("table");
-    await user.type(screen.getByLabelText("Search leads"), "#15");
+    await user.type(screen.getByLabelText("Search leads"), "customer 2#");
     await waitFor(() =>
       expect(listCalls().at(-1)).toMatchObject({
-        search: "#15",
+        search: "customer 2",
         import_id: file,
       }),
     );
-    expect(
-      await screen.findByRole("button", { name: "Remove filter Search: #15" }),
-    ).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.queryByRole("link", { name: /Customer 1\b/ })).toBe(null),
+      expect(cells(screen.getByRole("table"), 1)).toEqual([
+        expect.stringContaining("Customer 22"),
+      ]),
     );
-    await user.click(screen.getByRole("link", { name: /Customer 15/ }));
+    expect(cells(screen.getByRole("table"), 0)).toEqual(["1"]);
+    await user.click(
+      screen.getByRole("link", { name: "View details for Customer 22" }),
+    );
     await user.click(
       await screen.findByRole("link", { name: /Back to leads/ }),
     );
-    expect(await screen.findByLabelText("Search leads")).toHaveValue("#15");
-    expect(listCalls().at(-1)).toMatchObject({ search: "#15" });
-    await user.click(screen.getByRole("button", { name: "Reset filters" }));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Search leads")).toHaveValue(""),
+    expect(await screen.findByLabelText("Search leads")).toHaveValue(
+      "customer 2",
     );
+    await user.click(screen.getByRole("button", { name: "Reset filters" }));
     await waitFor(() =>
       expect(listCalls().at(-1)).toEqual({
         view: "assigned",
@@ -238,105 +264,141 @@ describe("Assigned leads", () => {
       }),
     );
   });
-  it("shows the file beside # when listing every file", async () => {
+  it("finds Number off leads by their last call, and shows each lead's last contact", async () => {
+    const user = userEvent.setup();
     leads = [
-      row(3),
-      row(7, { import_id: null, file_row: null, file_name: null }),
+      row(1, {
+        contact: "attempted",
+        last_contact_at: null,
+        last_call_outcome: "Number off",
+        last_call_connected: false,
+      }),
+      row(2, { last_call_at: null, last_call_outcome: null, contact: "none" }),
     ];
     open("/leads?view=all");
     const table = await screen.findByRole("table");
-    const first = within(table).getAllByRole("row")[1];
-    expect(within(first).getAllByRole("cell")[0]).toHaveTextContent(
-      "3Lahore buyers.csv",
+    expect(cells(table, 4)[0]).toMatch(/^Number off/);
+    expect(cells(table, 4)[1]).toBe("Not called yet");
+    await user.selectOptions(
+      screen.getByLabelText("Filter by last call"),
+      "Number off",
     );
-    const second = within(table).getAllByRole("row")[2];
-    expect(within(second).getAllByRole("cell")[0]).toHaveTextContent(
-      "—No file",
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toEqual({
+        view: "assigned",
+        page: "1",
+        outcome: "Number off",
+      }),
     );
-    expect(screen.getByLabelText("Sort leads")).toHaveValue("activity");
+    expect(
+      await screen.findByRole("button", {
+        name: "Remove filter Last call: Number off",
+      }),
+    ).toBeInTheDocument();
   });
 });
 
 describe("Lead pipeline", () => {
-  it("filters by status and temperature together, from the menu or the counts", async () => {
+  it("filters by temperature and the latest call's outcome together, with no status filter", async () => {
     const user = userEvent.setup();
     leads = [
-      row(1, { status: "interested", temperature: "hot" }),
-      row(2, { status: "interested", temperature: null }),
-      row(3, { status: "won", temperature: "hot" }),
+      row(1, { temperature: "hot" }),
+      row(2, {
+        temperature: "hot",
+        last_call_at: "2026-11-06T10:00:00Z",
+        last_call_outcome: "Number off",
+        last_call_connected: false,
+      }),
+      row(3, { temperature: null }),
     ];
     open("/leads/pipeline");
     expect(
       await screen.findByRole("heading", { name: "Lead pipeline" }),
     ).toBeInTheDocument();
-    const summary = await screen.findByRole("group", {
+    expect(screen.queryByLabelText("Filter by status")).toBe(null);
+    expect(screen.queryByLabelText("Sort leads")).toBe(null);
+    const outcome = screen.getByLabelText("Filter by call outcome");
+    expect([...outcome.options].map((o) => o.textContent)).toEqual([
+      "All outcomes",
+      "No answer",
+      "Busy",
+      "Wrong number",
+      "Number off",
+      "Interested",
+      "Not interested",
+      "Follow-up required",
+      "Site visit scheduled",
+      "Deal discussion",
+    ]);
+    const table = await screen.findByRole("table");
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent),
+    ).toEqual([
+      "#",
+      "Customer",
+      "Phone",
+      "Temperature",
+      "Agent notes",
+      "Latest contact",
+      "Next follow-up",
+      "Details",
+    ]);
+    expect(cells(table, 0)).toEqual(["1", "2", "3"]);
+    const summary = screen.getByRole("group", {
       name: "Pipeline leads by temperature",
     });
-    expect(
-      within(summary)
-        .getAllByRole("button")
-        .map((b) => b.textContent),
-    ).toEqual(["🔥 Hot1", "🌤️ Warm0", "❄️ Cold0", "Not recorded yet2"]);
-    expect(
-      [...screen.getByLabelText("Filter by status").options].map(
-        (o) => o.textContent,
-      ),
-    ).toEqual([
-      "All statuses",
-      "New",
-      "Contacted",
-      "Interested",
-      "Site visit scheduled",
-      "Visit done",
-      "Negotiation",
-      "Won (booked)",
-      "Lost",
-    ]);
-    expect(
-      [...screen.getByLabelText("Filter by temperature").options].map(
-        (o) => o.textContent,
-      ),
-    ).toEqual([
-      "All temperatures",
-      "🔥 Hot",
-      "🌤️ Warm",
-      "❄️ Cold",
-      "Not recorded yet",
-    ]);
-    await user.selectOptions(
-      screen.getByLabelText("Filter by status"),
-      "interested",
-    );
     await user.click(within(summary).getByRole("button", { name: /Hot/ }));
+    await user.selectOptions(outcome, "Number off");
     await waitFor(() =>
       expect(listCalls().at(-1)).toEqual({
         view: "pipeline",
         page: "1",
-        status: "interested",
         temperature: "hot",
+        outcome: "Number off",
       }),
     );
-    expect(
-      within(summary).getByRole("button", { name: /Hot/ }),
-    ).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Filter by temperature")).toHaveValue("hot");
-    const table = await screen.findByRole("table");
     await waitFor(() =>
-      expect(within(table).getAllByRole("row")).toHaveLength(2),
+      expect(cells(screen.getByRole("table"), 1)).toEqual([
+        expect.stringContaining("Customer 2"),
+      ]),
     );
-    expect(within(table).getByText("Customer 1")).toBeInTheDocument();
-    expect(within(table).getByText("Hot")).toBeInTheDocument();
+    expect(cells(screen.getByRole("table"), 0)).toEqual(["1"]);
+    expect(cells(screen.getByRole("table"), 5)[0]).toContain(
+      "Later call: Number off",
+    );
+    // Leads never reached are found in Assigned leads.
     expect(
-      within(table).getByRole("link", { name: "View details for Customer 1" }),
-    ).toHaveAttribute("href", "/leads/" + row(1).id);
-    await user.selectOptions(screen.getByLabelText("Filter by status"), "lost");
-    expect(
-      await screen.findByText(/No pipeline leads match these filters/),
-    ).toBeInTheDocument();
+      screen.getByRole("link", {
+        name: "Assigned leads (last call: Number off)",
+      }),
+    ).toHaveAttribute("href", "/leads?view=all&outcome=Number%20off");
     await user.click(screen.getByRole("button", { name: "Reset filters" }));
     await waitFor(() =>
       expect(listCalls().at(-1)).toEqual({ view: "pipeline", page: "1" }),
     );
+  });
+  it("shows each lead's latest agent note, two lines at first, or says there is none", async () => {
+    const user = userEvent.setup();
+    const long =
+      "Wants a 10 marla house in DHA Phase 6, close to the school; budget can stretch if the corner plot is available next month.";
+    leads = [
+      row(1, { note: long, note_at: "2026-11-05T11:00:00Z" }),
+      row(2, { note: "Call after Friday", note_at: "2026-11-05T09:00:00Z" }),
+      row(3),
+    ];
+    open("/leads/pipeline");
+    const table = await screen.findByRole("table");
+    expect(cells(table, 4)[1]).toMatch(/^Call after Friday/);
+    expect(cells(table, 4)[2]).toBe("No notes yet");
+    const more = within(table).getByRole("button", { name: "Read more" });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    await user.click(more);
+    expect(
+      within(table).getByRole("button", { name: "Show less" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(within(table).getByText(long)).toHaveClass("open");
   });
   it("explains an empty pipeline", async () => {
     leads = [];
@@ -360,6 +422,24 @@ describe("Lead pipeline", () => {
     );
     expect(listCalls()).toHaveLength(0);
   });
+});
+
+describe("WhatsApp links", () => {
+  it.each([
+    ["+923001234567", "923001234567"],
+    ["923001234567", "923001234567"],
+    ["03001234567", "923001234567"],
+    ["0300-1234567", "923001234567"],
+    ["0092 300 1234567", "923001234567"],
+    ["3001234567", "923001234567"],
+    ["+971501234567", "971501234567"],
+  ])("opens a chat with %s", (phone, number) => {
+    expect(whatsappLink(phone)).toBe("https://wa.me/" + number);
+  });
+  it.each([null, "", "12345", "+92 0300 1234567", "0300 123 abc", "+1"])(
+    "gives no link for %s",
+    (phone) => expect(whatsappLink(phone)).toBe(null),
+  );
 });
 
 describe("the call's lead temperature", () => {
@@ -397,6 +477,23 @@ describe("the call's lead temperature", () => {
     expect(
       screen.getByRole("group", { name: "Lead temperature" }),
     ).toBeInTheDocument();
+  });
+  it("offers Number off only for a call that did not connect", async () => {
+    const user = userEvent.setup();
+    form({ onSave: vi.fn(), manual: true });
+    const options = () =>
+      [...screen.getByLabelText("Call outcome").options].map(
+        (o) => o.textContent,
+      );
+    expect(options()).not.toContain("Number off");
+    await user.selectOptions(screen.getByLabelText("Call connected?"), "no");
+    expect(options()).toEqual([
+      "Select an outcome",
+      "No answer",
+      "Busy",
+      "Wrong number",
+      "Number off",
+    ]);
   });
   it("keeps a call's other saved tags when its temperature changes", async () => {
     const onSave = vi.fn();

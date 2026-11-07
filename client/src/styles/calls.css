@@ -1,0 +1,199 @@
+/* The call form (update 053): customer details, call information and lead
+   qualification, each in its own card, with Cancel and Save at the end. */
+dialog.call-dialog {
+  width: min(680px, calc(100% - 32px));
+}
+.call-form > fieldset {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.call-section {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.call-section > h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.call-section label:last-child,
+.call-section .temperature-picker:last-child {
+  margin-bottom: 0;
+}
+/* Customer details: who, the number, and the two ways to reach them. */
+.call-customer {
+  background: var(--surface-muted);
+}
+.call-customer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.call-customer-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.call-customer-who > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.call-customer-who b {
+  font-size: var(--text-md);
+  color: var(--ink);
+}
+.call-customer-phone {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.call-customer-who small {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+.call-customer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.button.call-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 18px;
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-decoration: none;
+  color: #fff;
+}
+.button.call-action-phone {
+  border-color: var(--brand-navy);
+  background: var(--brand-navy);
+}
+.button.call-action-phone:hover {
+  background: var(--brand-navy-800);
+}
+/* WhatsApp's own green, darkened to keep white text readable. */
+.button.call-action-whatsapp {
+  border-color: #128c4a;
+  background: #128c4a;
+}
+.button.call-action-whatsapp:hover {
+  background: #0e733c;
+}
+.button.call-action:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}
+.call-action-unavailable {
+  align-self: center;
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+}
+.call-customer .call-dialer-live,
+.call-dialer-ended {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.call-dialer-ended {
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+/* Call information: two columns, one on a phone. */
+.call-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--space-4);
+}
+.call-section .notice {
+  margin: 0 0 var(--space-3);
+}
+.call-duration {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 var(--space-2);
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+.call-duration legend {
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.call-duration label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.call-duration label input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.call-duration label span {
+  flex: none;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-weight: 500;
+  white-space: nowrap;
+}
+/* Inside its section the temperature choice needs no second border. */
+.call-section .temperature-picker {
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+.call-section .temperature-picker legend {
+  margin-bottom: 6px;
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.call-duration .field-error {
+  grid-column: 1 / -1;
+}
+.call-form-actions {
+  position: sticky;
+  bottom: -24px;
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin: 0 -24px -24px;
+  padding: var(--space-3) 24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+@media (max-width: 560px) {
+  .call-grid {
+    grid-template-columns: 1fr;
+  }
+  .call-customer-actions,
+  .button.call-action {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .call-form-actions > * {
+    flex: 1 1 0;
+  }
+}

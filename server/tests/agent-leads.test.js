@@ -4,9 +4,10 @@ import { callOutcome, manualCall } from "../src/utils/validators.js";
 import { createApp } from "../src/app.js";
 import { trustedMfaFixture } from "./trusted-mfa-fixture.js";
 import { resetPeople, startCrmDatabase } from "./crm-fixture.js";
-// Update 052: an agent's Assigned leads and Lead pipeline. Each file lead
-// keeps a fixed number (#); search, filters, counts and pages are worked out
-// in the database; agents see only the leads assigned to them now.
+// Updates 052 and 053: an agent's Assigned leads and Lead pipeline. Search,
+// filters, counts and pages are worked out in the database; agents see only
+// the leads assigned to them now, and only their own notes. File leads keep
+// their import order.
 const admin = "52000000-0000-4000-8000-000000000001",
   ali = "52000000-0000-4000-8000-000000000002",
   sara = "52000000-0000-4000-8000-000000000003",
@@ -173,11 +174,11 @@ describe("file numbers (#)", () => {
     expect(after[a.leads[1]]).toBeUndefined();
     for (const id of [a.leads[0], a.leads[2], a.leads[3]])
       expect(after[id]).toBe(before[id]);
-    // Ali sees his own leads with their numbers; Sara sees #3.
+    // The file order stays: Ali's leads come as #1 and #4, Sara's as #3.
     expect((await list({ import: a.id })).data.map((r) => r.file_row)).toEqual([
       1, 4,
     ]);
-    const saras = await list({ search: "#3" }, sara);
+    const saras = await list({ import: a.id }, sara);
     expect(saras.data.map((r) => [r.file_row, r.name])).toEqual([[3, "Chand"]]);
   });
   it("gives no number to a lead added without a file", async () => {
@@ -192,30 +193,20 @@ describe("file numbers (#)", () => {
 });
 
 describe("Assigned leads", () => {
-  it("finds a lead by # on any page, and by name or contact number in any format", async () => {
+  it("searches every page by name or contact number only (update 053)", async () => {
     const names = Array.from({ length: 25 }, (_, i) => `Customer ${i + 1}`);
     const file = await importFile("Big file.csv", names);
     const page2 = await list({ import: file.id, page: 2 });
     expect(page2.count).toBe(25);
-    expect(page2.data.map((r) => r.file_row)).toEqual([21, 22, 23, 24, 25]);
-    for (const search of ["#22", "# 22", "22"]) {
-      const r = await list({ import: file.id, search });
-      expect(r.count, search).toBe(1);
-      expect(r.data[0]).toMatchObject({ file_row: 22, name: "Customer 22" });
-    }
-    // A # is never matched against contact numbers, which all contain 0 and 2.
-    for (const [search, row] of [
-      ["#2", 2],
-      ["10", 10],
-      ["#20", 20],
-    ]) {
-      const r = await list({ search });
-      expect(
-        r.data.map((lead) => lead.file_row),
-        search,
-      ).toEqual([row]);
-    }
-    // Customer 22 has +923005500022.
+    expect(page2.data.map((r) => r.name)).toEqual([
+      "Customer 21",
+      "Customer 22",
+      "Customer 23",
+      "Customer 24",
+      "Customer 25",
+    ]);
+    // Customer 22 has +923005500022: found on page 1 in any common format,
+    // or by its last digits.
     for (const search of [
       "03005500022",
       "0300-5500022",
@@ -223,6 +214,7 @@ describe("Assigned leads", () => {
       "00923005500022",
       "3005500022",
       "5500022",
+      "0022",
     ]) {
       const r = await list({ search });
       expect(
@@ -231,11 +223,15 @@ describe("Assigned leads", () => {
       ).toEqual(["Customer 22"]);
     }
     expect((await list({ search: "customer 1" })).count).toBe(11);
+    expect((await list({ search: "CUSTOMER 2" })).count).toBe(7);
+    // No more # or HD numbers: they are only names that match nobody.
     const lead = await one("select lead_no from leads where name='Customer 7'");
-    expect(
-      (await list({ search: `HD-${String(lead.lead_no).padStart(6, "0")}` }))
-        .data[0].name,
-    ).toBe("Customer 7");
+    for (const search of [
+      "#22",
+      "# 22",
+      `HD-${String(lead.lead_no).padStart(6, "0")}`,
+    ])
+      expect((await list({ search })).count, search).toBe(0);
     expect((await list({ search: "nobody" })).count).toBe(0);
     expect((await list({ search: "100%_\\" })).count).toBe(0);
   });
@@ -246,7 +242,7 @@ describe("Assigned leads", () => {
     const mine = await list({ search: "Shared" });
     expect(mine.count).toBe(1);
     expect(mine.data[0].assigned_agent).toBe(ali);
-    for (const search of ["#1", "+923005500001", "5500001"])
+    for (const search of ["+923005500001", "5500001"])
       expect((await list({ search })).count, search).toBe(0);
   });
   it("keeps the source and first-call filters, and tells contacted, attempted and never contacted apart", async () => {
@@ -402,6 +398,162 @@ describe("Lead pipeline", () => {
     expect((await list({ view: "pipeline", temperature: "hot" })).count).toBe(
       0,
     );
+  });
+});
+
+describe("call outcomes and agents' notes (update 053)", () => {
+  const names = async (query) =>
+    (await everything(query)).rows.map((r) => r.name).sort();
+  it("filters by the latest call's outcome, and Number off never puts a lead in the pipeline", async () => {
+    const off = await newLead({ name: "Never reached" });
+    const later = await newLead({ name: "Spoke, then off" });
+    const spoke = await newLead({ name: "Spoke" });
+    await call(off, { status: "failed", outcome: "Number off", at: ago(30) });
+    await call(later, { at: ago(60), tags: ["Hot lead"] });
+    await call(later, { status: "failed", outcome: "Number off", at: ago(20) });
+    await call(spoke, { at: ago(10), outcome: "Not interested" });
+    expect(await names({ view: "pipeline" })).toEqual([
+      "Spoke",
+      "Spoke, then off",
+    ]);
+    expect(await names({ view: "pipeline", outcome: "Number off" })).toEqual([
+      "Spoke, then off",
+    ]);
+    expect(
+      await names({
+        view: "pipeline",
+        outcome: "Number off",
+        temperature: "hot",
+      }),
+    ).toEqual(["Spoke, then off"]);
+    expect(
+      await names({ view: "pipeline", outcome: "Not interested" }),
+    ).toEqual(["Spoke"]);
+    // Assigned leads finds every lead whose latest call found the number off.
+    expect(await names({ outcome: "Number off" })).toEqual([
+      "Never reached",
+      "Spoke, then off",
+    ]);
+    expect((await list({ search: "Never reached" })).data[0]).toMatchObject({
+      contact: "attempted",
+      last_call_outcome: "Number off",
+      last_call_connected: false,
+      last_contact_at: null,
+    });
+    expect((await list({ outcome: "Off" }).catch((e) => e)).code).toBe("22023");
+  });
+  it("records Number off only for a call that did not connect", async () => {
+    const lead = await newLead({ name: "Switched off" });
+    const data = (change) => ({
+      answered: false,
+      started_at: ago(5),
+      duration_seconds: 0,
+      outcome: "Number off",
+      notes: "",
+      deal_tags: [],
+      ...change,
+    });
+    expect(manualCall("agent").safeParse(data()).success).toBe(true);
+    expect(
+      manualCall("agent").safeParse(
+        data({ answered: true, duration_seconds: 60 }),
+      ).error.issues[0].message,
+    ).toBe("Number off is for a call that did not connect");
+    const saved = await rpc("log_manual_call", {
+      p_lead: lead,
+      p_actor: ali,
+      p_data: data(),
+      p_request: "fixture",
+    });
+    expect(saved).toMatchObject({
+      outcome: "Number off",
+      status: "failed",
+      answered: false,
+    });
+    expect(
+      (await one("select status from leads where id=$1", [lead])).status,
+    ).toBe("new");
+    await expect(
+      rpc("log_manual_call", {
+        p_lead: lead,
+        p_actor: ali,
+        p_data: data({ answered: true, duration_seconds: 60 }),
+        p_request: "fixture",
+      }),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      pg.query(
+        "update calls set answered=true,status='completed',duration_seconds=60,ended_at=started_at+interval '60 seconds' where id=$1",
+        [saved.id],
+      ),
+    ).rejects.toThrow(/calls_manual_values_check/);
+    expect((await list({ view: "pipeline" })).count).toBe(0);
+  });
+  it("shows only notes the agent wrote, by the audit log, from a lead note or a call", async () => {
+    const lead = await newLead({ name: "Noted" });
+    await newLead({ name: "Quiet" });
+    const mutate = (actor, data) =>
+      rpc("crm_mutate", {
+        p_table: "notes",
+        p_id: null,
+        p_data: data,
+        p_actor: actor,
+        p_request: "fixture",
+      });
+    // A note or call is written now, then dated back, as if written then.
+    const note = async (actor, body, minutes, on = lead) => {
+      const saved = await mutate(actor, { lead_id: on, body });
+      await pg.query(
+        "update notes set created_at=now()-make_interval(mins=>$2) where id=$1",
+        [saved.id, minutes],
+      );
+    };
+    const callNote = async (actor, notes, minutes) => {
+      const saved = await rpc("log_manual_call", {
+        p_lead: lead,
+        p_actor: actor,
+        p_data: {
+          answered: true,
+          started_at: ago(minutes),
+          duration_seconds: 60,
+          outcome: "Interested",
+          notes,
+          deal_tags: [],
+        },
+        p_request: "fixture",
+      });
+      await pg.query(
+        "update calls set created_at=now()-make_interval(mins=>$2) where id=$1",
+        [saved.id, minutes],
+      );
+    };
+    const noteOf = async (name) => (await list({ search: name })).data[0];
+    expect(await noteOf("Quiet")).toMatchObject({ note: null, note_at: null });
+    await note(ali, "Wants a corner plot", 90);
+    expect((await noteOf("Noted")).note).toBe("Wants a corner plot");
+    await callNote(ali, "Call back after Friday prayers", 60);
+    await callNote(ali, "   ", 50);
+    expect((await noteOf("Noted")).note).toBe("Call back after Friday prayers");
+    // An administrator's note and call on Ali's lead are filed under Ali,
+    // but Ali wrote neither, so neither shows in his list.
+    await note(admin, "Owner's private remark", 10);
+    await callNote(admin, "Owner's call note", 5);
+    const row = await noteOf("Noted");
+    expect(row.note).toBe("Call back after Friday prayers");
+    expect(Date.parse(row.note_at)).toBeLessThan(Date.now() - 55 * 60000);
+    // Sara's note from before the lead became Ali's stays hers.
+    const moved = await newLead({ owner: sara, name: "Handed over" });
+    await note(sara, "Sara's private remark", 30, moved);
+    await pg.query("update leads set assigned_agent=$2 where id=$1", [
+      moved,
+      ali,
+    ]);
+    expect(await noteOf("Handed over")).toMatchObject({ note: null });
+    await note(ali, "Visit booked for Sunday", 2);
+    expect((await noteOf("Noted")).note).toBe("Visit booked for Sunday");
+    expect(
+      (await list({ view: "pipeline" })).data.map((r) => [r.name, r.note]),
+    ).toEqual([["Noted", "Visit booked for Sunday"]]);
   });
 });
 

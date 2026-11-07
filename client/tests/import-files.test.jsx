@@ -166,7 +166,8 @@ beforeEach(() => {
               lead.assigned_agent === mocks.auth.user.id) &&
             (!q.get("import_id") || lead.import_id === q.get("import_id")) &&
             (!q.get("status") || lead.status === q.get("status")) &&
-            (!q.get("source") || lead.source === q.get("source")),
+            (!q.get("source") || lead.source === q.get("source")) &&
+            (!q.get("outcome") || lead.last_call_outcome === q.get("outcome")),
         ),
         count: leads.length,
       };
@@ -324,7 +325,9 @@ describe("file assignment screens", () => {
     ).not.toBeInTheDocument();
     await user.click(file);
     expect(
-      await screen.findByRole("link", { name: /Lahore customer/ }),
+      await screen.findByRole("link", {
+        name: "View details for Lahore customer",
+      }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("link", { name: /Karachi customer/ }),
@@ -342,9 +345,12 @@ describe("file assignment screens", () => {
           new URLSearchParams(path.split("?")[1]).get("import_id") === first,
       ),
     ).toBe(true);
-    // Assigned leads keeps the source filter (update 052); every request
+    // Assigned leads filters by the last call (update 053); every request
     // stays within the file.
-    await user.selectOptions(screen.getByLabelText("Filter by source"), "Meta");
+    await user.selectOptions(
+      screen.getByLabelText("Filter by last call"),
+      "Number off",
+    );
     await screen.findByText(/No leads match your search or filters/);
     expect(
       mocks.api.mock.calls
@@ -357,7 +363,9 @@ describe("file assignment screens", () => {
     await user.click(screen.getByRole("link", { name: /Assigned files/ }));
     await user.click(await screen.findByRole("link", { name: "All my leads" }));
     expect(
-      await screen.findByRole("link", { name: /Individual customer/ }),
+      await screen.findByRole("link", {
+        name: "View details for Individual customer",
+      }),
     ).toBeInTheDocument();
   });
   it("paginates file history and resets to page one when searching", async () => {

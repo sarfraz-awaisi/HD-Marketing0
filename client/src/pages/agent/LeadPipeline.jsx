@@ -6,11 +6,13 @@ import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
 import { useUrlFilters } from "../../lib/useUrlFilters";
-import { followUpNotice } from "../../lib/calls";
-import { statuses, statusLabel } from "../../lib/pipeline";
+import {
+  callOutcomes,
+  followUpNotice,
+  unansweredOutcomes,
+} from "../../lib/calls";
 import { temperatures, temperatureText } from "../../lib/temperature";
 import {
-  Badge,
   ErrorBox,
   Loader,
   Pagination,
@@ -22,19 +24,16 @@ import CallDialog from "../../components/calls/CallDialog";
 import { ActiveFilters, LeadSearch } from "../../components/leads/LeadSearch";
 import {
   CustomerCell,
-  FileNumber,
+  DetailsLink,
   FollowUpCell,
+  NoteCell,
   TemperatureBadge,
 } from "../../components/leads/LeadCells";
-// Lead pipeline (update 052): the agent's own leads with an answered call,
-// whatever their status now. Status, temperature and search work together
-// in the database, across every page.
-const sorts = {
-  contact: "Latest contact",
-  followup: "Next follow-up",
-  activity: "Recent activity",
-  temperature: "Hottest first",
-};
+// Lead pipeline (updates 052 and 053): the agent's own leads with an
+// answered call, latest contact first. Search, temperature and the latest
+// call's outcome work together in the database, across every page. A
+// lead whose calls never connected (Number off, say) is never here; it is
+// found in Assigned leads.
 const temperatureChoices = [
   ...temperatures.map((t) => [t.value, `${t.emoji} ${t.label}`]),
   ["none", "Not recorded yet"],
@@ -45,13 +44,7 @@ export default function LeadPipeline() {
     qc = useQueryClient(),
     toast = useToast();
   const back = location.pathname + location.search;
-  const [f, change] = useUrlFilters([
-    "q",
-    "status",
-    "temperature",
-    "sort",
-    "page",
-  ]);
+  const [f, change] = useUrlFilters(["q", "temperature", "outcome", "page"]);
   const [dialLead, setDialLead] = useState(null);
   const page = Math.max(1, Number(f.page) || 1);
   const set = (values) => change({ ...values, page: null });
@@ -59,9 +52,8 @@ export default function LeadPipeline() {
     view: "pipeline",
     page,
     ...(f.q ? { search: f.q } : {}),
-    ...(f.status ? { status: f.status } : {}),
     ...(f.temperature ? { temperature: f.temperature } : {}),
-    ...(f.sort ? { sort: f.sort } : {}),
+    ...(f.outcome ? { outcome: f.outcome } : {}),
   });
   const q = useQuery({
     queryKey: ["my-leads", user.id, params.toString()],
@@ -72,9 +64,6 @@ export default function LeadPipeline() {
   });
   const filters = [
     ...(f.q ? [[`Search: ${f.q}`, () => set({ q: null })]] : []),
-    ...(f.status
-      ? [[`Status: ${statusLabel(f.status)}`, () => set({ status: null })]]
-      : []),
     ...(f.temperature
       ? [
           [
@@ -83,18 +72,12 @@ export default function LeadPipeline() {
           ],
         ]
       : []),
-    ...(f.sort
-      ? [[`Sorted by ${sorts[f.sort]}`, () => set({ sort: null })]]
+    ...(f.outcome
+      ? [[`Latest call: ${f.outcome}`, () => set({ outcome: null })]]
       : []),
   ];
   const reset = () =>
-    change({
-      q: null,
-      status: null,
-      temperature: null,
-      sort: null,
-      page: null,
-    });
+    change({ q: null, temperature: null, outcome: null, page: null });
   const counts = q.data?.temperatures;
   return (
     <>
@@ -103,8 +86,7 @@ export default function LeadPipeline() {
           <span className="eyebrow">LEADS YOU HAVE SPOKEN TO</span>
           <h1>Lead pipeline</h1>
           <p>
-            Every lead of yours with an answered call. Plan your next calls by
-            status and temperature.
+            Every lead of yours with an answered call, latest contact first.
           </p>
         </div>
         <div className="actions">
@@ -139,18 +121,6 @@ export default function LeadPipeline() {
         <div className="toolbar lead-toolbar">
           <LeadSearch value={f.q} onSearch={(q) => set({ q })} />
           <select
-            aria-label="Filter by status"
-            value={f.status}
-            onChange={(e) => set({ status: e.target.value })}
-          >
-            <option value="">All statuses</option>
-            {statuses.map((s) => (
-              <option key={s} value={s}>
-                {statusLabel(s)}
-              </option>
-            ))}
-          </select>
-          <select
             aria-label="Filter by temperature"
             value={f.temperature}
             onChange={(e) => set({ temperature: e.target.value })}
@@ -163,18 +133,31 @@ export default function LeadPipeline() {
             ))}
           </select>
           <select
-            aria-label="Sort leads"
-            value={f.sort || "contact"}
-            onChange={(e) => set({ sort: e.target.value })}
+            aria-label="Filter by call outcome"
+            value={f.outcome}
+            onChange={(e) => set({ outcome: e.target.value })}
           >
-            {Object.entries(sorts).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
+            <option value="">All outcomes</option>
+            {callOutcomes.map((o) => (
+              <option key={o} value={o}>
+                {o}
               </option>
             ))}
           </select>
         </div>
         <ActiveFilters items={filters} onReset={reset} />
+        {unansweredOutcomes.includes(f.outcome) && (
+          <p className="pipeline-hint" role="note">
+            These are leads you have spoken to before whose latest call was{" "}
+            {f.outcome}. Leads never reached are in{" "}
+            <Link
+              to={`/leads?view=all&outcome=${encodeURIComponent(f.outcome)}`}
+            >
+              Assigned leads (last call: {f.outcome})
+            </Link>
+            .
+          </p>
+        )}
         <ErrorBox error={q.error} />
         {q.isPending ? (
           <Loader />
@@ -183,7 +166,6 @@ export default function LeadPipeline() {
             <div className="pipeline-table">
               <Table
                 showSerial
-                serialOf={(r) => <FileNumber lead={r} withFile />}
                 page={q.data.page ?? page}
                 count={q.data.count}
                 rows={q.data.data}
@@ -200,18 +182,18 @@ export default function LeadPipeline() {
                   },
                   {
                     key: "phone",
-                    label: "Contact phone",
+                    label: "Phone",
                     render: (r) => <LeadPhone lead={r} onCall={setDialLead} />,
-                  },
-                  {
-                    key: "status",
-                    label: "Status",
-                    render: (r) => <Badge value={r.status} />,
                   },
                   {
                     key: "temperature",
                     label: "Temperature",
                     render: (r) => <TemperatureBadge value={r.temperature} />,
+                  },
+                  {
+                    key: "note",
+                    label: "Agent notes",
+                    render: (r) => <NoteCell lead={r} />,
                   },
                   {
                     key: "last_contact_at",
@@ -220,6 +202,14 @@ export default function LeadPipeline() {
                       <span className="lead-contact">
                         <b>{date(r.last_contact_at)}</b>
                         <small>{r.last_contact_outcome || "No outcome"}</small>
+                        {/* A later call that did not connect, such as Number
+                            off; calls logged in the same minute share a
+                            start time, so the outcome decides. */}
+                        {r.last_call_at && !r.last_call_connected && (
+                          <small className="lead-later-call">
+                            Later call: {r.last_call_outcome || "in progress"}
+                          </small>
+                        )}
                       </span>
                     ),
                   },
@@ -231,16 +221,7 @@ export default function LeadPipeline() {
                   {
                     key: "details",
                     label: "Details",
-                    render: (r) => (
-                      <Link
-                        className="button secondary"
-                        to={"/leads/" + r.id}
-                        state={{ back }}
-                        aria-label={`View details for ${r.name}`}
-                      >
-                        View details
-                      </Link>
-                    ),
+                    render: (r) => <DetailsLink lead={r} back={back} />,
                   },
                 ]}
               />

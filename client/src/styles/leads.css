@@ -1,4 +1,4 @@
-/* Agents' Assigned leads and Lead pipeline (update 052). */
+/* Agents' Assigned leads and Lead pipeline (updates 052 and 053). */
 .lead-toolbar {
   align-items: flex-start;
 }
@@ -20,10 +20,6 @@
   right: 4px;
   min-width: 32px;
   min-height: 32px;
-}
-.lead-search-help {
-  color: var(--ink-3);
-  font-size: var(--text-xs);
 }
 .active-filters {
   display: flex;
@@ -58,32 +54,77 @@
 }
 .filter-chip:focus-visible,
 .filter-reset:focus-visible,
+.lead-note-more:focus-visible,
 .temperature-count:focus-visible,
 .temperature-clear:focus-visible {
   outline: 2px solid var(--brand-gold);
   outline-offset: 2px;
 }
-.file-number,
 .lead-contact,
 .lead-followup,
-.lead-status {
+.lead-last-call,
+.lead-note {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 3px;
   min-width: 0;
 }
-.file-number small,
 .lead-contact small,
 .lead-followup small,
-.lead-status small {
+.lead-last-call small,
+.lead-note small {
   color: var(--ink-3);
   font-size: var(--text-xs);
 }
-.file-number small {
-  max-width: 140px;
+.lead-muted {
+  color: var(--ink-3);
+}
+/* # is the row's place in the list: a narrow column. */
+.lead-record-table [data-field="__serial"] {
+  width: 44px;
+  min-width: 44px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+/* The agent's latest note: two lines, then Read more. */
+.lead-note-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 260px;
+  color: var(--ink-2);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.lead-note-text.open {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+.lead-note-more {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--info);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.lead-later-call {
+  color: var(--warning);
+}
+.pipeline-hint {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+.lead-details-link {
   white-space: nowrap;
 }
 /* Temperature: a word and an emoji, never colour alone. */
@@ -122,7 +163,10 @@
   gap: 6px;
 }
 .pipeline-table .lead-record-table:has(th[data-field="phone"]) {
-  min-width: 940px;
+  min-width: 960px;
+}
+.pipeline-table .lead-record-table [data-field="note"] {
+  min-width: 200px;
 }
 .pipeline-table .lead-record-table [data-field="phone"] {
   min-width: 150px;
@@ -130,10 +174,14 @@
 .pipeline-table .lead-record-table [data-field="name"] {
   min-width: 170px;
 }
-.pipeline-table .lead-record-table [data-field="details"] .button {
+.lead-record-table [data-field="details"] .button {
   white-space: nowrap;
   word-break: normal;
   overflow-wrap: normal;
+}
+/* Assigned leads has six columns, so it needs less width than other lists. */
+.assigned-table .lead-record-table:has(th[data-field="phone"]) {
+  min-width: 760px;
 }
 .temperature-summary {
   display: flex;

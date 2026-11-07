@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
-// One search box for a customer's name, contact number or # (update 052).
+// One search box for a customer's name or contact number (update 053).
 // What is typed stays here and reaches the address once typing settles;
 // characters the search does not use are left out.
-const clean = (text) => text.replace(/[^\p{L}\p{N} @#()+._-]/gu, "").trim();
+const clean = (text) => text.replace(/[^\p{L}\p{N} ()+.-]/gu, "").trim();
 export function LeadSearch({ value, onSearch }) {
   const [text, setText] = useState(value);
   const settled = useDebouncedValue(text);
@@ -20,8 +20,7 @@ export function LeadSearch({ value, onSearch }) {
     <span className="lead-search">
       <input
         aria-label="Search leads"
-        aria-describedby="lead-search-help"
-        placeholder="Search by name, phone or #…"
+        placeholder="Search by name or phone number…"
         maxLength={100}
         value={text}
         onChange={(event) => setText(event.target.value)}
@@ -36,9 +35,6 @@ export function LeadSearch({ value, onSearch }) {
           <X size={16} aria-hidden="true" />
         </button>
       )}
-      <small id="lead-search-help" className="lead-search-help">
-        Type #15 for lead 15 of a file, or a phone number in any format.
-      </small>
     </span>
   );
 }
