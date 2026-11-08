@@ -12,8 +12,8 @@ import { api } from "../lib/api";
 import MfaChallenge from "../components/common/MfaChallenge";
 import { restoreMfa, cancelMfa } from "../lib/mfaLogin";
 import { SIGNED_OUT_KEY, idleSettings } from "../lib/useIdleLogout";
-import officeLarge from "../assets/login/office-sunset-1600.webp";
-import officeSmall from "../assets/login/office-sunset-960.webp";
+import skylineLarge from "../assets/login/hd-marketing-skyline-1600.webp";
+import skylineSmall from "../assets/login/hd-marketing-skyline-960.webp";
 import "../styles/login.css";
 const portals = {
   admin: {
@@ -182,8 +182,8 @@ export default function Login() {
     <div
       className="glass-login-page"
       style={{
-        "--login-bg": `url(${officeLarge})`,
-        "--login-bg-small": `url(${officeSmall})`,
+        "--login-bg": `url(${skylineLarge})`,
+        "--login-bg-small": `url(${skylineSmall})`,
       }}
     >
       <main
