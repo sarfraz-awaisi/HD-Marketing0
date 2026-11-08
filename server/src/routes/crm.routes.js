@@ -25,6 +25,8 @@ import {
   bulkAssignment,
   callOutcome,
   agentLeadsQuery,
+  pipelineAgentsQuery,
+  agentPipelineQuery,
   leadIds,
   auditQuery,
   leadName,
@@ -440,6 +442,65 @@ export function crmRouter(db, options = {}) {
         p_query: { ...q, ...(import_id ? { import: import_id } : {}) },
       },
       "053 after 052",
+    );
+    // Update 055: My pipeline and Personally contacted, and who recorded
+    // the latest answered call of each lead on the page when it was not
+    // the agent. Before 055 the pipeline shows as it did.
+    let attribution = null;
+    if (result.view === "pipeline") {
+      const { data, error } = await db.rpc("agent_pipeline_attribution", {
+        p_actor: req.user.id,
+        p_leads: result.data.map((row) => row.id),
+      });
+      if (!error) attribution = data;
+      else if (!["PGRST202", "42883"].includes(error.code))
+        throw Object.assign(
+          new Error("The pipeline could not be loaded. Please try again."),
+          { status: 503 },
+        );
+    }
+    const rows = await leadContacts(db, req, result.data);
+    res.set("Cache-Control", "no-store").json({
+      ...result,
+      ...(attribution && {
+        pipeline_counts: {
+          pipeline: attribution.pipeline,
+          personally_contacted: attribution.personally_contacted,
+        },
+      }),
+      data: attribution
+        ? rows.map((row) => ({
+            ...row,
+            answered_by: attribution.answered_by[row.id] || null,
+          }))
+        : rows,
+    });
+  });
+  // Administrators' Lead pipeline, agent by agent (update 055): the agents
+  // with their numbers, then one agent's pipeline, or the leads the agent
+  // spoke to that are now someone else's. The database checks the
+  // administrator again and works out who spoke to each lead.
+  router.get("/pipeline/agents", adminOnly, async (req, res) => {
+    const q = pipelineAgentsQuery.parse(req.query);
+    res
+      .set("Cache-Control", "no-store")
+      .json(
+        await salesRpc(
+          db,
+          "admin_pipeline_agents",
+          { p_actor: req.user.id, p_query: q },
+          "055 after 054",
+        ),
+      );
+  });
+  router.get("/pipeline/agents/:agent", adminOnly, async (req, res) => {
+    const agent = uuid.parse(req.params.agent);
+    const q = agentPipelineQuery.parse(req.query);
+    const result = await salesRpc(
+      db,
+      "admin_agent_pipeline",
+      { p_actor: req.user.id, p_agent: agent, p_query: q },
+      "055 after 054",
     );
     res.set("Cache-Control", "no-store").json({
       ...result,

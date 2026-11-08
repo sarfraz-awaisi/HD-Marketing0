@@ -283,3 +283,72 @@ dialog.lead-name-dialog {
   justify-content: flex-end;
   margin-top: var(--space-4);
 }
+
+/* Update 055: administrators' Lead pipeline, agent by agent. */
+.pipeline-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.pipeline-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface, #fff);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+.pipeline-stat > b,
+.pipeline-stat .lead-followup > b {
+  font-size: 18px;
+  color: var(--ink);
+}
+.pipeline-stat .lead-followup {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.agent-directory .customer-link small {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.agent-directory [data-field="name"] {
+  min-width: 190px;
+}
+.agent-directory [data-field="open"] .button {
+  white-space: nowrap;
+}
+.lead-owner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lead-owner small {
+  color: var(--ink-3);
+}
+.page-heading .account-status {
+  margin-left: 6px;
+}
+@media (max-width: 640px) {
+  .pipeline-stat,
+  .pipeline-stats .temperature-count {
+    flex: 1 1 calc(50% - 10px);
+    justify-content: space-between;
+  }
+}
+.pipeline-count-note {
+  margin: -6px 0 16px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+.lead-answered-by {
+  color: var(--ink-3);
+  font-style: italic;
+}

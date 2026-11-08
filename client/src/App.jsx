@@ -12,6 +12,8 @@ const Leads = lazy(routeLoaders.Leads);
 const ImportedFiles = lazy(routeLoaders.ImportedFiles);
 const LeadDetail = lazy(routeLoaders.LeadDetail);
 const LeadPipeline = lazy(routeLoaders.LeadPipeline);
+const AgentPipelines = lazy(routeLoaders.AgentPipelines);
+const AgentPipeline = lazy(routeLoaders.AgentPipeline);
 const Inventory = lazy(routeLoaders.Inventory);
 const Dealers = lazy(routeLoaders.Dealers);
 const Targets = lazy(routeLoaders.Targets);
@@ -52,6 +54,12 @@ function Home() {
   const { user } = useAuth();
   return user?.role === "staff" ? <StaffDashboard /> : <Dashboard />;
 }
+// An agent's own Lead pipeline (update 052); administrators choose an
+// agent first (update 055).
+function Pipeline() {
+  const { user } = useAuth();
+  return user?.role === "admin" ? <AgentPipelines /> : <LeadPipeline />;
+}
 class PageLoadError extends Component {
   state = { failed: false };
   static getDerivedStateFromError() {
@@ -84,9 +92,13 @@ export default function App() {
               <Route element={<Protected roles={["admin", "agent"]} />}>
                 <Route path="leads" element={<Leads />} />
                 <Route path="leads/:id" element={<LeadDetail />} />
-                {/* Agents' Lead pipeline (update 052). */}
-                <Route element={<Protected role="agent" />}>
-                  <Route path="leads/pipeline" element={<LeadPipeline />} />
+                <Route path="leads/pipeline" element={<Pipeline />} />
+                {/* One agent's pipeline, for administrators (update 055). */}
+                <Route element={<Protected role="admin" />}>
+                  <Route
+                    path="leads/pipeline/:agent"
+                    element={<AgentPipeline />}
+                  />
                 </Route>
                 <Route path="inventory" element={<Inventory />} />
                 <Route path="dealers" element={<Dealers />} />

@@ -1,6 +1,8 @@
 const leadKeys = new Set([
   "leads",
   "my-leads",
+  "pipeline-agents",
+  "agent-pipeline",
   "deleted-leads",
   "deleted-lead-imports",
   "security-alerts",
