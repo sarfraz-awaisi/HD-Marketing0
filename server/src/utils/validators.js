@@ -262,6 +262,32 @@ export const agentLeadsQuery = z
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
   .strict();
+// Administrators' Lead pipeline (update 055): the agents, by name or UID,
+// then one agent's pipeline, current or earlier contacts.
+const pipelineSearch = z
+  .string()
+  .trim()
+  .max(100)
+  .regex(/^[\p{L}\p{N} @#()+._-]*$/u)
+  .optional();
+export const pipelineAgentsQuery = z
+  .object({
+    search: pipelineSearch,
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+  })
+  .strict();
+export const agentPipelineQuery = z
+  .object({
+    view: z.enum(["current", "earlier"]).default("current"),
+    search: pipelineSearch,
+    temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
+    outcome: z.enum(outcomes).optional(),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+  })
+  .strict()
+  .refine((q) => q.view === "current" || (!q.temperature && !q.outcome), {
+    message: "Earlier contacts are searched by name or phone only",
+  });
 export const listQuery = z
   .object({
     page: z.coerce.number().int().min(1).max(100000).default(1),

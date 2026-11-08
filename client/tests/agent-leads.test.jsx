@@ -69,7 +69,7 @@ const row = (n, extra = {}) => ({
   created_at: "2026-11-01T10:00:00Z",
   ...extra,
 });
-let leads, counts;
+let leads, counts, totals;
 const listCalls = () =>
   mocks.api.mock.calls
     .map(([path]) => path)
@@ -91,6 +91,7 @@ beforeEach(() => {
   mocks.user = { ...ali };
   leads = [row(1), row(15, { temperature: "hot" }), row(22)];
   counts = { hot: 1, warm: 0, cold: 0, none: 2 };
+  totals = undefined;
   mocks.api.mockImplementation(async (path) => {
     if (path.startsWith("/my-leads?")) {
       const q = new URLSearchParams(path.split("?")[1]);
@@ -110,7 +111,9 @@ beforeEach(() => {
         count: matched.length,
         page,
         limit: 20,
-        ...(q.get("view") === "pipeline" ? { temperatures: counts } : {}),
+        ...(q.get("view") === "pipeline"
+          ? { temperatures: counts, ...(totals && { pipeline_counts: totals }) }
+          : {}),
       };
     }
     if (path === "/lead-imports/" + file)
@@ -160,7 +163,7 @@ describe("the agent's My leads menu", () => {
       within(nav).getByRole("link", { name: "Assigned leads" }),
     ).toBeInTheDocument();
   });
-  it("names the pages in the breadcrumb, and leaves the admin menu as it was", () => {
+  it("names the pages in the breadcrumb, an administrator's lead details as before", () => {
     expect(breadcrumb(agentNavigation, "/leads")).toEqual([
       "Sales",
       "My leads",
@@ -400,6 +403,33 @@ describe("Lead pipeline", () => {
     ).toHaveAttribute("aria-expanded", "true");
     expect(within(table).getByText(long)).toHaveClass("open");
   });
+  it("shows My pipeline and Personally contacted, and who logged a last answered call that was not the agent's (update 055)", async () => {
+    leads = [
+      row(1),
+      row(2, { answered_by: "admin" }),
+      row(3, { answered_by: "agent" }),
+      row(4, { answered_by: "unknown" }),
+    ];
+    totals = { pipeline: 4, personally_contacted: 1 };
+    open("/leads/pipeline");
+    expect(
+      await screen.findByText("YOUR LEADS WITH AN ANSWERED CALL"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("LEADS YOU HAVE SPOKEN TO")).toBe(null);
+    const counts = await screen.findByRole("group", {
+      name: "Pipeline counts",
+    });
+    expect(counts.textContent).toBe("My pipeline4Personally contacted1");
+    const table = await screen.findByRole("table");
+    expect(
+      cells(table, 5).map((c) => c.replace(/^.*?(Interested)/, "$1")),
+    ).toEqual([
+      "Interested",
+      "InterestedLogged by an administrator",
+      "InterestedLogged by another agent",
+      "InterestedCaller not recorded",
+    ]);
+  });
   it("explains an empty pipeline", async () => {
     leads = [];
     counts = { hot: 0, warm: 0, cold: 0, none: 0 };
@@ -408,18 +438,15 @@ describe("Lead pipeline", () => {
       await screen.findByText(/A lead appears here after an answered call/),
     ).toBeInTheDocument();
   });
-  it("is for agents only", async () => {
+  it("is the agent's own: an administrator chooses an agent first (update 055)", async () => {
     mocks.user = {
       id: "53000000-0000-4000-8000-0000000000a1",
       role: "admin",
       name: "Owner",
     };
     open("/leads/pipeline");
-    await waitFor(() =>
-      expect(screen.queryByRole("heading", { name: "Lead pipeline" })).toBe(
-        null,
-      ),
-    );
+    expect(await screen.findByLabelText("Search agents")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Filter by temperature")).toBe(null);
     expect(listCalls()).toHaveLength(0);
   });
 });

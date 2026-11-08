@@ -3,9 +3,15 @@ import { X } from "lucide-react";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 // One search box for a customer's name or contact number (update 053).
 // What is typed stays here and reaches the address once typing settles;
-// characters the search does not use are left out.
+// characters the search does not use are left out. Update 055 also finds
+// agents by name or UID with it, under its own label.
 const clean = (text) => text.replace(/[^\p{L}\p{N} ()+.-]/gu, "").trim();
-export function LeadSearch({ value, onSearch }) {
+export function LeadSearch({
+  value,
+  onSearch,
+  label = "Search leads",
+  placeholder = "Search by name or phone number…",
+}) {
   const [text, setText] = useState(value);
   const settled = useDebouncedValue(text);
   // Only a settled change searches; the address then follows it.
@@ -19,8 +25,8 @@ export function LeadSearch({ value, onSearch }) {
   return (
     <span className="lead-search">
       <input
-        aria-label="Search leads"
-        placeholder="Search by name or phone number…"
+        aria-label={label}
+        placeholder={placeholder}
         maxLength={100}
         value={text}
         onChange={(event) => setText(event.target.value)}

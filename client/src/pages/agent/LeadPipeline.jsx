@@ -6,12 +6,7 @@ import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
 import { useUrlFilters } from "../../lib/useUrlFilters";
-import {
-  callOutcomes,
-  followUpNotice,
-  unansweredOutcomes,
-} from "../../lib/calls";
-import { temperatures, temperatureText } from "../../lib/temperature";
+import { followUpNotice, unansweredOutcomes } from "../../lib/calls";
 import {
   ErrorBox,
   Loader,
@@ -21,7 +16,13 @@ import {
 } from "../../components/common/UI";
 import LeadPhone from "../../components/leads/LeadPhone";
 import CallDialog from "../../components/calls/CallDialog";
-import { ActiveFilters, LeadSearch } from "../../components/leads/LeadSearch";
+import { ActiveFilters } from "../../components/leads/LeadSearch";
+import {
+  ContactCell,
+  PipelineFilters,
+  pipelineFilterChips,
+  temperatureChoices,
+} from "../../components/leads/PipelineParts";
 import {
   CustomerCell,
   DetailsLink,
@@ -33,11 +34,8 @@ import {
 // answered call, latest contact first. Search, temperature and the latest
 // call's outcome work together in the database, across every page. A
 // lead whose calls never connected (Number off, say) is never here; it is
-// found in Assigned leads.
-const temperatureChoices = [
-  ...temperatures.map((t) => [t.value, `${t.emoji} ${t.label}`]),
-  ["none", "Not recorded yet"],
-];
+// found in Assigned leads. Update 055 adds My pipeline and Personally
+// contacted, and marks a lead whose last answered call someone else logged.
 export default function LeadPipeline() {
   const { user } = useAuth(),
     location = useLocation(),
@@ -62,31 +60,21 @@ export default function LeadPipeline() {
     // pages then show the page those results are for.
     placeholderData: (previous) => previous,
   });
-  const filters = [
-    ...(f.q ? [[`Search: ${f.q}`, () => set({ q: null })]] : []),
-    ...(f.temperature
-      ? [
-          [
-            `Temperature: ${temperatureText(f.temperature)}`,
-            () => set({ temperature: null }),
-          ],
-        ]
-      : []),
-    ...(f.outcome
-      ? [[`Latest call: ${f.outcome}`, () => set({ outcome: null })]]
-      : []),
-  ];
+  const filters = pipelineFilterChips(f, set);
   const reset = () =>
     change({ q: null, temperature: null, outcome: null, page: null });
   const counts = q.data?.temperatures;
+  // Update 055: both counts cover every lead, whatever the filters.
+  const totals = q.data?.pipeline_counts;
   return (
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">LEADS YOU HAVE SPOKEN TO</span>
+          <span className="eyebrow">YOUR LEADS WITH AN ANSWERED CALL</span>
           <h1>Lead pipeline</h1>
           <p>
-            Every lead of yours with an answered call, latest contact first.
+            Every lead assigned to you with an answered call, latest contact
+            first, including calls made before a lead became yours.
           </p>
         </div>
         <div className="actions">
@@ -95,6 +83,29 @@ export default function LeadPipeline() {
           </Link>
         </div>
       </div>
+      {totals && (
+        <>
+          <div
+            className="pipeline-stats"
+            role="group"
+            aria-label="Pipeline counts"
+          >
+            <div className="pipeline-stat">
+              <span>My pipeline</span>
+              <b>{totals.pipeline}</b>
+            </div>
+            <div className="pipeline-stat">
+              <span>Personally contacted</span>
+              <b>{totals.personally_contacted}</b>
+            </div>
+          </div>
+          <p className="pipeline-count-note">
+            My pipeline counts every lead of yours with an answered call.
+            Personally contacted counts those with an answered call you made
+            yourself, as your reports do.
+          </p>
+        </>
+      )}
       {counts && (
         <div
           className="temperature-summary"
@@ -119,31 +130,7 @@ export default function LeadPipeline() {
       )}
       <section className="panel">
         <div className="toolbar lead-toolbar">
-          <LeadSearch value={f.q} onSearch={(q) => set({ q })} />
-          <select
-            aria-label="Filter by temperature"
-            value={f.temperature}
-            onChange={(e) => set({ temperature: e.target.value })}
-          >
-            <option value="">All temperatures</option>
-            {temperatureChoices.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-          <select
-            aria-label="Filter by call outcome"
-            value={f.outcome}
-            onChange={(e) => set({ outcome: e.target.value })}
-          >
-            <option value="">All outcomes</option>
-            {callOutcomes.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-          </select>
+          <PipelineFilters f={f} set={set} />
         </div>
         <ActiveFilters items={filters} onReset={reset} />
         {unansweredOutcomes.includes(f.outcome) && (
@@ -198,20 +185,7 @@ export default function LeadPipeline() {
                   {
                     key: "last_contact_at",
                     label: "Latest contact",
-                    render: (r) => (
-                      <span className="lead-contact">
-                        <b>{date(r.last_contact_at)}</b>
-                        <small>{r.last_contact_outcome || "No outcome"}</small>
-                        {/* A later call that did not connect, such as Number
-                            off; calls logged in the same minute share a
-                            start time, so the outcome decides. */}
-                        {r.last_call_at && !r.last_call_connected && (
-                          <small className="lead-later-call">
-                            Later call: {r.last_call_outcome || "in progress"}
-                          </small>
-                        )}
-                      </span>
-                    ),
+                    render: (r) => <ContactCell lead={r} />,
                   },
                   {
                     key: "next_followup_at",

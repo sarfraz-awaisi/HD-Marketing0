@@ -35,13 +35,23 @@ import {
 // adds the dealer network for administrators and agents (never staff);
 // update 051 gives agents My performance, their own reports. A link may
 // carry child links, shown under it in a group that opens and closes: an
-// agent's My leads holds Assigned leads and the Lead pipeline (update 052).
+// agent's My leads holds Assigned leads and the Lead pipeline (update 052),
+// an administrator's Leads all leads and the Lead pipeline of each agent
+// (update 055).
 export const adminNavigation = [
   { label: "", links: [["/", "Overview", LayoutDashboard]] },
   {
     label: "Sales",
     links: [
-      ["/leads", "Leads", Users],
+      [
+        "/leads",
+        "Leads",
+        Users,
+        [
+          ["/leads", "All leads", ListOrdered],
+          ["/leads/pipeline", "Lead pipeline", TrendingUp],
+        ],
+      ],
       ["/tasks", "Task assign", FileSpreadsheet],
       ["/incoming-social", "Incoming social leads", Inbox],
       ["/followups", "Follow-ups", Clock],
@@ -201,6 +211,7 @@ function detailLabel(base) {
   return (
     {
       "/leads": "Lead details",
+      "/leads/pipeline": "Agent pipeline",
       "/incoming-social": "Social lead",
       "/documents": "Document",
     }[base] || "Details"
