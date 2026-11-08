@@ -1,9 +1,12 @@
-import { date, pkr } from "../../lib/api";
+import { date } from "../../lib/api";
+import { exactPrice, pricePK } from "../../lib/price";
 import { PromotedFrom } from "../inventory/PromotionPanel";
 import {
   amenityLabel,
   chosenCategoryGroups,
   constructionLabel,
+  floorLabel,
+  hasFloor,
   furnishingLabel,
   isPlot,
   propertyRef,
@@ -21,11 +24,13 @@ const Spec = ({ label, value }) =>
   );
 export default function PropertyDetails({ property: p }) {
   const contact = p.owner_contact;
+  const floored = hasFloor(p.type);
   const building = !isPlot(p.type) && [
+    ...(floored ? [["Floor", floorLabel(p.floor_level)]] : []),
+    [floored ? "Total building floors" : "Floors", p.floors],
     ["Bedrooms", p.bedrooms],
     ["Bathrooms", p.bathrooms],
     ["Kitchens", p.kitchens],
-    ["Floors", p.floors],
     ["Parking spaces", p.parking_spaces],
     ["Property age", p.property_age != null ? `${p.property_age} years` : null],
     ["Furnishing", p.furnishing && furnishingLabel(p.furnishing)],
@@ -41,8 +46,15 @@ export default function PropertyDetails({ property: p }) {
     <section className="property-details" aria-label="Property details">
       <div className="property-detail-summary">
         <strong>
-          {pkr(p.price)}
-          {p.purpose === "rent" && <small> / month</small>}
+          {pricePK(p.price)}
+          {p.purpose === "rent" && <small>/month</small>}
+          {/* The short form is rounded: show the exact amount too. */}
+          {pricePK(p.price) !== exactPrice(p.price) && (
+            <small className="price-exact">
+              {exactPrice(p.price)}
+              {p.purpose === "rent" && " per month"}
+            </small>
+          )}
         </strong>
         <span className={`badge ${p.availability}`}>
           {statusLabel(p.availability)}

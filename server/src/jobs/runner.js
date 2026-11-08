@@ -7,6 +7,7 @@ import { reportInactiveLeadOwners } from "./reportInactiveLeadOwners.js";
 import { followUpReminders } from "./followUpReminders.js";
 import { missingOutcomeCheck } from "./missingOutcomeCheck.js";
 import { cleanupPropertyPhotos } from "./cleanupPropertyPhotos.js";
+import { cleanupPropertyDocuments } from "./cleanupPropertyDocuments.js";
 import { cleanupKnowledgeFiles } from "./cleanupKnowledgeFiles.js";
 import { processMetaLeads } from "./processMetaLeads.js";
 import { validateRuntime } from "../config/runtime.js";
@@ -36,6 +37,7 @@ const tick = createJobRunner(db, [
   ["followUpReminders", followUpReminders],
   ["missingOutcomeCheck", missingOutcomeCheck],
   ["cleanupPropertyPhotos", cleanupPropertyPhotos],
+  ["cleanupPropertyDocuments", cleanupPropertyDocuments],
   ["cleanupKnowledgeFiles", cleanupKnowledgeFiles],
   ["processMetaLeads", processMetaLeads],
   ["attendanceReconciliation", attendanceReconciliation],

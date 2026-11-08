@@ -24,6 +24,7 @@ import { ActivityForm } from "../../components/common/RecordsPage";
 import { followUpNotice } from "../../lib/calls";
 import TimelineItem from "../../components/leads/TimelineItem";
 import LeadKycDocuments from "../../components/documents/LeadKycDocuments";
+import EditLeadName from "../../components/leads/EditLeadName";
 export default function LeadDetail() {
   const { id } = useParams(),
     { user } = useAuth(),
@@ -117,7 +118,16 @@ export default function LeadDetail() {
       <div className="page-heading">
         <div>
           <span className="eyebrow">CUSTOMER PROFILE</span>
-          <h1>{lead.name}</h1>
+          <div className="lead-name-heading">
+            <h1>{lead.name}</h1>
+            {/* Update 054: the lead's agent, or an administrator. */}
+            {(user.role === "admin" || lead.assigned_agent === user.id) && (
+              <EditLeadName
+                lead={lead}
+                queryKey={["lead", user.id, user.role, id]}
+              />
+            )}
+          </div>
           <p className="lead-number">{formatLeadNo(lead.lead_no)}</p>
           <p>
             {lead.email || "No email"} · {lead.source}

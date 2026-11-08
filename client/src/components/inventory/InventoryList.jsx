@@ -23,6 +23,8 @@ import PropertyCard from "../properties/PropertyCard";
 import PropertyDetails from "../properties/PropertyDetails";
 import PropertyForm from "../properties/PropertyForm";
 import PhotoGallery from "../properties/PhotoGallery";
+import PropertyDocuments from "../properties/PropertyDocuments";
+import { uploadDocument } from "../../lib/propertyDocuments";
 import { PromoteConfirm, PromotionStatus } from "./PromotionPanel";
 
 const blankFilters = {
@@ -142,11 +144,21 @@ export default function InventoryList({
       );
       refresh(current.id);
       setPromoting(false);
+      // Update 054: documents are copied too.
+      const missing = [
+        [copy.photos_missing, "picture"],
+        [copy.documents_missing, "document"],
+      ]
+        .filter(([n]) => n)
+        .map(
+          ([n, what]) =>
+            `${n} missing ${what}${n === 1 ? " was" : "s were"} not copied`,
+        );
       toast(
-        `Added to Admin List as ${propertyRef(copy.property_no)}` +
-          (copy.photos_missing
-            ? `. ${copy.photos_missing} missing picture${copy.photos_missing === 1 ? " was" : "s were"} not copied.`
-            : ""),
+        [
+          `Added to Admin List as ${propertyRef(copy.property_no)}`,
+          ...missing,
+        ].join(". ") + (missing.length ? "." : ""),
       );
     } catch (e) {
       setActionError(e.message);
@@ -181,6 +193,7 @@ export default function InventoryList({
     try {
       await api("/properties/" + current.id, { method: "DELETE" });
       qc.removeQueries({ queryKey: ["photos", current.id] });
+      qc.removeQueries({ queryKey: ["property-documents", current.id] });
       qc.removeQueries({ queryKey: ["property", current.id] });
       refresh();
       setPage(1);
@@ -193,7 +206,13 @@ export default function InventoryList({
       setBusy(false);
     }
   }
-  async function save(data, pictures, onUploaded) {
+  async function save(
+    data,
+    pictures,
+    onUploaded,
+    documents = [],
+    onDocumentUploaded = () => {},
+  ) {
     if (busy) return;
     setBusy(true);
     let saved;
@@ -214,13 +233,35 @@ export default function InventoryList({
         onUploaded(picture);
         qc.invalidateQueries({ queryKey: ["photos", saved.id] });
       }
-      toast(pictures.length ? "Property and pictures saved" : "Property saved");
-      if (pictures.length) setEditing(false);
+      // Update 054: then the chosen PDFs, each removed from the form once
+      // added, so a retry uploads only the rest.
+      for (const doc of documents) {
+        try {
+          await uploadDocument(saved.id, doc.file);
+        } catch (e) {
+          throw Object.assign(
+            new Error(`“${doc.file.name}” could not be uploaded. ${e.message}`),
+            { files: "documents" },
+          );
+        }
+        onDocumentUploaded(doc);
+        qc.invalidateQueries({ queryKey: ["property-documents", saved.id] });
+      }
+      const extra = [
+        pictures.length && "pictures",
+        documents.length && "documents",
+      ].filter(Boolean);
+      toast(
+        extra.length
+          ? `Property and ${extra.join(" and ")} saved`
+          : "Property saved",
+      );
+      if (extra.length) setEditing(false);
       else setModal(null);
     } catch (error) {
-      if (saved && pictures.length)
+      if (saved && (pictures.length || documents.length))
         throw new Error(
-          `Property saved, but some pictures could not be uploaded. ${error.message} Click Save record to retry the remaining pictures.`,
+          `Property saved, but some ${error.files || "pictures"} could not be uploaded. ${error.message} Click Save record to retry the remaining ${error.files || "pictures"}.`,
         );
       throw error;
     } finally {
@@ -459,6 +500,9 @@ export default function InventoryList({
                 </>
               )}
               <PhotoGallery propertyId={current.id} canManage={canEdit} />
+              {current.id && (
+                <PropertyDocuments property={current} canManage={canEdit} />
+              )}
               {canEdit && (
                 <>
                   <ErrorBox error={actionError} />
