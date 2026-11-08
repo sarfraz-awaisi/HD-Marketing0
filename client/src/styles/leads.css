@@ -235,3 +235,51 @@
     justify-content: space-between;
   }
 }
+
+/* Update 054: correcting a customer's name. */
+.lead-name-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.lead-name-heading h1 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.lead-name-edit {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface, #fff);
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.lead-name-edit:hover,
+.lead-name-edit:focus-visible {
+  border-color: var(--ink-2);
+}
+dialog.lead-name-dialog {
+  width: min(460px, calc(100% - 32px));
+}
+.lead-name-field {
+  display: grid;
+  gap: 6px;
+}
+.lead-name-field label {
+  display: block;
+  margin: 0;
+  font-weight: 600;
+}
+.lead-name-dialog .field-hint,
+.lead-name-dialog .field-error {
+  font-weight: 400;
+}
+.lead-name-dialog .actions {
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}

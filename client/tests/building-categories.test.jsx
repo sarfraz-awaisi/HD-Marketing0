@@ -115,7 +115,7 @@ async function openNew(user, type = "Building") {
   await user.selectOptions(screen.getByLabelText("Property type"), type);
   await user.type(screen.getByLabelText("City"), "Lahore");
   await user.type(screen.getByLabelText("Size"), "4");
-  await user.type(screen.getByLabelText("Price (PKR)"), "500000000");
+  await user.type(screen.getByLabelText("Price"), "500000000");
 }
 
 describe("the property form", () => {

@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 const fixture = vi.hoisted(() => ({
   db: { rpc: vi.fn() },
-  jobs: Array.from({ length: 9 }, () => vi.fn()),
+  jobs: Array.from({ length: 10 }, () => vi.fn()),
 }));
 vi.mock("../src/config/supabaseAdmin.js", () => ({
   getAdmin: () => fixture.db,
@@ -26,6 +26,9 @@ vi.mock("../src/jobs/cleanupPropertyPhotos.js", () => ({
 }));
 vi.mock("../src/jobs/cleanupKnowledgeFiles.js", () => ({
   cleanupKnowledgeFiles: fixture.jobs[6],
+}));
+vi.mock("../src/jobs/cleanupPropertyDocuments.js", () => ({
+  cleanupPropertyDocuments: fixture.jobs[9],
 }));
 vi.mock("../src/jobs/purgeDeletedLeads.js", () => ({
   purgeDeletedLeads: async () => ({ skipped: true }),

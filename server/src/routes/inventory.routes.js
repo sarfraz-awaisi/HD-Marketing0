@@ -5,6 +5,8 @@ import { adminOnly } from "../middleware/role.js";
 import { sensitiveLimit } from "../middleware/rateLimit.js";
 import { maskAgentResponse } from "../middleware/phoneProtection.js";
 import { cleanupPropertyPhotos } from "../jobs/cleanupPropertyPhotos.js";
+import { cleanupPropertyDocuments } from "../jobs/cleanupPropertyDocuments.js";
+import { validatePropertyPdf } from "../services/documentFiles.js";
 import {
   uuid,
   propertyCreate,
@@ -38,7 +40,9 @@ export async function inventoryRpc(db, name, args) {
   throw Object.assign(
     new Error(
       missing
-        ? "Inventory needs CRM database update 041 after 040."
+        ? name.startsWith("inventory_document")
+          ? "Property documents need CRM database update 054."
+          : "Inventory needs CRM database update 041 after 040."
         : status === 409
           ? "This was changed at the same moment. Refresh and try again."
           : status === 400
@@ -49,6 +53,16 @@ export async function inventoryRpc(db, name, args) {
   );
 }
 const bucket = (db) => db.storage.from("property-photos");
+// Update 054: PDF documents in their own private bucket. The size limit is
+// PROPERTY_DOCUMENT_MAX_MB (default 20), never above the bucket's 25 MB.
+const documentBucket = (db) => db.storage.from("property-documents");
+export const documentLimit = () =>
+  Math.round(
+    Math.min(
+      25,
+      Math.max(1, Number(process.env.PROPERTY_DOCUMENT_MAX_MB) || 20),
+    ) * 1048576,
+  );
 // Storage paths stay on the server; cards get a short-lived signed cover URL.
 async function withCovers(db, rows, signed) {
   const paths = signed ? rows.filter((r) => r.cover_path) : [];
@@ -114,8 +128,34 @@ export function inventoryRouter(db) {
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 1 },
   });
+  const maxDocument = documentLimit();
+  const documentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: maxDocument, files: 1 },
+  });
+  // multer's own "File too large" becomes the limit in words.
+  const pdfUpload = (req, res, next) =>
+    documentUpload.single("file")(req, res, (error) =>
+      next(
+        error?.code === "LIMIT_FILE_SIZE"
+          ? Object.assign(
+              new Error(
+                `Choose a PDF file up to ${Math.floor(maxDocument / 1048576)} MB.`,
+              ),
+              { status: 413 },
+            )
+          : error,
+      ),
+    );
   const rpc = (req, name, args = {}) =>
     inventoryRpc(db, name, { p_actor: req.user.id, ...args });
+  const cleanDocuments = async (id) => {
+    try {
+      await cleanupPropertyDocuments(db, id);
+    } catch {
+      console.error("Property document cleanup pending; jobs will retry");
+    }
+  };
   router.get("/inventory/summary", async (req, res) => {
     z.object({}).strict().parse(req.query);
     res.json(await rpc(req, "inventory_summary"));
@@ -215,6 +255,7 @@ export function inventoryRouter(db) {
       // has already been deleted successfully and must not appear as a failure.
       console.error("Property photo cleanup pending; jobs will retry");
     }
+    await cleanDocuments(id);
     res.status(204).end();
   });
   router.get("/properties/:id/photos", async (req, res) => {
@@ -284,10 +325,11 @@ export function inventoryRouter(db) {
     },
   );
   // Adds an agent's listing to Admin Properties as an independent copy
-  // (update 044). Each picture is copied to a new Storage file reserved by
-  // SQL, so the copy never shares a file with the original. A failed attempt
-  // removes only its own copies; anything left behind is removed by the
-  // clean-up job when its reservation expires.
+  // (update 044). Each picture, and since update 054 each PDF document, is
+  // copied to a new Storage file reserved by SQL, so the copy never shares a
+  // file with the original. A failed attempt removes only its own copies;
+  // anything left behind is removed by the clean-up jobs when its
+  // reservation expires.
   router.post(
     "/properties/:id/promote",
     adminOnly,
@@ -302,7 +344,10 @@ export function inventoryRouter(db) {
         p_property: id,
         p_copy: copyId,
       });
-      const copied = [];
+      const copied = [],
+        copiedDocuments = [];
+      // Before 054 is applied the plan has no documents.
+      const documents = plan.documents || [];
       try {
         for (const photo of plan.photos) {
           const { error } = await bucket(db).copy(photo.from, photo.to);
@@ -315,35 +360,68 @@ export function inventoryRouter(db) {
             );
           copied.push(photo.to);
         }
+        for (const doc of documents) {
+          const { error } = await documentBucket(db).copy(doc.from, doc.to);
+          // A document already missing from Storage is skipped.
+          if (error && missingFile(error)) continue;
+          if (error)
+            throw Object.assign(
+              new Error("The documents could not be copied. Please try again."),
+              { status: 503 },
+            );
+          copiedDocuments.push(doc.to);
+        }
+        // One list: SQL tells pictures and documents apart by their
+        // reservations and creates both records with the copy.
         const property = await rpc(req, "inventory_promote", {
           p_property: id,
           p_copy: copyId,
-          p_paths: copied,
+          p_paths: [...copied, ...copiedDocuments],
           p_request: req.id,
         });
         sendProperty(
           req,
           res,
-          { ...property, photos_missing: plan.photos.length - copied.length },
+          {
+            ...property,
+            photos_missing: plan.photos.length - copied.length,
+            documents_missing: documents.length - copiedDocuments.length,
+          },
           201,
         );
       } catch (error) {
-        await releasePromotion(req, copyId, copied);
+        await releasePromotion(req, copyId, copied, copiedDocuments);
         throw error;
       }
     },
   );
-  async function releasePromotion(req, copyId, copied) {
+  async function releasePromotion(req, copyId, copied, copiedDocuments) {
+    let committed;
     try {
-      const { committed } = await rpc(req, "inventory_promote_release", {
+      ({ committed } = await rpc(req, "inventory_promote_release", {
         p_copy: copyId,
-      });
-      if (committed || !copied.length) return;
-      // Only this attempt's copies: every path is under the new property id.
-      const removed = await bucket(db).remove(copied);
-      if (!removed.error) await cleanupPropertyPhotos(db, copyId);
+      }));
+    } catch {
+      console.error("Promotion clean-up pending; jobs will retry");
+      return;
+    }
+    if (committed) return;
+    // Only this attempt's copies: every path is under the new property id.
+    try {
+      if (copied.length) {
+        const removed = await bucket(db).remove(copied);
+        if (!removed.error) await cleanupPropertyPhotos(db, copyId);
+      }
     } catch {
       console.error("Promotion picture clean-up pending; jobs will retry");
+    }
+    try {
+      if (copiedDocuments.length) {
+        const removed = await documentBucket(db).remove(copiedDocuments);
+        if (!removed.error) await cleanupPropertyDocuments(db, copyId);
+      }
+    } catch {
+      console.error("Promotion document clean-up pending; jobs will retry");
     }
   }
   router.put(
@@ -375,6 +453,100 @@ export function inventoryRouter(db) {
       } catch {
         console.error("Property photo cleanup pending; jobs will retry");
       }
+      res.status(204).end();
+    },
+  );
+  // Property documents (update 054). Whoever can see the property can list
+  // and open its documents; whoever can change it can add and remove them.
+  router.get("/properties/:id/documents", async (req, res) => {
+    res.json(
+      await rpc(req, "inventory_documents", {
+        p_property: uuid.parse(req.params.id),
+      }),
+    );
+  });
+  // The path is reserved before the upload; if anything fails, the file is
+  // removed at once, or when the reservation expires.
+  router.post("/properties/:id/documents", pdfUpload, async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const file = validatePropertyPdf(req.file, maxDocument);
+    const path = `${id}/${crypto.randomUUID()}`;
+    await rpc(req, "inventory_document_reserve", {
+      p_property: id,
+      p_path: path,
+    });
+    try {
+      const stored = await documentBucket(db).upload(path, req.file.buffer, {
+        contentType: "application/pdf",
+      });
+      if (stored.error)
+        throw Object.assign(
+          new Error("The document could not be uploaded. Please try again."),
+          { status: 503 },
+        );
+      res.status(201).json(
+        await rpc(req, "inventory_document_add", {
+          p_property: id,
+          p_path: path,
+          p_name: file.file_name,
+          p_size: file.size_bytes,
+          p_request: req.id,
+        }),
+      );
+    } catch (error) {
+      try {
+        await rpc(req, "inventory_document_release", {
+          p_property: id,
+          p_path: path,
+        });
+      } catch {
+        // The reservation still expires on its own.
+      }
+      await cleanDocuments(id);
+      throw error;
+    }
+  });
+  // The file itself, for viewing, downloading or sharing. Never a public
+  // link: the signed-in user's access is checked before and after Storage
+  // is read.
+  router.get(
+    "/properties/:id/documents/:document/file",
+    sensitiveLimit,
+    async (req, res) => {
+      z.object({}).strict().parse(req.query);
+      const args = {
+        p_property: uuid.parse(req.params.id),
+        p_document: uuid.parse(req.params.document),
+      };
+      const doc = await rpc(req, "inventory_document_file", args);
+      const file = await documentBucket(db).download(doc.storage_path);
+      if (file.error || !file.data)
+        throw Object.assign(
+          new Error("The document could not be opened. Please try again."),
+          { status: missingFile(file.error) ? 404 : 503 },
+        );
+      await rpc(req, "inventory_document_file", args);
+      res.set({
+        "Content-Type": "application/pdf",
+        "Content-Disposition": `attachment; filename="document.pdf"; filename*=UTF-8''${encodeURIComponent(doc.file_name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16))}`,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.send(Buffer.from(await file.data.arrayBuffer()));
+    },
+  );
+  router.delete(
+    "/properties/:id/documents/:document",
+    sensitiveLimit,
+    async (req, res) => {
+      const id = uuid.parse(req.params.id);
+      // SQL removes the row and queues the file in one transaction.
+      await rpc(req, "inventory_document_remove", {
+        p_property: id,
+        p_document: uuid.parse(req.params.document),
+        p_request: req.id,
+      });
+      await cleanDocuments(id);
       res.status(204).end();
     },
   );

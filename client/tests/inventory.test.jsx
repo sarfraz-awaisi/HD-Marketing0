@@ -301,7 +301,7 @@ describe("property form", () => {
     await user.type(screen.getByLabelText("Property title"), "Plot in Bahria");
     await user.type(screen.getByLabelText("City"), "Rawalpindi");
     await user.type(screen.getByLabelText("Size"), "10");
-    await user.type(screen.getByLabelText("Price (PKR)"), "9000000");
+    await user.type(screen.getByLabelText("Price"), "9000000");
   }
   const saved = () =>
     mocks.api.mock.calls.find(
@@ -324,7 +324,8 @@ describe("property form", () => {
     ).toBeInTheDocument();
     expect(within(status).queryByRole("option", { name: "Rented" })).toBeNull();
     await user.selectOptions(screen.getByLabelText("Purpose"), "rent");
-    expect(screen.getByText("Monthly rent")).toBeInTheDocument();
+    // Update 054: rent is labelled as monthly.
+    expect(screen.getByLabelText("Monthly rent")).toBeInTheDocument();
     expect(within(status).queryByRole("option", { name: "Sold" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Save record" }));
     await screen.findByText("Property saved");

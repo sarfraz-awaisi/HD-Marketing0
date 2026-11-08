@@ -77,7 +77,7 @@ export function PromoteConfirm({
       <ul className="promotion-points">
         <li>
           This creates an independent copy in Admin Properties, with its own
-          reference number and its own copies of the pictures.
+          reference number and its own copies of the pictures and PDF documents.
         </li>
         <li>{name}'s original property stays unchanged and remains theirs.</li>
         <li>

@@ -481,6 +481,48 @@ export const leadUpdate = schemas.leads
   })
   .strict()
   .refine(requireLostReason, lostReasonError);
+// Update 054: a corrected customer name, as the database checks it: single
+// spaces, 1 to 100 characters with at least one letter, and not a
+// placeholder such as Unknown or N/A.
+const namePlaceholders = new Set([
+  "unknown",
+  "n/a",
+  "na",
+  "n.a.",
+  "none",
+  "null",
+  "nil",
+  "no name",
+  "noname",
+  "-",
+  "--",
+  ".",
+  "?",
+  "customer",
+  "client",
+]);
+export const leadName = z
+  .object({
+    name: z
+      .string()
+      .transform((v) => v.replace(/\s+/g, " ").trim())
+      .pipe(
+        z
+          .string()
+          .min(1, "Enter the customer's name")
+          .max(100, "Use a name of up to 100 characters")
+          .refine(
+            (v) => !/\p{Cc}/u.test(v),
+            "Use letters, spaces and ordinary punctuation only",
+          )
+          .refine((v) => /\p{L}/u.test(v), "Enter a name with letters")
+          .refine(
+            (v) => !namePlaceholders.has(v.toLowerCase()),
+            "Enter the customer's real name",
+          ),
+      ),
+  })
+  .strict();
 export const agentLeadUpdate = schemas.leads
   .pick({ status: true, lost_reason: true, lost_note: true })
   .strict()
@@ -880,6 +922,8 @@ const propertyFields = {
   bathrooms: roomCount(50),
   kitchens: roomCount(20),
   floors: roomCount(200),
+  // Update 054: -2 Basement, -1 Lower ground, 0 Ground, then 1 to 200.
+  floor_level: z.number().int().min(-2).max(200).nullable(),
   parking_spaces: roomCount(100),
   property_age: roomCount(200),
   furnishing: z.enum(["unfurnished", "semi_furnished", "furnished"]).nullable(),
@@ -925,6 +969,16 @@ const statusMatchesPurpose = {
     path: ["availability"],
   },
 };
+// A floor number above the building's total floors (both sent) is refused;
+// the database checks the saved record as a whole.
+const floorWithinBuilding = {
+  check: (v) =>
+    v.floor_level == null || v.floors == null || v.floor_level <= v.floors,
+  error: {
+    message: "The floor cannot be above the building's total floors",
+    path: ["floor_level"],
+  },
+};
 export const propertyCreate = z
   .object(propertyFields)
   .partial()
@@ -938,7 +992,8 @@ export const propertyCreate = z
     city: true,
   })
   .strict()
-  .refine(statusMatchesPurpose.check, statusMatchesPurpose.error);
+  .refine(statusMatchesPurpose.check, statusMatchesPurpose.error)
+  .refine(floorWithinBuilding.check, floorWithinBuilding.error);
 // Only the fields sent change. expected_updated_at is the updated_at the
 // editor loaded; a newer save by someone else is then refused (HTTP 409).
 export const propertyUpdate = z
@@ -951,7 +1006,8 @@ export const propertyUpdate = z
   .refine((v) => Object.keys(v).some((k) => k !== "expected_updated_at"), {
     message: "Change at least one detail",
   })
-  .refine(statusMatchesPurpose.check, statusMatchesPurpose.error);
+  .refine(statusMatchesPurpose.check, statusMatchesPurpose.error)
+  .refine(floorWithinBuilding.check, floorWithinBuilding.error);
 const blankAsMissing = (schema) =>
   z.preprocess((v) => (v === "" ? undefined : v), schema.optional());
 const filterText = z

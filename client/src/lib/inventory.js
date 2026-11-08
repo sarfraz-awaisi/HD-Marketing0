@@ -15,6 +15,39 @@ export const propertyTypes = propertyTypeGroups.flatMap(([, types]) => types);
 // Plots and land have no rooms, furnishing, construction or age.
 export const isPlot = (type) =>
   ["Residential Plot", "Commercial Plot", "Land"].includes(type);
+// Update 054: apartments, portions, shops and offices are on a floor. The
+// database keeps -2 Basement, -1 Lower ground, 0 Ground, then 1 to 200.
+export const hasFloor = (type) =>
+  ["Apartment", "Portion", "Shop", "Office"].includes(type);
+export const maxFloor = 200;
+export const groundLevels = [
+  { value: "-2", label: "Basement" },
+  { value: "-1", label: "Lower ground" },
+  { value: "0", label: "Ground floor" },
+];
+const ordinal = (n) => {
+  const tens = n % 100,
+    ones = n % 10;
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? "th"
+      : ones === 1
+        ? "st"
+        : ones === 2
+          ? "nd"
+          : ones === 3
+            ? "rd"
+            : "th";
+  return n + suffix;
+};
+// "7th floor", "Ground floor", "Basement"; null when none is recorded.
+export function floorLabel(level) {
+  if (level === null || level === undefined || level === "") return null;
+  const n = Number(level);
+  if (n <= 0)
+    return groundLevels.find((g) => Number(g.value) === n)?.label || null;
+  return `${ordinal(n)} floor`;
+}
 export const purposes = [
   { value: "sale", label: "For sale" },
   { value: "rent", label: "For rent" },

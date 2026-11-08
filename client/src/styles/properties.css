@@ -1,0 +1,116 @@
+/* Update 054: price units, floors and property documents. */
+.property-form .price-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(130px, 1fr);
+  gap: 0 var(--space-3);
+  align-items: start;
+}
+.price-preview {
+  grid-column: 1 / -1;
+  margin: 6px 0 var(--space-2);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.property-detail-summary .price-exact {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+.property-documents {
+  margin: 20px 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.property-documents-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.property-documents h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.document-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.document-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-sunken);
+}
+.document-icon {
+  flex-shrink: 0;
+  color: var(--danger);
+}
+.document-name {
+  display: grid;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.document-name b {
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+.document-name small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.document-actions .button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.document-actions .document-whatsapp {
+  color: var(--success);
+}
+.document-actions .document-remove {
+  color: var(--danger);
+}
+.document-confirm > span {
+  font-size: var(--text-sm);
+}
+.document-notice {
+  margin: var(--space-2) 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-sunken);
+  font-size: var(--text-sm);
+}
+@media (max-width: 600px) {
+  .property-form .price-entry {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .document-actions {
+    width: 100%;
+  }
+  .document-actions .button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+}

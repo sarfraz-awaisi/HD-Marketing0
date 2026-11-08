@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
 import { Building2, Images } from "lucide-react";
-import { pkr } from "../../lib/api";
+import { pricePK } from "../../lib/price";
 import {
   categorySummary,
+  floorLabel,
+  hasFloor,
   propertyRef,
   purposeLabel,
   sizeLabel,
@@ -77,12 +79,15 @@ export default function PropertyCard({ property, onView }) {
         <small>{property.location}</small>
         <h2>{property.title}</h2>
         <strong>
-          {pkr(property.price)}
-          {property.purpose === "rent" && <small> / month</small>}
+          {pricePK(property.price)}
+          {property.purpose === "rent" && <small>/month</small>}
         </strong>
         <p>
           {sizeLabel(property)} · {property.type}
           {property.purpose && <> · {purposeLabel(property.purpose)}</>}
+          {hasFloor(property.type) && floorLabel(property.floor_level) && (
+            <> · {floorLabel(property.floor_level)}</>
+          )}
         </p>
         {property.building_categories?.length > 0 && (
           <p className="property-categories">

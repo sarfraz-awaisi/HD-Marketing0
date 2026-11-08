@@ -154,7 +154,7 @@ async function openNew(user) {
   );
   await user.type(screen.getByLabelText("Property title"), property.title);
   await user.type(screen.getByLabelText("City"), property.city);
-  await user.type(screen.getByLabelText("Price (PKR)"), "100");
+  await user.type(screen.getByLabelText("Price"), "100");
   await user.type(screen.getByLabelText("Size"), "5");
   await user.selectOptions(screen.getByLabelText("Property type"), "House");
 }

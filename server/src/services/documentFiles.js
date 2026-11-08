@@ -128,20 +128,47 @@ export function validateDocumentFile(file) {
       if (!word || word.content?.[0] !== 0xec || word.content?.[1] !== 0xa5)
         throw invalid();
     } else checkDocx(buffer);
-    const basename = file.originalname
-      .replaceAll("\\", "/")
-      .split("/")
-      .at(-1)
-      .normalize("NFKC")
-      .replace(/\p{C}/gu, "");
-    const stem =
-      basename.slice(0, -(extension.length + 1)).slice(0, 180) || "document";
     return {
-      file_name: stem + "." + extension,
+      file_name: cleanFileName(file.originalname, extension),
       mime_type: types[extension],
       size_bytes: buffer.length,
     };
   } catch {
     throw invalid();
   }
+}
+// The name shown to users: no folders or control characters, and a stem of
+// at most 180 characters.
+function cleanFileName(originalname, extension) {
+  const basename = originalname
+    .replaceAll("\\", "/")
+    .split("/")
+    .at(-1)
+    .normalize("NFKC")
+    .replace(/\p{C}/gu, "");
+  const stem =
+    basename.slice(0, -(extension.length + 1)).slice(0, 180) || "document";
+  return stem + "." + extension;
+}
+// Property documents (update 054): PDF only, up to maxBytes.
+export function validatePropertyPdf(file, maxBytes) {
+  const buffer = file?.buffer;
+  if (
+    !buffer?.length ||
+    buffer.length > maxBytes ||
+    file.originalname?.split(".").at(-1).toLowerCase() !== "pdf" ||
+    !["application/pdf", "application/octet-stream"].includes(file.mimetype) ||
+    buffer.subarray(0, 5).toString() !== "%PDF-" ||
+    !buffer.subarray(-1024).includes(Buffer.from("%%EOF"))
+  )
+    throw Object.assign(
+      new Error(
+        `Choose a PDF file up to ${Math.floor(maxBytes / 1048576)} MB.`,
+      ),
+      { status: 400 },
+    );
+  return {
+    file_name: cleanFileName(file.originalname, "pdf"),
+    size_bytes: buffer.length,
+  };
 }

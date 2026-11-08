@@ -4,19 +4,32 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button, ErrorBox } from "../common/UI";
 import PropertyPhotoPicker from "./PropertyPhotoPicker";
+import PropertyDocumentPicker from "./PropertyDocumentPicker";
 import {
   amenities,
   areaUnits,
   buildingCategoryGroups,
   constructionStatuses,
+  floorLabel,
   furnishings,
+  groundLevels,
+  hasFloor,
   isPlot,
+  maxFloor,
   propertyTypeGroups,
   propertyTypes,
   provinces,
   purposes,
   statusFor,
 } from "../../lib/inventory";
+import {
+  exactPrice,
+  priceForEditing,
+  priceFrom,
+  pricePK,
+  priceUnits,
+  splitPrice,
+} from "../../lib/price";
 
 const text = (max) => z.string().trim().max(max, `Use up to ${max} characters`);
 const count = (max) =>
@@ -57,19 +70,18 @@ const schema = z
       .trim()
       .refine((v) => Number(v) > 0 && Number(v) <= 1e9, "Enter the size"),
     area_unit: z.string().min(1),
-    price: z
-      .string()
-      .trim()
-      .refine(
-        (v) => v !== "" && Number(v) >= 0 && Number(v) <= 1e13,
-        "Enter the price in rupees",
-      ),
+    // Update 054: an amount and a unit (PKR, Thousand, Lakh or Crore).
+    price_amount: z.string(),
+    price_unit: z.string(),
     price_negotiable: z.boolean(),
     price_notes: text(300),
     bedrooms: count(50),
     bathrooms: count(50),
     kitchens: count(20),
     floors: count(200),
+    // Update 054: "" none, -2 to 0 a named level, "upper" a numbered floor.
+    floor_choice: z.string(),
+    floor_number: z.string().trim(),
     parking_spaces: count(100),
     property_age: count(200),
     furnishing: z.string(),
@@ -85,6 +97,29 @@ const schema = z
   .refine((v) => statusFor(v.purpose).some((s) => s.value === v.availability), {
     message: "Use Sold for sale listings and Rented for rent listings",
     path: ["availability"],
+  })
+  .superRefine((v, ctx) => {
+    const price = priceFrom(v.price_amount, v.price_unit);
+    if (price.error)
+      ctx.addIssue({
+        code: "custom",
+        message: price.error,
+        path: ["price_amount"],
+      });
+    if (!hasFloor(v.type) || v.floor_choice !== "upper") return;
+    const floor = v.floor_number;
+    if (!/^\d+$/.test(floor) || Number(floor) < 1 || Number(floor) > maxFloor)
+      ctx.addIssue({
+        code: "custom",
+        message: `Enter a floor number from 1 to ${maxFloor}`,
+        path: ["floor_number"],
+      });
+    else if (/^\d+$/.test(v.floors) && Number(floor) > Number(v.floors))
+      ctx.addIssue({
+        code: "custom",
+        message: `The floor cannot be above the building's ${v.floors} floors`,
+        path: ["floor_number"],
+      });
   });
 const asText = (v) => (v === null || v === undefined ? "" : String(v));
 function defaults(p = {}) {
@@ -106,13 +141,21 @@ function defaults(p = {}) {
     map_url: asText(p.map_url),
     area: asText(p.area),
     area_unit: p.area_unit || "marla",
-    price: asText(p.price),
+    price_amount: priceForEditing(p.price).amount,
+    price_unit: priceForEditing(p.price).unit,
     price_negotiable: !!p.price_negotiable,
     price_notes: asText(p.price_notes),
     bedrooms: asText(p.bedrooms),
     bathrooms: asText(p.bathrooms),
     kitchens: asText(p.kitchens),
     floors: asText(p.floors),
+    floor_choice:
+      p.floor_level === null || p.floor_level === undefined
+        ? ""
+        : p.floor_level > 0
+          ? "upper"
+          : String(p.floor_level),
+    floor_number: p.floor_level > 0 ? String(p.floor_level) : "",
     parking_spaces: asText(p.parking_spaces),
     property_age: asText(p.property_age),
     furnishing: asText(p.furnishing),
@@ -127,6 +170,40 @@ function defaults(p = {}) {
   };
 }
 const orNull = (v) => v.trim() || null;
+// The floor to save: none for types that are not on a floor.
+function floorLevel(v) {
+  if (!hasFloor(v.type) || v.floor_choice === "") return null;
+  return v.floor_choice === "upper"
+    ? Number(v.floor_number)
+    : Number(v.floor_choice);
+}
+const buildingKeys = [
+  "bedrooms",
+  "bathrooms",
+  "kitchens",
+  "floors",
+  "parking_spaces",
+  "property_age",
+  "furnishing",
+  "construction_status",
+];
+// What a change of type would remove from what is already saved.
+export function removedByType(initial, type) {
+  if (!initial?.id || !type || type === initial.type) return [];
+  const removed = [];
+  if (
+    isPlot(type) &&
+    !isPlot(initial.type) &&
+    (buildingKeys.some(
+      (k) => initial[k] !== null && initial[k] !== undefined,
+    ) ||
+      initial.building_categories?.length)
+  )
+    removed.push("the building details");
+  if (!hasFloor(type) && floorLabel(initial.floor_level))
+    removed.push(`the floor (${floorLabel(initial.floor_level)})`);
+  return removed;
+}
 const numberOrNull = (v) => (v.trim() === "" ? null : Number(v));
 // The owner is never sent: the server takes it from the signed-in account.
 export function propertyPayload(v, { ownership, initial } = {}) {
@@ -146,7 +223,7 @@ export function propertyPayload(v, { ownership, initial } = {}) {
     map_url: orNull(v.map_url),
     area: Number(v.area),
     area_unit: v.area_unit,
-    price: Number(v.price),
+    price: priceFrom(v.price_amount, v.price_unit).value,
     price_negotiable: v.price_negotiable,
     price_notes: orNull(v.price_notes),
     amenities: v.amenities,
@@ -164,6 +241,7 @@ export function propertyPayload(v, { ownership, initial } = {}) {
       bathrooms: numberOrNull(v.bathrooms),
       kitchens: numberOrNull(v.kitchens),
       floors: numberOrNull(v.floors),
+      floor_level: floorLevel(v),
       parking_spaces: numberOrNull(v.parking_spaces),
       property_age: numberOrNull(v.property_age),
       furnishing: v.furnishing || null,
@@ -213,6 +291,7 @@ const Options = ({ list, empty }) => (
 // ownership: "company" for administrators, "agent" for an agent's own form.
 export default function PropertyForm({ initial, ownership, onSave }) {
   const [pictures, setPictures] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const {
     register,
     handleSubmit,
@@ -224,13 +303,28 @@ export default function PropertyForm({ initial, ownership, onSave }) {
     resolver: zodResolver(schema),
     defaultValues: defaults(initial),
   });
-  const [type, purpose, availability, chosen, categories] = watch([
+  const [
+    type,
+    purpose,
+    availability,
+    chosen,
+    categories,
+    priceAmount,
+    priceUnit,
+    floorChoice,
+  ] = watch([
     "type",
     "purpose",
     "availability",
     "amenities",
     "building_categories",
+    "price_amount",
+    "price_unit",
+    "floor_choice",
   ]);
+  const price = priceFrom(priceAmount, priceUnit);
+  const amountField = register("price_amount");
+  const removed = removedByType(initial, type);
   useEffect(() => {
     if (!statusFor(purpose).some((s) => s.value === availability))
       setValue("availability", "available");
@@ -254,6 +348,14 @@ export default function PropertyForm({ initial, ownership, onSave }) {
       className="property-form"
       noValidate
       onSubmit={handleSubmit(async (values) => {
+        // A new type that has no building details or floor clears them.
+        if (
+          removed.length &&
+          !window.confirm(
+            `Saving as ${values.type} removes ${removed.join(" and ")} recorded for this property. Save anyway?`,
+          )
+        )
+          return;
         try {
           await onSave(
             propertyPayload(values, { ownership, initial }),
@@ -261,6 +363,11 @@ export default function PropertyForm({ initial, ownership, onSave }) {
             (uploaded) =>
               setPictures((current) =>
                 current.filter((p) => p.id !== uploaded.id),
+              ),
+            documents,
+            (uploaded) =>
+              setDocuments((current) =>
+                current.filter((d) => d.id !== uploaded.id),
               ),
           );
         } catch (e) {
@@ -292,8 +399,9 @@ export default function PropertyForm({ initial, ownership, onSave }) {
             </select>,
             {
               required: true,
-              hint:
-                initial?.type && !propertyTypes.includes(initial.type)
+              hint: removed.length
+                ? `Saving as ${type} removes ${removed.join(" and ")}.`
+                : initial?.type && !propertyTypes.includes(initial.type)
                   ? `Previously recorded as "${initial.type}"`
                   : undefined,
             },
@@ -385,15 +493,53 @@ export default function PropertyForm({ initial, ownership, onSave }) {
             </select>,
             { required: true, hint: "Saved as entered, never converted" },
           )}
-          {field(
-            "price",
-            "Price (PKR)",
-            input("price", { type: "number", min: 0, step: "any" }),
-            {
-              required: true,
-              hint: purpose === "rent" ? "Monthly rent" : "Asking price",
-            },
-          )}
+          {/* Update 054: an amount and its unit; saved in PKR. */}
+          <div className="price-entry wide">
+            {field(
+              "price_amount",
+              purpose === "rent" ? "Monthly rent" : "Price",
+              <input
+                inputMode="decimal"
+                autoComplete="off"
+                placeholder={priceUnit === "pkr" ? "e.g. 85,000" : "e.g. 2.3"}
+                {...amountField}
+                onBlur={(e) => {
+                  amountField.onBlur(e);
+                  // "2.3 cr" typed in full: the unit moves to the list.
+                  const split = splitPrice(e.target.value);
+                  if (split?.unit) {
+                    setValue("price_unit", split.unit);
+                    setValue("price_amount", split.amount, {
+                      shouldValidate: !!errors.price_amount,
+                    });
+                  }
+                }}
+              />,
+              {
+                required: true,
+                hint:
+                  !priceAmount.trim() || price.error
+                    ? purpose === "rent"
+                      ? "Rent is recorded per month. You can type 45K or 1.5 Lakh."
+                      : "You can type 2.3 Crore, 75 Lakh or 45K."
+                    : undefined,
+              },
+            )}
+            {field(
+              "price_unit",
+              "Price unit",
+              <select {...register("price_unit")}>
+                <Options list={priceUnits} />
+              </select>,
+            )}
+            {!price.error && (
+              <p className="price-preview" role="status">
+                = {exactPrice(price.value)}
+                {price.value >= 1e5 && <> · {pricePK(price.value).slice(4)}</>}
+                {purpose === "rent" && " per month"}
+              </p>
+            )}
+          </div>
           {field("price_notes", "Price notes", input("price_notes"))}
           <label className="checkbox-field wide">
             <input
@@ -412,7 +558,41 @@ export default function PropertyForm({ initial, ownership, onSave }) {
             {field("bedrooms", "Bedrooms", numberInput("bedrooms"))}
             {field("bathrooms", "Bathrooms", numberInput("bathrooms"))}
             {field("kitchens", "Kitchens", numberInput("kitchens"))}
-            {field("floors", "Floors", numberInput("floors"))}
+            {hasFloor(type) && (
+              <>
+                {field(
+                  "floor_choice",
+                  "Floor",
+                  <select {...register("floor_choice")}>
+                    <option value="">Not specified</option>
+                    <Options list={groundLevels} />
+                    <option value="upper">
+                      Upper floor (enter the number)
+                    </option>
+                  </select>,
+                )}
+                {floorChoice === "upper" &&
+                  field(
+                    "floor_number",
+                    "Floor number",
+                    input("floor_number", {
+                      type: "number",
+                      min: 1,
+                      max: maxFloor,
+                      step: 1,
+                      inputMode: "numeric",
+                      placeholder: "e.g. 7",
+                    }),
+                    { required: true },
+                  )}
+              </>
+            )}
+            {field(
+              "floors",
+              hasFloor(type) ? "Total building floors" : "Floors",
+              numberInput("floors"),
+              hasFloor(type) ? { hint: "Optional" } : {},
+            )}
             {field(
               "parking_spaces",
               "Parking spaces",
@@ -548,6 +728,12 @@ export default function PropertyForm({ initial, ownership, onSave }) {
         pictures={pictures}
         onChange={setPictures}
         disabled={isSubmitting}
+      />
+      <PropertyDocumentPicker
+        documents={documents}
+        onChange={setDocuments}
+        disabled={isSubmitting}
+        existing={!!initial?.id}
       />
       <ErrorBox error={errors.root?.message} />
       <footer>

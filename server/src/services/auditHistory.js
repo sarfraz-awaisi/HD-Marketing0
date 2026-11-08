@@ -102,6 +102,7 @@ const fieldLabels = {
   target_quantity: "target",
   building_categories: "building categories",
   company_name: "agency or company name",
+  floor_level: "floor",
 };
 // ["price","availability"] as "price and availability status".
 export function fieldsText(fields) {
@@ -442,6 +443,18 @@ add(
   "update",
   "Changed a lead's phone number",
   (c) => `Changed the phone number of ${leadRef(c)}.`,
+);
+// Update 054: an agent or administrator corrected the customer's name.
+add(
+  "lead.renamed",
+  "leads",
+  "leads",
+  "update",
+  "Corrected a customer's name",
+  (c) =>
+    typeof c.m.before === "string" && typeof c.m.after === "string"
+      ? `Changed the customer name of ${leadRef(c)} from “${c.m.before}” to “${c.m.after}”.`
+      : `Changed the customer name of ${leadRef(c)}.`,
 );
 add(
   "lead.phone_revealed",
@@ -918,7 +931,16 @@ add(
       ? `${c.agent.name}${notes.length ? ` (${notes.join(", ")})` : ""}`
       : "an agent";
     const missing = number(c.m.photos_missing);
-    return `Added ${copy} to Admin Properties as an independent copy of ${from ? `${from}, ` : "the listing "}originally listed by ${agent}${number(c.m.photo_count) ? `, with ${count(c.m.photo_count, "photo")}` : ""}.${missing ? ` ${count(missing, "photo")} could not be copied.` : ""}`;
+    // Update 054: documents are copied too.
+    const copied = [
+      number(c.m.photo_count) && count(c.m.photo_count, "photo"),
+      number(c.m.document_count) && count(c.m.document_count, "document"),
+    ].filter(Boolean);
+    const lost = [
+      missing && count(missing, "photo"),
+      number(c.m.documents_missing) && count(c.m.documents_missing, "document"),
+    ].filter(Boolean);
+    return `Added ${copy} to Admin Properties as an independent copy of ${from ? `${from}, ` : "the listing "}originally listed by ${agent}${copied.length ? `, with ${listText(copied)}` : ""}.${lost.length ? ` ${listText(lost)} could not be copied.` : ""}`;
   },
 );
 add(
@@ -928,6 +950,25 @@ add(
   "create",
   "Uploaded a property photo",
   (c) => `Added a photo to ${propertyText(c)}.`,
+);
+// Update 054: PDF documents of a property.
+const fileNameText = (c) =>
+  typeof c.m.file_name === "string" ? `“${c.m.file_name}”` : "a document";
+add(
+  "upload_document",
+  "properties",
+  "properties",
+  "create",
+  "Added a property document",
+  (c) => `Added the document ${fileNameText(c)} to ${propertyText(c)}.`,
+);
+add(
+  "delete_document",
+  "properties",
+  "properties",
+  "delete",
+  "Removed a property document",
+  (c) => `Removed the document ${fileNameText(c)} from ${propertyText(c)}.`,
 );
 add(
   "delete_photo",
@@ -2022,6 +2063,12 @@ export function presentAuditEntry(row) {
         m.before && !m.before.inherits ? timingText(m.before) : fallbackText(c),
       after: m.inherits ? fallbackText(c) : timingText(m.after),
     });
+  if (
+    c.action === "lead.renamed" &&
+    typeof m.before === "string" &&
+    typeof m.after === "string"
+  )
+    changes.push({ label: "Customer name", before: m.before, after: m.after });
   if (m.from_status && m.to_status)
     changes.push({
       label: "Lead status",

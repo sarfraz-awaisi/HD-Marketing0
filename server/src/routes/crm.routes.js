@@ -27,6 +27,7 @@ import {
   agentLeadsQuery,
   leadIds,
   auditQuery,
+  leadName,
 } from "../utils/validators.js";
 import {
   auditKinds,
@@ -482,6 +483,36 @@ export function crmRouter(db, options = {}) {
     ]);
     req.phoneRevealResponse = true;
     res.set("Cache-Control", "no-store").json({ phone: result.phone });
+  });
+  // Update 054: an agent corrects the name of a lead assigned to them now; an
+  // administrator, of any lead. The database checks both and records the
+  // name before and after in the audit.
+  router.put("/leads/:id/name", sensitiveLimit, async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const body = leadName.safeParse(req.body);
+    if (!body.success)
+      return res.status(400).json({ error: body.error.issues[0].message });
+    const { data, error } = await db.rpc("lead_rename", {
+      p_lead: id,
+      p_actor: req.user.id,
+      p_name: body.data.name,
+      p_request: req.id,
+    });
+    if (error) {
+      const custom = /^HA(\d{3})$/.exec(error.code || "");
+      const missing = ["PGRST202", "42883"].includes(error.code);
+      throw Object.assign(
+        new Error(
+          custom
+            ? error.message
+            : missing
+              ? "Editing names needs CRM database update 054."
+              : "The name could not be saved. Please try again.",
+        ),
+        { status: custom ? Number(custom[1]) : 503 },
+      );
+    }
+    res.json(data);
   });
   router.post("/leads/:id/assign", adminOnly, async (req, res) => {
     const body = z
