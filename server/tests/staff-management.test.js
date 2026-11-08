@@ -914,7 +914,14 @@ describe("checkout approvals for staff", () => {
 describe("leave for staff", () => {
   it("is requested by staff, decided by administrators and never counted as absence", async () => {
     const day = await today();
-    const from = (await one("select ($1::date+7)::text d", [day])).d;
+    // A working day about a week ahead. Leave covers working days only: on a
+    // day off (Sunday) or a holiday the day stays a day off or a holiday.
+    const from = (
+      await one(
+        "select min(day)::text d from public.attendance_days($1::date+7,$1::date+13,$2,now()) where scheduled and holiday is null",
+        [day, editor],
+      )
+    ).d;
     const res = await send(editor, "post", "/attendance/leave", {
       leave_type: "casual",
       start_date: from,
