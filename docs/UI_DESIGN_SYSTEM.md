@@ -48,7 +48,7 @@ Every figure comes from the existing `GET /api/dashboard` and `GET /api/notifica
 
 `pages/Login.jsx`, `components/login/GlassForm.jsx` and `styles/login.css` (scoped to `.glass-login-page`):
 
-- Full-screen office photograph (`assets/login/office-sunset-1600.webp`, 56 KB; `office-sunset-960.webp`, 26 KB, for screens up to 960 px) with a light navy wash.
+- Full-screen HD Marketing skyline (`assets/login/hd-marketing-skyline-1600.webp`, 103 KB; `hd-marketing-skyline-960.webp`, 47 KB, for screens up to 960 px) with a light navy wash.
 - A frosted-glass frame holding two sides: the active sign-in form in a brighter glass card, and a switch panel showing the other role (title, description and an **Open … Login** button). The circular ↔ button between them is labelled **Switch to Admin Login** / **Switch to Agent Login**.
 - Switching slides the card and the switch panel past each other in 680 ms (`cubic-bezier(0.65, 0, 0.35, 1)`). The old form fades out, the new one appears halfway, and repeated clicks always end on the last choice. With reduced motion the swap is instant.
 - Up to 960 px wide there is one card with a compact **Admin | Agent** pill switch at the top.
