@@ -33,7 +33,7 @@ beforeEach(() => {
   rows = [lead];
   mocks.auth.user = { id: agent, role: "agent", name: "Agent" };
   mocks.api.mockImplementation(async (path) => {
-    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+    if (/^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"))
       return { data: rows, count: rows.length };
     if (path === "/leads/" + lead.id) return lead;
     if (path.endsWith("/timeline") || path === "/users") return [];
@@ -86,8 +86,10 @@ describe("automatic visible lead contacts", () => {
       }),
     ).not.toBeInTheDocument();
     expect(extraPhoneCalls()).toHaveLength(0);
-    // Agents' Assigned leads shows # instead of the HD number (update 052).
-    if (role === "agent" && page === "list")
+    // Lead lists show # instead of the HD number: agents' Assigned leads
+    // (update 052) and administrators' All leads (update 057). The lead's
+    // page keeps it.
+    if (page === "list")
       expect(screen.queryByText(/HD-000123/)).not.toBeInTheDocument();
     else expect(screen.getAllByText(/HD-000123/).length).toBeGreaterThan(0);
     if (page === "list") {
@@ -127,7 +129,7 @@ describe("automatic visible lead contacts", () => {
       expect(screen.getByText(row.phone)).toBeInTheDocument();
     expect(
       mocks.api.mock.calls.filter(
-        ([p]) => p.startsWith("/leads?") || p.startsWith("/my-leads?"),
+        ([p]) => /^\/leads(\/all)?\?/.test(p) || p.startsWith("/my-leads?"),
       ),
     ).toHaveLength(1);
     expect(extraPhoneCalls()).toHaveLength(0);
@@ -196,7 +198,7 @@ describe("automatic visible lead contacts", () => {
       mocks.auth.user.role = role;
       const original = mocks.api.getMockImplementation();
       mocks.api.mockImplementation((p, o) =>
-        p.startsWith("/leads?") || p.startsWith("/my-leads?")
+        /^\/leads(\/all)?\?/.test(p) || p.startsWith("/my-leads?")
           ? Promise.reject(
               new Error(
                 "Visible lead numbers need database migration 021 after 020.",

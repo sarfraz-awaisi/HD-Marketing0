@@ -262,6 +262,30 @@ export const agentLeadsQuery = z
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
   .strict();
+// Administrators' All leads (update 057): search by a customer's name or
+// contact number (as agents search) or an HD number written with HD; the
+// filters apply together. An agent's leads are assigned ones.
+export const adminLeadsQuery = z
+  .object({
+    search: z
+      .string()
+      .trim()
+      .max(100)
+      .regex(/^[\p{L}\p{N} @#()+._-]*$/u)
+      .optional(),
+    assignment: z.enum(["assigned", "unassigned"]).optional(),
+    agent: uuid.optional(),
+    call: z.enum(["uncalled", "missed"]).optional(),
+    status: z.enum(statuses).optional(),
+    lost_reason: z.enum(lostReasons).optional(),
+    source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
+    import_id: uuid.optional(),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+  })
+  .strict()
+  .refine((q) => !(q.agent && q.assignment === "unassigned"), {
+    message: "An agent's leads are assigned leads",
+  });
 // Administrators' Lead pipeline (update 055): the agents, by name or UID,
 // then one agent's pipeline, current or earlier contacts.
 const pipelineSearch = z
@@ -602,6 +626,18 @@ export const bulkAssignment = z
     (body) => (body.mode === "agent" ? !!body.agent_id : !body.agent_id),
     "Choose an agent only for direct assignment",
   );
+// Assigning selected leads that have no agent (update 057): to one agent or
+// round-robin; leads that have an agent are never taken from them.
+export const unassignedAssignment = z
+  .object({
+    lead_ids: leadIds,
+    mode: z.enum(["agent", "round_robin"]),
+    agent_id: uuid.optional(),
+  })
+  .strict()
+  .refine((body) => (body.mode === "agent") === !!body.agent_id, {
+    message: "Choose an agent only for direct assignment",
+  });
 // Attendance (update 040). Self-service bodies never carry a user id: the
 // employee always comes from the verified session.
 const isoDay = z.iso.date();

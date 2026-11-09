@@ -157,7 +157,7 @@ beforeEach(() => {
       if (!file) throw new Error("File not found");
       return file;
     }
-    if (path.startsWith("/leads?") || path.startsWith("/my-leads?")) {
+    if (/^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?")) {
       const q = new URLSearchParams(path.split("?")[1]);
       return {
         data: leads.filter(
@@ -341,7 +341,7 @@ describe("file assignment screens", () => {
     expect(
       mocks.api.mock.calls.some(
         ([path]) =>
-          (path.startsWith("/leads?") || path.startsWith("/my-leads?")) &&
+          (/^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?")) &&
           new URLSearchParams(path.split("?")[1]).get("import_id") === first,
       ),
     ).toBe(true);
@@ -356,7 +356,7 @@ describe("file assignment screens", () => {
       mocks.api.mock.calls
         .filter(
           ([path]) =>
-            path.startsWith("/leads?") || path.startsWith("/my-leads?"),
+            /^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"),
         )
         .every(([path]) => path.includes("import_id=" + first)),
     ).toBe(true);

@@ -81,7 +81,7 @@ beforeEach(() => {
   mocks.api.mockImplementation(async (path, options) => {
     if (path.endsWith("/calls/manual") && options?.method === "POST")
       return { id: "call-1", ...options.body };
-    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+    if (/^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"))
       return { data: rows, count: rows.length };
     if (path === "/leads/" + baseLead.id) return rows[0];
     if (path.endsWith("/timeline") || path === "/users") return [];

@@ -89,7 +89,7 @@ beforeEach(() => {
       ];
     if (path.startsWith("/properties"))
       return { data: [{ id: propertyId, title: "Pipeline house" }], count: 1 };
-    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+    if (/^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"))
       return { data: [currentLead], count: 1 };
     return { data: [], count: 0 };
   });
@@ -269,7 +269,7 @@ describe("F1 pipeline screens", () => {
       expect(screen.getByLabelText("Filter by lost reason")).toHaveValue("");
       await waitFor(() =>
         expect(mocks.api).toHaveBeenCalledWith(
-          "/leads?page=1&search=&status=contacted",
+          "/leads/all?status=contacted&page=1",
           expect.objectContaining({ signal: expect.any(AbortSignal) }),
         ),
       );
