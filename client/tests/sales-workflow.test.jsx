@@ -185,7 +185,7 @@ beforeEach(() => {
         updated_at: "2026-10-17T05:00:00Z",
       };
     if (path === "/account-security") return { configured: true };
-    if (path.startsWith("/leads?") || path.startsWith("/my-leads?"))
+    if (/^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"))
       return {
         data: [{ ...late, email: null, source: "CSV", phone: "+923001234567" }],
         count: 1,
@@ -350,7 +350,8 @@ describe("agent call queue", () => {
     ).toHaveAttribute("href", "/leads?view=all&call=uncalled");
     expect(
       mocks.api.mock.calls.some(
-        ([path]) => path.startsWith("/leads?") || path.startsWith("/my-leads?"),
+        ([path]) =>
+          /^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"),
       ),
     ).toBe(false);
     expect(reviewPaths()).toEqual([]);
@@ -366,7 +367,8 @@ describe("agent call queue", () => {
       screen.getByRole("button", { name: "Remove filter Missed first call" }),
     ).toBeInTheDocument();
     const first = mocks.api.mock.calls.find(
-      ([path]) => path.startsWith("/leads?") || path.startsWith("/my-leads?"),
+      ([path]) =>
+        /^\/leads(\/all)?\?/.test(path) || path.startsWith("/my-leads?"),
     )[0];
     // Agents' Assigned leads (updates 052, 053): the database sorts a
     // first-call filter by deadline, the longest waiting first.
@@ -385,7 +387,8 @@ describe("agent call queue", () => {
       expect(
         mocks.api.mock.calls.some(
           ([path]) =>
-            (path.startsWith("/leads?") || path.startsWith("/my-leads?")) &&
+            (/^\/leads(\/all)?\?/.test(path) ||
+              path.startsWith("/my-leads?")) &&
             !path.includes("call="),
         ),
       ).toBe(true),

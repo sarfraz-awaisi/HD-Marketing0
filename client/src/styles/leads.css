@@ -395,3 +395,99 @@ dialog.lead-name-dialog {
 .ad-inquiry > small {
   color: var(--ink-3);
 }
+/* Administrators' All leads (update 057): the agent list's table with
+   selection and Assigned to; on phones each lead becomes a card. */
+/* Narrower than the older list's 1,180 px (index.css), so it fits beside
+   the menu on a laptop. */
+.admin-lead-table .lead-record-table:has(th[data-field="phone"]) {
+  min-width: 900px;
+}
+.admin-lead-table .lead-record-table [data-field="phone"] {
+  min-width: 150px;
+}
+.admin-lead-table .lead-record-table [data-field="name"] {
+  min-width: 170px;
+}
+.admin-lead-table td[data-field="actions"] .button {
+  white-space: nowrap;
+}
+/* The number above its Call button, and the first-call deadline on two
+   lines, as in the Lead pipeline, so the table fits beside the menu. */
+.admin-lead-table .lead-record-table .lead-phone-call {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.admin-lead-table td[data-field="first_call"] .badge {
+  white-space: normal;
+}
+@media (max-width: 800px) {
+  .admin-lead-table .table-scroll {
+    overflow: visible;
+  }
+  .admin-lead-table .lead-record-table:has(th[data-field="phone"]),
+  .admin-lead-table tbody,
+  .admin-lead-table tr {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+  .admin-lead-table .lead-record-table td[data-field] {
+    min-width: 0;
+  }
+  .admin-lead-table thead {
+    display: none;
+  }
+  .admin-lead-table tr {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 12px;
+    margin: 12px 0;
+  }
+  .admin-lead-table td {
+    grid-column: 1 / -1;
+  }
+  /* # and the checkbox share the card's first line. */
+  .admin-lead-table td[data-field="__serial"],
+  .admin-lead-table td[data-field="__select"] {
+    display: flex;
+    grid-column: auto;
+    border-bottom: 0;
+    font-weight: 600;
+  }
+  .admin-lead-table td[data-field="__select"] {
+    justify-content: flex-end;
+  }
+  .admin-lead-table td[data-field="__serial"]::before {
+    content: "#";
+  }
+  .admin-lead-table td[data-field="__select"]::before {
+    content: none;
+  }
+  .admin-lead-table td {
+    display: grid;
+    grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    white-space: normal;
+    position: static;
+    box-shadow: none;
+  }
+  .admin-lead-table td::before {
+    content: attr(data-label);
+    color: var(--ink-3);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .admin-lead-table td:last-child {
+    border-bottom: 0;
+  }
+  .admin-leads .bulk-action-bar > *,
+  .admin-leads .bulk-action-bar select {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+}

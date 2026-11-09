@@ -5,13 +5,14 @@ import { temperatureOf } from "../../lib/temperature";
 // Table cells shared by an agent's Assigned leads and Lead pipeline
 // (updates 052 and 053). `back` is the list's address, so Back to leads
 // returns to the same search, filters and page.
-export function CustomerCell({ lead, back }) {
+// email={false}: the name only (administrators' All leads, update 057).
+export function CustomerCell({ lead, back, email = true }) {
   return (
     <Link className="customer-link" to={"/leads/" + lead.id} state={{ back }}>
       <span className="avatar small">{lead.name[0]}</span>
       <div>
         <b>{lead.name}</b>
-        <small>{lead.email || "No email"}</small>
+        {email && <small>{lead.email || "No email"}</small>}
       </div>
     </Link>
   );

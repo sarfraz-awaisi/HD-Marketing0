@@ -27,6 +27,8 @@ import {
   agentLeadsQuery,
   pipelineAgentsQuery,
   agentPipelineQuery,
+  adminLeadsQuery,
+  unassignedAssignment,
   leadIds,
   auditQuery,
   leadName,
@@ -510,6 +512,60 @@ export function crmRouter(db, options = {}) {
       data: await leadContacts(db, req, result.data),
     });
   });
+  // Administrators' All leads (update 057): search, filters, counts and
+  // pages are worked out in the database across every lead; numbers are
+  // added as in every lead list. With selection, the IDs of up to 500
+  // matching leads.
+  const adminLeads = (req, ids) => {
+    const { import_id, page, ...q } = adminLeadsQuery.parse(req.query);
+    return salesRpc(
+      db,
+      "admin_lead_list",
+      {
+        p_actor: req.user.id,
+        p_query: {
+          ...q,
+          ...(import_id ? { import: import_id } : {}),
+          ...(ids ? { ids: true } : { page }),
+        },
+      },
+      "057 after 056",
+    );
+  };
+  router.get("/leads/all", adminOnly, async (req, res) => {
+    const result = await adminLeads(req, false);
+    res.set("Cache-Control", "no-store").json({
+      ...result,
+      data: await leadContacts(db, req, result.data),
+    });
+  });
+  router.get("/leads/all/selection", adminOnly, reportLimit, async (req, res) =>
+    res.json({ ids: (await adminLeads(req, true)).ids }),
+  );
+  // Assigns the selected leads that have no agent (update 057), never one
+  // that has: the database skips and names those, and reports each lead.
+  router.post(
+    "/leads/assign-unassigned",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const body = unassignedAssignment.parse(req.body);
+      res.json(
+        await salesRpc(
+          db,
+          "assign_unassigned_leads",
+          {
+            p_lead_ids: body.lead_ids,
+            p_actor: req.user.id,
+            p_mode: body.mode,
+            p_agent: body.agent_id || null,
+            p_request: req.id,
+          },
+          "057 after 056",
+        ),
+      );
+    },
+  );
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
     const q = listQuery.parse(req.query);
     let query = db
