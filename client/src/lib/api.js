@@ -51,7 +51,7 @@ export async function api(path, options = {}) {
     }
     if (
       err.code === "mfa_required" ||
-      String(err.code || "").startsWith("MFA_")
+      /^(MFA|SHEETS)_/.test(String(err.code || ""))
     )
       error.code = err.code;
     if (err.code === "mfa_required")

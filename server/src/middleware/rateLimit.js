@@ -7,6 +7,8 @@ import { rateLimit } from "express-rate-limit";
 //   unverified token claims never choose the key, so colleagues behind one
 //   office IP each have their own allowance.
 // - "invitee": per invited user whose invitation session Supabase verified.
+// - "integration": per Google Sheets integration key the database accepted
+//   (update 056), so the Apps Script's allowance is its own.
 // - "ip": per client address (req.ip, derived through TRUST_PROXY; IPv6 is
 //   grouped by /56), for requests made before anyone has proved who they are.
 // docs/RATE_LIMITS.md records the measured workload behind each default.
@@ -112,6 +114,24 @@ export const rateLimitPolicies = {
     limit: 1200,
     env: "RATE_LIMIT_META_WEBHOOK_PER_MIN",
   },
+  // Google Sheets import (update 056): requests with a refused key, per
+  // address, and every request of an accepted key.
+  sheetsSyncAuth: {
+    per: "ip",
+    minutes: 15,
+    limit: 30,
+    env: "RATE_LIMIT_SHEETS_SYNC_REFUSED_PER_15_MIN",
+    message:
+      "Too many requests with an invalid integration key. Wait 15 minutes and try again.",
+  },
+  sheetsSync: {
+    per: "integration",
+    minutes: 15,
+    limit: 900,
+    env: "RATE_LIMIT_SHEETS_SYNC_PER_15_MIN",
+    message:
+      "Too many Google Sheets requests. Wait a few minutes and try again.",
+  },
 };
 // Limits from the environment (unset or empty means the default), then any
 // overrides (tests use small ones). Rate limiting cannot be switched off:
@@ -142,6 +162,13 @@ const keys = {
       });
     return "invitee:" + req.invitedUser.id;
   },
+  integration: (req) => {
+    if (!req.rateLimitIntegration)
+      throw Object.assign(new Error("Invalid integration key."), {
+        status: 401,
+      });
+    return "integration:" + req.rateLimitIntegration;
+  },
 };
 // One limiter (and one in-memory count) per policy for each app. The counts
 // live in this API process, which suits the single active PM2 process per
@@ -159,6 +186,12 @@ const options = {
   // not use up the network's allowance. Each account's durable lockout still
   // applies after five wrong passwords, from any network.
   login: { skipSuccessfulRequests: true },
+  // Only refused keys count against the address (Apps Script requests come
+  // from Google's shared addresses).
+  sheetsSyncAuth: {
+    skipSuccessfulRequests: true,
+    requestWasSuccessful: (req) => Boolean(req.sheetsKey),
+  },
 };
 export function createApiLimiters(overrides = {}, env = process.env) {
   const limits = rateLimitSettings(env, overrides);
@@ -217,3 +250,4 @@ export const onboardingLimit = policy("onboarding");
 export const loginLimit = policy("login");
 export const passwordResetLimit = policy("passwordReset");
 export const callbackLimit = policy("callbacks");
+export const sheetsSyncLimit = policy("sheetsSync");

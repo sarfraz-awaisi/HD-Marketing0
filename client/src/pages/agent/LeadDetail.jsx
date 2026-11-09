@@ -25,6 +25,7 @@ import { followUpNotice } from "../../lib/calls";
 import TimelineItem from "../../components/leads/TimelineItem";
 import LeadKycDocuments from "../../components/documents/LeadKycDocuments";
 import EditLeadName from "../../components/leads/EditLeadName";
+import AdInquiries from "../../components/leads/AdInquiries";
 export default function LeadDetail() {
   const { id } = useParams(),
     { user } = useAuth(),
@@ -255,6 +256,7 @@ export default function LeadDetail() {
           )}
         </section>
       </div>
+      <AdInquiries key={"inquiries" + id} lead={lead} />
       <LeadKycDocuments key={id} leadId={id} />
       {modal === "dial" && (
         <CallDialog

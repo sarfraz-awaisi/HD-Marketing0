@@ -8,6 +8,7 @@ import {
   Clock,
   ListChecks,
   LogOut,
+  Megaphone,
   PhoneMissed,
   PhoneOutgoing,
   Repeat,
@@ -134,8 +135,9 @@ export function MonthHighlight({ metrics, admin }) {
     </section>
   );
 }
-// One icon per notification type (updates 038, 040, 044, 045 and 048).
+// One icon per notification type (updates 038, 040, 044, 045, 048 and 056).
 const noticeIcons = {
+  ad_inquiry: Megaphone,
   task_assigned: ListChecks,
   task_updated: ListChecks,
   task_cancelled: ListChecks,

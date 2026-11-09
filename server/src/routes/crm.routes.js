@@ -64,6 +64,8 @@ import {
   unscheduledFollowUps,
 } from "../services/leadActivity.js";
 import { inventoryRouter } from "./inventory.routes.js";
+import { sheetsAdminRouter } from "./sheets.routes.js";
+import { leadInquiries } from "../services/sheetsImport.js";
 const portalNames = { admin: "Admin", agent: "Agent", staff: "Staff" };
 export function unwrap(r) {
   if (r.error)
@@ -105,6 +107,7 @@ export function crmRouter(db, options = {}) {
   router.use("/admin/tasks", adminOnly, tasksAdminRouter(db));
   router.use("/dealers", dealersRouter(db));
   router.use("/admin", adminOnly, employeesAdminRouter(db));
+  router.use("/integrations/sheets", adminOnly, sheetsAdminRouter(db));
   router.use(inventoryRouter(db));
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -586,6 +589,12 @@ export function crmRouter(db, options = {}) {
       ),
     });
   });
+  // What the customer submitted through an advertisement's Google Sheet
+  // (update 056): administrators and the lead's agent, as the database
+  // checks (404 otherwise).
+  router.get("/leads/:id/inquiries", async (req, res) =>
+    res.json(await leadInquiries(db, req.user, uuid.parse(req.params.id))),
+  );
   router.get("/leads/:id/timeline", async (req, res) => {
     const lead = await ownedLead(db, req.user, req.params.id);
     const timeline = [];

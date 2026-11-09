@@ -32,6 +32,7 @@ export const routeLoaders = {
   SecurityAlerts: once(() => import("../pages/admin/SecurityAlerts")),
   LoginHistory: once(() => import("../pages/admin/LoginHistory")),
   MetaIntegration: once(() => import("../pages/admin/MetaIntegration")),
+  GoogleSheets: once(() => import("../pages/admin/GoogleSheets")),
   IncomingSocial: once(() => import("../pages/admin/IncomingSocial")),
   MyAttendance: once(() => import("../pages/shared/MyAttendance")),
   AttendanceManagement: once(
@@ -65,6 +66,7 @@ const routes = {
   "/security-alerts": "SecurityAlerts",
   "/login-history": "LoginHistory",
   "/integrations/meta": "MetaIntegration",
+  "/integrations/sheets": "GoogleSheets",
   "/incoming-social": "IncomingSocial",
   "/attendance": "MyAttendance",
   "/attendance-management": "AttendanceManagement",

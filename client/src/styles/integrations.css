@@ -1,0 +1,123 @@
+/* Google Sheets lead import (update 056). */
+.sheet-name,
+.sheet-status,
+.sheet-counts,
+.sheet-error {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sheet-name small,
+.sheet-status small,
+.sheet-counts small,
+.sheet-error small {
+  color: var(--ink-3);
+}
+.sheet-state {
+  align-self: flex-start;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.sheet-state.on {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.sheet-state.off {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+}
+.sheet-status .sheet-warning,
+.sheet-warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+.sheet-error {
+  max-width: 260px;
+  color: var(--danger);
+}
+.sheet-key p {
+  margin: 0;
+}
+.sheet-key .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sheet-help ol {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  line-height: 1.6;
+}
+.sheet-help code,
+.sheet-key code,
+.sheet-note {
+  overflow-wrap: anywhere;
+}
+.sheet-form .checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.sheet-form .checkbox-label input {
+  width: auto;
+}
+.sheet-form small {
+  color: var(--ink-3);
+}
+.sheet-note {
+  margin: 0;
+  color: var(--ink-3);
+}
+.sheet-new-key {
+  display: block;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+/* Phones: each Sheet becomes a card, as Meta records and call review do. */
+@media (max-width: 800px) {
+  .sheet-records table,
+  .sheet-records tbody,
+  .sheet-records tr {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+  .sheet-records thead {
+    display: none;
+  }
+  .sheet-records tr {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 12px;
+    margin: 12px 0;
+  }
+  .sheet-records td {
+    display: grid;
+    grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    padding: 8px 0;
+    white-space: normal;
+  }
+  .sheet-records td::before {
+    content: attr(data-label);
+    color: var(--ink-3);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .sheet-records td:last-child {
+    border-bottom: 0;
+  }
+  .sheet-error {
+    max-width: none;
+  }
+}
