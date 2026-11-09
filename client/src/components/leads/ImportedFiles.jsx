@@ -19,7 +19,9 @@ import {
 const format = (file) =>
   file.file_format === "legacy"
     ? "CSV / Excel"
-    : file.file_format.toUpperCase();
+    : file.file_format === "sheets"
+      ? "Google Sheets"
+      : file.file_format.toUpperCase();
 export default function ImportedFiles({ assignable = false }) {
   const { user } = useAuth();
   const admin = assignable && user.role === "admin";

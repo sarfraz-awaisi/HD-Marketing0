@@ -14,6 +14,7 @@ import { authRouter } from "./routes/auth.routes.js";
 import { mfaRouter } from "./routes/mfa.routes.js";
 import { metaWebhookRouter } from "./routes/metaWebhook.routes.js";
 import { metaCallbackRouter, metaRouter } from "./routes/meta.routes.js";
+import { sheetsSyncRouter } from "./routes/sheetsSync.routes.js";
 import { trustProxy } from "./config/runtime.js";
 import { healthRouter } from "./routes/health.routes.js";
 export function createApp(db, options = {}) {
@@ -78,6 +79,13 @@ export function createApp(db, options = {}) {
     metaWebhookRouter(db),
   );
   app.use("/api/integrations/meta/callback", metaCallbackRouter(db, options));
+  // The Google Sheets Apps Script (update 056): its own key, never CRM
+  // sign-in; it reads its JSON body only after the key is accepted.
+  app.use(
+    "/api/integrations/sheets-sync",
+    limits.sheetsSyncAuth,
+    sheetsSyncRouter(db),
+  );
   app.use(
     "/api/webhooks",
     limits.callbacks,
@@ -144,6 +152,9 @@ export function createApp(db, options = {}) {
         ? { code: err.code }
         : {}),
       ...(String(err.code || "").startsWith("MFA_") ? { code: err.code } : {}),
+      ...(String(err.code || "").startsWith("SHEETS_")
+        ? { code: err.code }
+        : {}),
       ...(err.code === "IMPORT_COLUMNS_REQUIRED" && status === 400
         ? {
             code: err.code,

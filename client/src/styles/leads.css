@@ -352,3 +352,46 @@ dialog.lead-name-dialog {
   color: var(--ink-3);
   font-style: italic;
 }
+/* Advertisement inquiries on the lead page (update 056). */
+.ad-inquiries {
+  margin-top: 16px;
+}
+.ad-inquiry + .ad-inquiry {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.ad-inquiry-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.ad-inquiry-heading span {
+  color: var(--ink-3);
+}
+.ad-inquiry-heading .ad-inquiry-repeat {
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--info);
+  background: var(--info-soft);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+.ad-inquiry-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px 20px;
+  margin: 0 0 10px;
+}
+.ad-inquiry-fields dt {
+  margin: 0 0 2px;
+}
+.ad-inquiry-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ad-inquiry > small {
+  color: var(--ink-3);
+}

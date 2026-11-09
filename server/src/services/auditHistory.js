@@ -15,7 +15,7 @@ export const auditModules = [
   ["security", "Sign-in and security"],
   ["attendance", "Attendance"],
   ["settings", "Settings"],
-  ["integrations", "Facebook leads"],
+  ["integrations", "Facebook and Google Sheets leads"],
   ["system", "Automatic CRM tasks"],
   ["tasks", "Tasks and daily reports"],
   ["dealers", "Dealer network"],
@@ -1854,8 +1854,99 @@ add(
   (c) =>
     `Assigned ${number(c.m.count) != null ? count(c.m.count, "Facebook lead") : "Facebook leads"} to ${agentText(c)}.`,
 );
+// Google Sheets lead import (update 056).
+const sheetText = (c) =>
+  c.m.name || c.m.source_name
+    ? `the Google Sheet “${c.m.name || c.m.source_name}”`
+    : "a Google Sheet";
+// Decision 8: the historical import's confirmation is named in the entry.
+const historyText = (c) =>
+  c.m.history_confirmed === true
+    ? `, confirming the import of ${c.m.import_from ? "its earlier rows from the start date" : "every row already in it"}`
+    : "";
+const sheetChanges = {
+  name: "name",
+  worksheet: "tab",
+  import_from: "start date",
+  enabled: "on or off",
+};
+add(
+  "sheets.source_created",
+  "sheet_sources",
+  "integrations",
+  "create",
+  "Added a Google Sheet",
+  (c) =>
+    `Added ${sheetText(c)}${c.m.enabled === true ? " and turned it on" : ""}${historyText(c)}.`,
+);
+add(
+  "sheets.source_updated",
+  "sheet_sources",
+  "integrations",
+  "update",
+  "Changed a Google Sheet",
+  (c) => {
+    const changes = Array.isArray(c.m.changes) ? c.m.changes : [];
+    if (changes.length === 1 && changes[0] === "enabled")
+      return `${c.m.enabled ? "Turned on" : "Turned off"} ${sheetText(c)}${historyText(c)}.`;
+    const fields = changes.map((f) => sheetChanges[f]).filter(Boolean);
+    return fields.length
+      ? `Changed the ${fields.join(", ")} of ${sheetText(c)}${historyText(c)}.`
+      : `Changed ${sheetText(c)}${historyText(c)}.`;
+  },
+);
+add(
+  "sheets.new_file_requested",
+  "sheet_sources",
+  "integrations",
+  "update",
+  "Started a new lead file for a Google Sheet",
+  (c) =>
+    `Chose a new lead file for ${sheetText(c)}; the next import creates it.`,
+);
+add(
+  "sheets.key_created",
+  "sheet_sync_keys",
+  "integrations",
+  "security",
+  "Created the Google Sheets key",
+  (c) =>
+    c.m.replaced
+      ? "Replaced the Google Sheets integration key; the previous key stopped working."
+      : "Created the Google Sheets integration key.",
+);
+add(
+  "sheets.key_revoked",
+  "sheet_sync_keys",
+  "integrations",
+  "security",
+  "Turned off the Google Sheets key",
+  () => "Turned off the Google Sheets integration key.",
+);
+add(
+  "sheets.file_created",
+  "lead_imports",
+  "integrations",
+  "automatic",
+  "Created a lead file for a Google Sheet",
+  (c) => `Created ${fileText(c)} for ${sheetText(c)}.`,
+);
+add(
+  "sheets.rows_imported",
+  "lead_imports",
+  "integrations",
+  "import",
+  "Imported leads from a Google Sheet",
+  (c) => {
+    const added = number(c.m.inserted),
+      repeats = number(c.m.existing);
+    return `Imported ${added != null ? count(added, "new lead") : "leads"}${repeats ? ` and ${count(repeats, "repeat inquiry", "repeat inquiries")}` : ""} from ${sheetText(c)} into ${fileText(c)}.`;
+  },
+);
 
 const moduleByEntity = {
+  sheet_sources: "integrations",
+  sheet_sync_keys: "integrations",
   departments: "accounts",
   shift_schedules: "attendance",
   leads: "leads",

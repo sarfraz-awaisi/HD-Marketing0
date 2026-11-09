@@ -30,6 +30,7 @@ const AdminSettings = lazy(routeLoaders.AdminSettings);
 const SecurityAlerts = lazy(routeLoaders.SecurityAlerts);
 const LoginHistory = lazy(routeLoaders.LoginHistory);
 const MetaIntegration = lazy(routeLoaders.MetaIntegration);
+const GoogleSheets = lazy(routeLoaders.GoogleSheets);
 const IncomingSocial = lazy(routeLoaders.IncomingSocial);
 const MyAttendance = lazy(routeLoaders.MyAttendance);
 const AttendanceManagement = lazy(routeLoaders.AttendanceManagement);
@@ -141,6 +142,7 @@ export default function App() {
               <Route element={<Protected role="admin" />}>
                 <Route path="deleted-leads" element={<DeletedLeads />} />
                 <Route path="integrations/meta" element={<MetaIntegration />} />
+                <Route path="integrations/sheets" element={<GoogleSheets />} />
                 <Route path="incoming-social" element={<IncomingSocial />} />
                 <Route
                   path="incoming-social/:id"
