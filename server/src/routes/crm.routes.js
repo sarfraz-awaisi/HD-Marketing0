@@ -516,21 +516,35 @@ export function crmRouter(db, options = {}) {
   // pages are worked out in the database across every lead; numbers are
   // added as in every lead list. With selection, the IDs of up to 500
   // matching leads.
-  const adminLeads = (req, ids) => {
+  // The call outcome and temperature filters are update 058's: the list of
+  // 057 refuses them, after this server has already checked them.
+  const adminLeads = async (req, ids) => {
     const { import_id, page, ...q } = adminLeadsQuery.parse(req.query);
-    return salesRpc(
-      db,
-      "admin_lead_list",
-      {
-        p_actor: req.user.id,
-        p_query: {
-          ...q,
-          ...(import_id ? { import: import_id } : {}),
-          ...(ids ? { ids: true } : { page }),
+    try {
+      return await salesRpc(
+        db,
+        "admin_lead_list",
+        {
+          p_actor: req.user.id,
+          p_query: {
+            ...q,
+            ...(import_id ? { import: import_id } : {}),
+            ...(ids ? { ids: true } : { page }),
+          },
         },
-      },
-      "057 after 056",
-    );
+        "057 after 056",
+      );
+    } catch (error) {
+      if (
+        (q.outcome || q.temperature) &&
+        error.message === "Choose valid lead filters"
+      )
+        throw Object.assign(
+          new Error("This filter needs CRM database update 058 after 057."),
+          { status: 503 },
+        );
+      throw error;
+    }
   };
   router.get("/leads/all", adminOnly, async (req, res) => {
     const result = await adminLeads(req, false);

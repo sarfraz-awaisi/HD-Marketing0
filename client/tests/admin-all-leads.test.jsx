@@ -6,6 +6,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "../src/App";
 import { ToastProvider } from "../src/components/common/UI";
+import { callOutcomes } from "../src/lib/calls";
 // Update 057: administrators' All leads. API responses are mocked; the
 // server tests check the search, filters, counts and assignment rules.
 const mocks = vi.hoisted(() => ({ api: vi.fn(), user: null }));
@@ -235,7 +236,7 @@ describe("administrators' All leads", () => {
     for (const chip of [
       "Search: 0300 1234",
       "Assigned to Ali Agent",
-      "Missed first call",
+      "First call: Not connected",
       "Source: Meta",
       "File: DHA plots",
     ])
@@ -258,6 +259,112 @@ describe("administrators' All leads", () => {
     );
     await waitFor(() => expect(listCalls().at(-1)).toBe("/leads/all?page=1"));
     expect(screen.getByLabelText("Search leads")).toHaveValue("");
+  });
+
+  it("filters by temperature, first call and the latest call's outcome, in place of status and lost reason (update 058)", async () => {
+    const user = userEvent.setup();
+    open("/leads");
+    await screen.findByText("Customer 1");
+    // Search, assignment, temperature, first call, call outcome; source and
+    // lead file stay.
+    const toolbar = screen.getByLabelText("Search leads").closest(".toolbar");
+    expect(
+      within(toolbar)
+        .getAllByRole("combobox")
+        .map((c) => c.getAttribute("aria-label")),
+    ).toEqual([
+      "Filter by assignment",
+      "Filter by temperature",
+      "Filter by first call",
+      "Filter by call outcome",
+      "Filter by source",
+      "Filter by lead file",
+    ]);
+    expect(screen.queryByLabelText("Filter by status")).toBeNull();
+    expect(screen.queryByLabelText("Filter by lost reason")).toBeNull();
+    const options = (label) =>
+      within(screen.getByLabelText(label))
+        .getAllByRole("option")
+        .map((o) => o.textContent);
+    expect(options("Filter by first call")).toEqual([
+      "Any first-call state",
+      "New",
+      "Not connected",
+    ]);
+    expect(options("Filter by call outcome")).toEqual([
+      "All call outcomes",
+      ...callOutcomes,
+    ]);
+    expect(options("Filter by call outcome")).toContain("Number off");
+    expect(options("Filter by temperature")).toEqual([
+      "All temperatures",
+      "🔥 Hot",
+      "🌤️ Warm",
+      "❄️ Cold",
+      "Not recorded yet",
+    ]);
+    // The first-call values are as before; only their names changed.
+    await user.selectOptions(
+      screen.getByLabelText("Filter by first call"),
+      "New",
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Filter by call outcome"),
+      "Number off",
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Filter by temperature"),
+      "hot",
+    );
+    await user.selectOptions(
+      screen.getByLabelText("Filter by assignment"),
+      "unassigned",
+    );
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe(
+        "/leads/all?assignment=unassigned&temperature=hot&call=uncalled&outcome=Number+off&page=1",
+      ),
+    );
+    const chips = screen.getByRole("group", { name: "Active filters" });
+    for (const chip of [
+      "Unassigned",
+      "Temperature: 🔥 Hot",
+      "First call: New",
+      "Latest call: Number off",
+    ])
+      expect(
+        within(chips).getByRole("button", { name: `Remove filter ${chip}` }),
+      ).toBeInTheDocument();
+    expect(
+      screen.getByText("Counts of the leads matching your search and filters."),
+    ).toBeInTheDocument();
+    // Select all matching uses the same filters.
+    await user.click(
+      screen.getByRole("button", { name: "Select all 2 matching leads" }),
+    );
+    expect(
+      mocks.api.mock.calls.some(
+        ([p]) =>
+          p ===
+          "/leads/all/selection?assignment=unassigned&temperature=hot&call=uncalled&outcome=Number+off",
+      ),
+    ).toBe(true);
+    await user.click(
+      within(chips).getByRole("button", {
+        name: "Remove filter Latest call: Number off",
+      }),
+    );
+    await waitFor(() => expect(listCalls().at(-1)).not.toContain("outcome="));
+    expect(screen.getByLabelText("Filter by call outcome")).toHaveValue("");
+    await user.click(screen.getByRole("button", { name: "Reset filters" }));
+    await waitFor(() => expect(listCalls().at(-1)).toBe("/leads/all?page=1"));
+    for (const label of [
+      "Filter by temperature",
+      "Filter by first call",
+      "Filter by call outcome",
+      "Filter by assignment",
+    ])
+      expect(screen.getByLabelText(label)).toHaveValue("");
   });
 
   it("returns from a lead to the same search, filters and page", async () => {

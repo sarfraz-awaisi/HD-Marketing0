@@ -92,3 +92,30 @@ Contact numbers are kept apart from leads (`crm_private.lead_phones`), where the
 - **Reassigning and removing an agent** are done one lead at a time, never in bulk, so no agent's lead is taken by mistake.
 - **The lead file filter** lists the latest 100 files. A file opened from Task assign or the Google Sheets page always works.
 - **A search of three or fewer digits** is treated as a name.
+
+## Update 058: Call outcome and Temperature filters
+
+The All leads filter bar is now: search, assignment, **Temperature**, first call, **Call outcome**, source and lead file.
+
+- **Status and lost reason** are no longer filters here. Leads keep their status and lost reason, the lead's page shows them, and nothing else changes. The server still accepts both filters.
+- **First call:** the options are named **New** and **Not connected** (they were "Waiting for first call" and "Missed first call"). They match exactly the same leads.
+- **Call outcome** (default "All call outcomes") uses the Call dialog's outcomes, Number off included. It matches the outcome of the lead's **latest call**, as the Lead pipeline does, so a lead with no call matches none of them and is listed under "All call outcomes".
+- **Temperature** (Hot, Warm, Cold or Not recorded yet) uses the latest temperature saved with a call, as the Lead pipeline does.
+- Both new filters work in the database, with search, assignment, the counts, pages and Select all matching. **Reset filters** clears them.
+
+| Item            | Value                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------- |
+| Migration       | `supabase/migrations/058_admin_leads_call_filters.sql` (replaces `admin_lead_list` only; safe to rerun) |
+| Read-only check | `supabase/check-admin-leads-call-filters-058.sql`                                     |
+| Requires        | update 057 in production (applied)                                                    |
+
+**Why a migration:** 057's `admin_lead_list` reads the latest call only for the rows of the page shown. Filtering every page by that call needs the database. 058 changes no table or data, and answers every earlier query exactly as 057 did (a test compares them).
+
+**Release:**
+1. Back up the database and test the restore.
+2. Run the check (`at 057, ready for 058`), apply 058, then run the check again (`at 058`, `server_functions` = 2, `browser_function_access_must_be_0` = 0).
+3. Retire the inactive slot (blue `ad108a4`) and deploy.
+
+If the code goes out before 058, the page works but choosing Call outcome or Temperature says "This filter needs CRM database update 058 after 057." Applying 058 then fixes it.
+
+**Rollback:** roll back the application; the older code works with 058.

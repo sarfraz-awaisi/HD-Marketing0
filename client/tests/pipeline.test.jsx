@@ -242,40 +242,6 @@ describe("F1 pipeline screens", () => {
     ).not.toBeInTheDocument();
   });
 
-  // Agents' Assigned leads has neither filter (update 052); the Lead
-  // pipeline filters by status instead.
-  it.each(["admin"])(
-    "filters the leads list by lost reason as %s",
-    async (role) => {
-      mocks.auth.user.role = role;
-      const user = userEvent.setup();
-      workspace(<Leads />);
-      await screen.findByText("Pipeline customer");
-      await user.selectOptions(
-        screen.getByLabelText("Filter by lost reason"),
-        "wrong_number",
-      );
-      await waitFor(() =>
-        expect(mocks.api).toHaveBeenCalledWith(
-          expect.stringMatching(/status=lost.*lost_reason=wrong_number/),
-          expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        ),
-      );
-      expect(screen.getByLabelText("Filter by status")).toHaveValue("lost");
-      await user.selectOptions(
-        screen.getByLabelText("Filter by status"),
-        "contacted",
-      );
-      expect(screen.getByLabelText("Filter by lost reason")).toHaveValue("");
-      await waitFor(() =>
-        expect(mocks.api).toHaveBeenCalledWith(
-          "/leads/all?status=contacted&page=1",
-          expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        ),
-      );
-    },
-  );
-
   it("requires a reason for a lost deal before submitting and includes it in the save", async () => {
     const save = vi.fn();
     const user = userEvent.setup();
