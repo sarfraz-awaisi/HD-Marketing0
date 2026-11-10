@@ -861,6 +861,64 @@ add(
   "Restored a dealer",
   (c) => `Restored ${dealerText(c)}, added by ${agentText(c)}.`,
 );
+// Update 059: an agent's edits and the review of proposed changes.
+add(
+  "dealer.revise",
+  "dealers",
+  "dealers",
+  "update",
+  "Changed a dealer waiting for review",
+  (c) => changed(c, `Changed ${dealerText(c)}, still waiting for review`),
+);
+add(
+  "dealer.resubmit",
+  "dealers",
+  "dealers",
+  "update",
+  "Submitted a rejected dealer again",
+  (c) => changed(c, `Submitted ${dealerText(c)} again for review`),
+);
+add(
+  "dealer.change_request",
+  "dealers",
+  "dealers",
+  "request",
+  "Proposed changes to a dealer",
+  (c) => changed(c, `Proposed changes to ${dealerText(c)} for approval`),
+);
+add(
+  "dealer.change_revise",
+  "dealers",
+  "dealers",
+  "request",
+  "Revised proposed dealer changes",
+  (c) => changed(c, `Revised the proposed changes to ${dealerText(c)}`),
+);
+add(
+  "dealer.change_withdraw",
+  "dealers",
+  "dealers",
+  "request",
+  "Withdrew proposed dealer changes",
+  (c) => `Withdrew the proposed changes to ${dealerText(c)}.`,
+);
+add(
+  "dealer.change_approve",
+  "dealers",
+  "dealers",
+  "review",
+  "Approved dealer changes",
+  (c) => changed(c, `Approved the changes to ${dealerText(c)}`),
+);
+add(
+  "dealer.change_reject",
+  "dealers",
+  "dealers",
+  "review",
+  "Rejected dealer changes",
+  (c) =>
+    `Rejected the changes to ${dealerText(c)}; the approved details stay as they were.`,
+);
 
 // Properties
 add(
@@ -2100,7 +2158,15 @@ export function presentAuditEntry(row) {
       after: categoriesOf(m.building_categories.after).join(", ") || "None",
     });
   if (
-    c.action === "dealer.update" &&
+    [
+      "dealer.update",
+      "dealer.revise",
+      "dealer.resubmit",
+      "dealer.change_request",
+      "dealer.change_revise",
+      "dealer.change_approve",
+      "dealer.change_reject",
+    ].includes(c.action) &&
     m.changes &&
     typeof m.changes === "object"
   )

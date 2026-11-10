@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, date } from "../../lib/api";
 import { copyText } from "../../lib/accountFields";
 import {
+  dealerFields,
   dealerStatus,
   dialable,
   formatDealerPhone,
@@ -17,6 +18,14 @@ const historyLabels = {
   "dealer.update": "Details changed",
   "dealer.delete": "Deleted",
   "dealer.restore": "Restored",
+  // Update 059.
+  "dealer.revise": "Changed while waiting for review",
+  "dealer.resubmit": "Submitted again",
+  "dealer.change_request": "Changes proposed",
+  "dealer.change_revise": "Proposed changes revised",
+  "dealer.change_withdraw": "Proposed changes withdrawn",
+  "dealer.change_approve": "Proposed changes approved",
+  "dealer.change_reject": "Proposed changes rejected",
 };
 const changeLabels = {
   name: "Dealer name",
@@ -32,6 +41,43 @@ export function DealerStatus({ status }) {
 }
 const personText = (p) =>
   p ? `${p.name}${p.uid ? ` (UID ${p.uid})` : ""}` : "—";
+const fieldLabel = (key) =>
+  dealerFields.find((f) => f.key === key)?.label || key;
+const shown = (key, value) =>
+  value == null || value === ""
+    ? "—"
+    : key === "phone"
+      ? formatDealerPhone(value)
+      : value;
+// Proposed changes (update 059): each detail's approved value now and the
+// proposed one.
+function ChangeTable({ change }) {
+  return (
+    <table className="dealer-change-table">
+      <thead>
+        <tr>
+          <th scope="col">Detail</th>
+          <th scope="col">Approved now</th>
+          <th scope="col">Proposed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {dealerFields
+          .filter(({ key }) => change.changes?.[key])
+          .map(({ key }) => (
+            <tr key={key}>
+              <th scope="row">{fieldLabel(key)}</th>
+              <td>{shown(key, change.changes[key].before)}</td>
+              <td>
+                <span aria-hidden="true">→ </span>
+                {shown(key, change.changes[key].after)}
+              </td>
+            </tr>
+          ))}
+      </tbody>
+    </table>
+  );
+}
 
 // One dealer. Agents see their own dealer's details and decision; the server
 // sends administrators who added, reviewed and changed it, its history and
@@ -68,6 +114,22 @@ export default function DealerDetails({
     }
   }
   const deleted = !!d.deleted_at;
+  const change = d.pending_change;
+  // The last decision on proposed changes, shown to the agent when it was a
+  // rejection and nothing new is waiting.
+  const rejectedChange =
+    !change && d.last_change?.status === "rejected" ? d.last_change : null;
+  async function decideChange(path, body, message) {
+    await act(
+      `changes/${path}`,
+      {
+        ...body,
+        expected_updated_at: change.updated_at,
+        expected_dealer_updated_at: d.updated_at,
+      },
+      message,
+    );
+  }
   const rows = [
     ["Reference", d.reference],
     ["Status", <DealerStatus key="s" status={d.status} />],
@@ -143,11 +205,52 @@ export default function DealerDetails({
           {d.rejection_reason
             ? `Reason: ${d.rejection_reason}`
             : "No reason was given."}
-          {!admin && " You can add this dealer again if the details change."}
+          {!admin && " Edit to correct the details and submit it again."}
         </div>
       )}
-      {d.status === "pending" && !admin && (
-        <p className="field-hint">Waiting for an administrator to review.</p>
+      {d.status === "pending" && (
+        <p className="field-hint">
+          {admin
+            ? "New dealer request: waiting for your review."
+            : "Waiting for an administrator to review. You can still edit it."}
+        </p>
+      )}
+      {change && (
+        <section
+          className="notice dealer-change"
+          aria-label="Changes pending approval"
+        >
+          <h3>{admin ? "Edit request" : "Changes pending approval"}</h3>
+          <p className="field-hint">
+            {admin
+              ? `Proposed by ${personText(change.submitted_by)} · ${date(change.submitted_at)}`
+              : `Sent ${date(change.submitted_at)}`}
+            {change.revisions > 0 &&
+              ` · revised ${change.revisions} time${change.revisions === 1 ? "" : "s"}, last ${date(change.updated_at)}`}
+            . The approved details below stay as they are until{" "}
+            {admin ? "you approve" : "an administrator approves"}.
+          </p>
+          {change.base_changed && (
+            <p className="field-hint">
+              Some approved details changed after these changes were proposed.
+            </p>
+          )}
+          <ChangeTable change={change} />
+        </section>
+      )}
+      {!admin && rejectedChange && (
+        <section
+          className="notice dealer-rejection"
+          aria-label="Proposed changes rejected"
+        >
+          <strong>Your proposed changes were rejected.</strong>{" "}
+          {rejectedChange.rejection_reason
+            ? `Reason: ${rejectedChange.rejection_reason}`
+            : "No reason was given."}{" "}
+          The approved details stay as they were. Edit to correct and propose
+          them again.
+          <ChangeTable change={rejectedChange} />
+        </section>
       )}
       <dl className="dealer-fields">
         {rows.map(([label, value]) => (
@@ -198,7 +301,7 @@ export default function DealerDetails({
                       {c.after || "—"}
                     </div>
                   ))}
-                {h.action === "dealer.update" &&
+                {h.action !== "dealer.create" &&
                   h.fields?.includes("phone") && (
                     <div className="field-hint">Contact number changed</div>
                   )}
@@ -208,7 +311,7 @@ export default function DealerDetails({
         </section>
       )}
       <ErrorBox error={error} />
-      {admin && step === "reject" && (
+      {admin && (step === "reject" || step === "reject-change") && (
         <div className="dealer-confirm">
           <label>
             Reason for rejecting (optional; the agent sees it)
@@ -232,14 +335,27 @@ export default function DealerDetails({
               variant="danger"
               disabled={busy}
               onClick={() =>
-                act(
-                  "reject",
-                  { reason: reason.trim() || undefined },
-                  "Dealer rejected",
-                )
+                step === "reject-change"
+                  ? decideChange(
+                      "reject",
+                      { reason: reason.trim() || undefined },
+                      "Proposed changes rejected",
+                    )
+                  : act(
+                      "reject",
+                      {
+                        reason: reason.trim() || undefined,
+                        expected_updated_at: d.updated_at,
+                      },
+                      "Dealer rejected",
+                    )
               }
             >
-              {busy ? "Rejecting…" : "Reject dealer"}
+              {busy
+                ? "Rejecting…"
+                : step === "reject-change"
+                  ? "Reject changes"
+                  : "Reject dealer"}
             </Button>
           </div>
         </div>
@@ -284,6 +400,13 @@ export default function DealerDetails({
           </div>
         </div>
       )}
+      {!admin && !deleted && (
+        <div className="actions">
+          <Button variant="secondary" onClick={onEdit}>
+            {change ? "Edit proposed changes" : "Edit"}
+          </Button>
+        </div>
+      )}
       {admin && !step && (
         <div className="actions">
           {deleted ? (
@@ -299,7 +422,13 @@ export default function DealerDetails({
                 <>
                   <Button
                     disabled={busy}
-                    onClick={() => act("approve", {}, "Dealer approved")}
+                    onClick={() =>
+                      act(
+                        "approve",
+                        { expected_updated_at: d.updated_at },
+                        "Dealer approved",
+                      )
+                    }
                   >
                     {busy ? "Saving…" : "Approve"}
                   </Button>
@@ -313,6 +442,29 @@ export default function DealerDetails({
                     }}
                   >
                     Reject
+                  </Button>
+                </>
+              )}
+              {change && (
+                <>
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      decideChange("approve", {}, "Proposed changes approved")
+                    }
+                  >
+                    {busy ? "Saving…" : "Approve changes"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setError("");
+                      setReason("");
+                      setStep("reject-change");
+                    }}
+                  >
+                    Reject changes
                   </Button>
                 </>
               )}

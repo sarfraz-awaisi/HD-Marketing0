@@ -223,6 +223,8 @@ describe("agents see only their own dealers", () => {
       pending: 3,
       approved: 0,
       rejected: 0,
+      // Approved dealers with changes waiting (update 059).
+      changes: 0,
     });
     expect(res.body.data.map((d) => d.name)).toEqual(["Ali Three", "Ali Two"]);
     const page2 = await get(ali, "/dealers?limit=2&page=2");
@@ -457,6 +459,7 @@ describe("administrators manage every dealer", () => {
       pending: 2,
       approved: 1,
       rejected: 0,
+      changes: 0,
       deleted: 0,
       duplicates: 0,
     });
@@ -721,13 +724,18 @@ describe("the database update", () => {
     const service = await all(
       "select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like 'dealer%' and has_function_privilege('service_role',p.oid,'execute') order by 1",
     );
+    // Update 059 adds the agent's Edit, the review of proposed changes and
+    // a review of new dealers that names the version reviewed.
     expect(service.map((r) => r.proname)).toEqual([
+      "dealer_change_review",
       "dealer_check_phone",
       "dealer_create",
       "dealer_delete",
       "dealer_detail",
       "dealer_restore",
       "dealer_review",
+      "dealer_review",
+      "dealer_submit_changes",
       "dealer_update",
       "dealers_page",
     ]);
