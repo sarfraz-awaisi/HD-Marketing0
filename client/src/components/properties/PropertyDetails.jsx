@@ -25,7 +25,9 @@ const Spec = ({ label, value }) =>
 export default function PropertyDetails({ property: p }) {
   const contact = p.owner_contact;
   const floored = hasFloor(p.type);
-  const building = !isPlot(p.type) && [
+  // Plots and land have no building details: an empty list, never false
+  // (false?.map throws, which broke opening any plot).
+  const building = isPlot(p.type) ? [] : [
     ...(floored ? [["Floor", floorLabel(p.floor_level)]] : []),
     [floored ? "Total building floors" : "Floors", p.floors],
     ["Bedrooms", p.bedrooms],
@@ -80,7 +82,7 @@ export default function PropertyDetails({ property: p }) {
         <Spec label="Street" value={p.street} />
         <Spec label="Plot / house number" value={p.plot_number} />
         <Spec label="Full address" value={p.address} />
-        {building?.map(([label, value]) => (
+        {building.map(([label, value]) => (
           <Spec key={label} label={label} value={value} />
         ))}
       </dl>
