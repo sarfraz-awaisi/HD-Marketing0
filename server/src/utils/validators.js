@@ -264,7 +264,9 @@ export const agentLeadsQuery = z
   .strict();
 // Administrators' All leads (update 057): search by a customer's name or
 // contact number (as agents search) or an HD number written with HD; the
-// filters apply together. An agent's leads are assigned ones.
+// filters apply together. An agent's leads are assigned ones. Update 058
+// adds the latest call's outcome and the temperature, as in the Lead
+// pipeline.
 export const adminLeadsQuery = z
   .object({
     search: z
@@ -278,6 +280,8 @@ export const adminLeadsQuery = z
     call: z.enum(["uncalled", "missed"]).optional(),
     status: z.enum(statuses).optional(),
     lost_reason: z.enum(lostReasons).optional(),
+    temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
+    outcome: z.enum(outcomes).optional(),
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     import_id: uuid.optional(),
     page: z.coerce.number().int().min(1).max(100000).default(1),

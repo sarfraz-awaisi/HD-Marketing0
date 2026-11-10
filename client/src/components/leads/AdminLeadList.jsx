@@ -7,14 +7,9 @@ import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
 import { useUrlFilters } from "../../lib/useUrlFilters";
 import { useLeadSelection } from "../../lib/useLeadSelection";
-import { followUpNotice } from "../../lib/calls";
+import { callOutcomes, followUpNotice } from "../../lib/calls";
 import { firstCallState } from "../../lib/firstCall";
-import {
-  statuses,
-  statusLabel,
-  lostReasons,
-  lostReasonLabel,
-} from "../../lib/pipeline";
+import { temperatureText } from "../../lib/temperature";
 import {
   Button,
   ErrorBox,
@@ -29,16 +24,21 @@ import CallDialog from "../calls/CallDialog";
 import DeleteLeadsDialog from "./DeleteLeadsDialog";
 import { ActiveFilters, LeadSearch } from "./LeadSearch";
 import { CustomerCell, LastCallCell } from "./LeadCells";
+import { temperatureChoices } from "./PipelineParts";
 // Administrators' All leads (update 057), built like an agent's Assigned
 // leads: the database searches every lead by name or contact number (or an
 // HD number written with HD), applies the filters together and counts and
 // pages the result. # is the row's place in the list. Filters live in the
 // address, so Back from a lead returns to the same list. Bulk assignment
 // takes only leads with no agent; moving a lead from its agent is done one
-// lead at a time, after confirming.
+// lead at a time, after confirming. Update 058: the temperature and the
+// latest call's outcome, as in the Lead pipeline, in place of status and lost
+// reason (still on each lead's page).
+// First call: the names only are administrators' own; the values and what
+// they match (update 038) are as in agents' Assigned leads.
 const callLabels = {
-  uncalled: "Waiting for first call",
-  missed: "Missed first call",
+  uncalled: "New",
+  missed: "Not connected",
 };
 const sources = [
   ["manual", "Manual"],
@@ -52,9 +52,9 @@ const keys = [
   "q",
   "assignment",
   "agent",
+  "temperature",
   "call",
-  "status",
-  "lost",
+  "outcome",
   "source",
   "import_id",
   "page",
@@ -67,9 +67,9 @@ const query = (f) => ({
     : f.assignment
       ? { assignment: f.assignment }
       : {}),
+  ...(f.temperature ? { temperature: f.temperature } : {}),
   ...(f.call ? { call: f.call } : {}),
-  ...(f.status ? { status: f.status } : {}),
-  ...(f.lost ? { lost_reason: f.lost } : {}),
+  ...(f.outcome ? { outcome: f.outcome } : {}),
   ...(f.source ? { source: f.source } : {}),
   ...(f.import_id ? { import_id: f.import_id } : {}),
 });
@@ -146,17 +146,19 @@ export default function AdminLeadList() {
             ],
           ]
         : []),
-    ...(f.call ? [[callLabels[f.call], () => set({ call: null })]] : []),
-    ...(f.status
+    ...(f.temperature
       ? [
           [
-            `Status: ${statusLabel(f.status)}`,
-            () => set({ status: null, lost: null }),
+            `Temperature: ${temperatureText(f.temperature)}`,
+            () => set({ temperature: null }),
           ],
         ]
       : []),
-    ...(f.lost
-      ? [[`Lost: ${lostReasonLabel(f.lost)}`, () => set({ lost: null })]]
+    ...(f.call
+      ? [[`First call: ${callLabels[f.call]}`, () => set({ call: null })]]
+      : []),
+    ...(f.outcome
+      ? [[`Latest call: ${f.outcome}`, () => set({ outcome: null })]]
       : []),
     ...(f.source
       ? [[`Source: ${sourceLabel(f.source)}`, () => set({ source: null })]]
@@ -233,6 +235,18 @@ export default function AdminLeadList() {
           </optgroup>
         </select>
         <select
+          aria-label="Filter by temperature"
+          value={f.temperature}
+          onChange={(e) => set({ temperature: e.target.value })}
+        >
+          <option value="">All temperatures</option>
+          {temperatureChoices.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select
           aria-label="Filter by first call"
           value={f.call}
           onChange={(e) => set({ call: e.target.value })}
@@ -245,36 +259,14 @@ export default function AdminLeadList() {
           ))}
         </select>
         <select
-          aria-label="Filter by status"
-          value={f.status}
-          onChange={(e) =>
-            set({
-              status: e.target.value,
-              ...(e.target.value !== "lost" ? { lost: null } : {}),
-            })
-          }
+          aria-label="Filter by call outcome"
+          value={f.outcome}
+          onChange={(e) => set({ outcome: e.target.value })}
         >
-          <option value="">All statuses</option>
-          {statuses.map((s) => (
-            <option key={s} value={s}>
-              {statusLabel(s)}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by lost reason"
-          value={f.lost}
-          onChange={(e) =>
-            set({
-              lost: e.target.value,
-              status: e.target.value ? "lost" : null,
-            })
-          }
-        >
-          <option value="">All lost reasons</option>
-          {lostReasons.map((reason) => (
-            <option key={reason.value} value={reason.value}>
-              {reason.label}
+          <option value="">All call outcomes</option>
+          {callOutcomes.map((o) => (
+            <option key={o} value={o}>
+              {o}
             </option>
           ))}
         </select>

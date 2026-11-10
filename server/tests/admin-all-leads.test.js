@@ -430,4 +430,113 @@ describe("administrators' All leads (update 057)", () => {
         .set(as(admin))
         .expect(400);
   });
+
+  it("filters by the latest call's outcome and the temperature (update 058), as the Lead pipeline does", async () => {
+    const call = (lead, minutes, outcome, tags = []) =>
+      pg.query("select log_manual_call($1,$2,$3::jsonb,'t')", [
+        lead,
+        ali,
+        JSON.stringify({
+          answered: ![
+            "No answer",
+            "Busy",
+            "Wrong number",
+            "Number off",
+          ].includes(outcome),
+          started_at: minutesAgo(minutes),
+          duration_seconds: 60,
+          outcome,
+          notes: "",
+          deal_tags: tags,
+        }),
+      ]);
+    const off = await newLead("Switched off", "+923000000041", {
+      assigned_agent: ali,
+    });
+    await call(off, 60, "Interested", ["Warm lead"]);
+    await call(off, 5, "Number off");
+    const hot = await newLead("Hot buyer", "+923000000042", {
+      assigned_agent: ali,
+    });
+    await call(hot, 10, "Interested", ["Hot lead"]);
+    const cold = await newLead("Cold buyer", "+923000000043");
+    await pg.query("update leads set assigned_agent=$1 where id=$2", [
+      ali,
+      cold,
+    ]);
+    await call(cold, 30, "Not interested", ["Cold lead"]);
+    await pg.query("update leads set assigned_agent=null where id=$1", [cold]);
+    await newLead("Never called", "+923000000044");
+    const sorted = async (q) => names(await list(q)).sort();
+    // The latest call only: an earlier Interested does not count.
+    expect(await sorted({ outcome: "Number off" })).toEqual(["Switched off"]);
+    expect(await sorted({ outcome: "Interested" })).toEqual(["Hot buyer"]);
+    expect(await sorted({ outcome: "Busy" })).toEqual([]);
+    // The latest temperature saved with a call, even before a later call.
+    expect(await sorted({ temperature: "warm" })).toEqual(["Switched off"]);
+    expect(await sorted({ temperature: "hot" })).toEqual(["Hot buyer"]);
+    expect(await sorted({ temperature: "cold" })).toEqual(["Cold buyer"]);
+    expect(await sorted({ temperature: "none" })).toEqual(["Never called"]);
+    // No call filter: every lead, called or not.
+    expect(await list()).toMatchObject({ count: 4 });
+    // With search, assignment and the counts.
+    expect(
+      await list({
+        outcome: "Not interested",
+        assignment: "unassigned",
+        search: "buyer",
+      }),
+    ).toMatchObject({
+      count: 1,
+      totals: { total: 1, assigned: 0, unassigned: 1 },
+    });
+    expect(
+      await list({ outcome: "Not interested", assignment: "assigned" }),
+    ).toMatchObject({
+      count: 0,
+      totals: { total: 1, assigned: 0, unassigned: 1 },
+    });
+    // Same rule as the agent's own lists (updates 052 and 053).
+    const own = await rpc("agent_lead_list", {
+      p_actor: ali,
+      p_query: { outcome: "Number off" },
+    });
+    expect(own.data.map((l) => l.name)).toEqual(
+      names(await list({ agent: ali, outcome: "Number off" })),
+    );
+    const pipeline = await rpc("agent_lead_list", {
+      p_actor: ali,
+      p_query: { view: "pipeline", temperature: "hot" },
+    });
+    expect(pipeline.data.map((l) => l.name)).toEqual(
+      names(await list({ agent: ali, temperature: "hot" })),
+    );
+    // Across pages, and in Select all matching.
+    for (let n = 1; n <= 22; n++) {
+      const lead = await newLead(
+        `Off ${String(n).padStart(2, "0")}`,
+        `+9230000002${String(n).padStart(2, "0")}`,
+        {
+          assigned_agent: ali,
+        },
+      );
+      await call(lead, 100 + n, "Number off");
+    }
+    const page2 = await list({ outcome: "Number off", page: 2 });
+    expect(page2).toMatchObject({ count: 23, page: 2 });
+    expect(page2.data).toHaveLength(3);
+    expect(
+      (
+        await request(app())
+          .get("/api/leads/all/selection?outcome=Number+off&temperature=none")
+          .set(as(admin))
+          .expect(200)
+      ).body.ids,
+    ).toHaveLength(22);
+    for (const bad of ["outcome=Maybe", "temperature=lukewarm"])
+      await request(app())
+        .get("/api/leads/all?" + bad)
+        .set(as(admin))
+        .expect(400);
+  });
 });
