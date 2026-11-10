@@ -1489,6 +1489,31 @@ export const dealerUpdate = z
 export const dealerReason = z
   .object({ reason: z.string().max(1000).optional() })
   .strict();
+// Update 059. An agent's Edit of their own dealer: every detail as the form
+// shows it, and the version edited (the waiting changes' updated_at if any,
+// else the dealer's).
+export const dealerChanges = z
+  .object({
+    expected_updated_at: z.iso.datetime({ offset: true }),
+    ...dealerFields,
+  })
+  .strict();
+// Approving or rejecting a new dealer, from the version reviewed.
+export const dealerDecision = z
+  .object({
+    reason: z.string().max(1000).optional(),
+    expected_updated_at: z.iso.datetime({ offset: true }).optional(),
+  })
+  .strict();
+// Approving or rejecting an approved dealer's waiting changes: the versions
+// of the changes and of the dealer the administrator reviewed.
+export const dealerChangeDecision = z
+  .object({
+    reason: z.string().max(1000).optional(),
+    expected_updated_at: z.iso.datetime({ offset: true }),
+    expected_dealer_updated_at: z.iso.datetime({ offset: true }),
+  })
+  .strict();
 export const dealerListQuery = z
   .object({
     ...pageFields,
@@ -1498,6 +1523,8 @@ export const dealerListQuery = z
     agent: uuid.optional(),
     view: z.enum(["active", "deleted"]).optional(),
     duplicates: z.enum(["true", "false"]).optional(),
+    // Approved dealers with changes waiting for review (update 059).
+    changes: z.enum(["true", "false"]).optional(),
   })
   .strict();
 export const dealerPhoneQuery = z

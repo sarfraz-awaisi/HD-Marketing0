@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, CircleX, Clock, Copy, Store } from "lucide-react";
+import { CircleCheck, CircleX, Clock, Copy, Pencil, Store } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { api, date } from "../../lib/api";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
@@ -26,10 +26,13 @@ import "../../styles/dealers.css";
 // Dealer affiliate network (update 049). Agents add dealers and follow their
 // review; administrators review, change, delete and restore every dealer.
 // The server decides what each person may see: an agent's list, counts and
-// search only ever contain their own dealers.
+// search only ever contain their own dealers. Update 059: agents edit their
+// own dealers; changes to an approved dealer wait for an administrator, and
+// Edit requests lists those dealers.
 const tabsFor = (admin) => [
   ["all", "All"],
   ["pending", "Pending"],
+  ["changes", "Edit requests"],
   ["approved", "Approved"],
   ["rejected", "Rejected"],
   ...(admin ? [["deleted", "Deleted"]] : []),
@@ -104,6 +107,7 @@ export default function Dealers() {
   const debounced = useDebouncedValue(filters);
   const query = new URLSearchParams({ page, limit });
   if (tab === "deleted") query.set("view", "deleted");
+  else if (tab === "changes") query.set("changes", "true");
   else if (tab !== "all") query.set("status", tab);
   if (debounced.search.trim()) query.set("search", debounced.search.trim());
   if (debounced.sort !== "newest") query.set("sort", debounced.sort);
@@ -130,6 +134,7 @@ export default function Dealers() {
   const counts = summary && {
     all: summary.total,
     pending: summary.pending,
+    changes: summary.changes,
     approved: summary.approved,
     rejected: summary.rejected,
     ...(admin ? { deleted: summary.deleted } : {}),
@@ -177,6 +182,9 @@ export default function Dealers() {
       render: (d) => (
         <span className="dealer-status">
           <DealerStatus status={d.status} />
+          {d.pending_change && (
+            <span className="badge fx-badge warning">Changes pending</span>
+          )}
           {admin && d.duplicates > 0 && (
             <span
               className="badge fx-badge warning"
@@ -204,15 +212,29 @@ export default function Dealers() {
     },
     {
       key: "open",
-      label: "Details",
+      label: "Actions",
       render: (d) => (
-        <Button
-          variant="secondary"
-          aria-label={`View ${d.name}`}
-          onClick={() => setModal({ id: d.id, mode: "view" })}
-        >
-          View
-        </Button>
+        <span className="dealer-row-actions">
+          <Button
+            variant="secondary"
+            aria-label={`View ${d.name}`}
+            onClick={() => setModal({ id: d.id, mode: "view" })}
+          >
+            View
+          </Button>
+          {/* Agents see only their own dealers; a deleted one stays as it is. */}
+          {!d.deleted_at && (
+            <Button
+              variant="secondary"
+              className="icon-button dealer-edit"
+              aria-label={`Edit ${d.name}`}
+              title="Edit"
+              onClick={() => setModal({ id: d.id, mode: "edit", dealer: d })}
+            >
+              <Pencil size={16} aria-hidden="true" />
+            </Button>
+          )}
+        </span>
       ),
     },
   ];
@@ -234,6 +256,22 @@ export default function Dealers() {
       : []),
   ];
   const current = detail.data;
+  // Edit from the list starts from the row; from the details, the dealer.
+  const editing = modal?.dealer || current;
+  const saved = (result) =>
+    admin
+      ? result.unchanged
+        ? "No change was needed"
+        : "Dealer updated"
+      : result.unchanged
+        ? "No change was needed"
+        : result.withdrawn
+          ? "Your proposed changes were withdrawn"
+          : result.pending_change
+            ? "Changes sent for approval"
+            : result.status === "pending" && editing?.status === "rejected"
+              ? "Dealer submitted again for review"
+              : "Changes saved; still waiting for review";
   const agents = (people.data || []).filter((p) =>
     ["admin", "agent"].includes(p.role),
   );
@@ -385,17 +423,15 @@ export default function Dealers() {
                 );
               }}
             />
-          ) : modal.mode === "edit" && current ? (
+          ) : modal.mode === "edit" && editing ? (
             <DealerForm
-              admin
-              initial={current}
+              admin={admin}
+              initial={editing}
               onCancel={() => setModal({ id: modal.id, mode: "view" })}
-              onSaved={(saved) => {
-                refresh(saved.id);
-                setModal({ id: saved.id, mode: "view" });
-                toast(
-                  saved.unchanged ? "No change was needed" : "Dealer updated",
-                );
+              onSaved={(result) => {
+                refresh(result.id);
+                setModal({ id: result.id, mode: "view" });
+                toast(saved(result));
               }}
             />
           ) : detail.error ? (

@@ -447,7 +447,14 @@ describe("administrators", () => {
     fireEvent.click(approve);
     fireEvent.click(approve);
     expect(await screen.findByText("Dealer approved")).toBeInTheDocument();
-    expect(sent).toEqual([["/dealers/d1/approve", "POST", {}]]);
+    // The decision names the version reviewed (update 059).
+    expect(sent).toEqual([
+      [
+        "/dealers/d1/approve",
+        "POST",
+        { expected_updated_at: pending.updated_at },
+      ],
+    ]);
   });
   it("reject with an optional reason, and delete only after confirming", async () => {
     open(admin);
@@ -466,7 +473,11 @@ describe("administrators", () => {
     );
     expect(await screen.findByText("Dealer rejected")).toBeInTheDocument();
     expect(sent).toEqual([
-      ["/dealers/d1/reject", "POST", { reason: "Wrong address" }],
+      [
+        "/dealers/d1/reject",
+        "POST",
+        { reason: "Wrong address", expected_updated_at: pending.updated_at },
+      ],
     ]);
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     expect(within(dialog).getByText(/can be restored from Deleted/));

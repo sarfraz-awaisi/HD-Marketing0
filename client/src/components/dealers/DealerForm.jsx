@@ -10,18 +10,28 @@ import {
 } from "../../lib/dealers";
 import { Button, ErrorBox } from "../common/UI";
 
-// Add a dealer (administrators and agents) or change one (administrators,
-// initial set). The same client_key is sent until the form is closed, so a
-// repeated click or a retry after a lost reply never adds the dealer twice.
+// Add a dealer (administrators and agents) or change one. The same
+// client_key is sent until the form is closed, so a repeated click or a retry
+// after a lost reply never adds the dealer twice. Administrators change the
+// details sent directly. An agent's Edit (update 059) sends every detail:
+// a dealer waiting for review changes in place, a rejected one is submitted
+// again, and an approved one keeps its approved details while the changes
+// wait for an administrator; the form starts from those waiting changes.
+// Each edit names the version it started from, so a newer review or change
+// is reported instead of overwritten.
 export default function DealerForm({ initial, admin, onSaved, onCancel }) {
   const editing = !!initial?.id;
-  const [form, setForm] = useState(() =>
-    editing
-      ? Object.fromEntries(
-          dealerFields.map(({ key }) => [key, initial[key] ?? ""]),
-        )
-      : blankDealer,
-  );
+  const proposing = editing && !admin;
+  const waiting = proposing ? initial.pending_change?.changes || {} : {};
+  const start = editing
+    ? Object.fromEntries(
+        dealerFields.map(({ key }) => [
+          key,
+          (key in waiting ? waiting[key].after : initial[key]) ?? "",
+        ]),
+      )
+    : blankDealer;
+  const [form, setForm] = useState(start);
   const [errors, setErrors] = useState({}),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -65,7 +75,21 @@ export default function DealerForm({ initial, admin, onSaved, onCancel }) {
     const values = cleanDealer(form);
     values.phone = normalizeDealerPhone(values.phone);
     let body;
-    if (editing) {
+    if (proposing) {
+      const shown = cleanDealer(start);
+      shown.phone = normalizeDealerPhone(shown.phone);
+      // A rejected dealer may be submitted again as it is.
+      if (
+        initial.status !== "rejected" &&
+        dealerFields.every(({ key }) => values[key] === shown[key])
+      )
+        return onCancel();
+      body = {
+        ...values,
+        expected_updated_at:
+          initial.pending_change?.updated_at ?? initial.updated_at,
+      };
+    } else if (editing) {
       body = Object.fromEntries(
         Object.entries(values).filter(([k, v]) => v !== (initial[k] ?? null)),
       );
@@ -74,10 +98,14 @@ export default function DealerForm({ initial, admin, onSaved, onCancel }) {
     } else body = { ...values, client_key: key.current };
     setBusy(true);
     try {
-      const saved = await api(editing ? `/dealers/${initial.id}` : "/dealers", {
-        method: editing ? "PATCH" : "POST",
-        body,
-      });
+      const saved = await api(
+        proposing
+          ? `/dealers/${initial.id}/changes`
+          : editing
+            ? `/dealers/${initial.id}`
+            : "/dealers",
+        { method: editing && !proposing ? "PATCH" : "POST", body },
+      );
       onSaved(saved);
     } catch (err) {
       setError(err.message);
@@ -138,7 +166,18 @@ export default function DealerForm({ initial, admin, onSaved, onCancel }) {
         <p className="field-hint">
           {admin
             ? "Dealers you add are approved straight away."
-            : "An administrator reviews each dealer you add. You can't change or delete a dealer after submitting it."}
+            : "An administrator reviews each dealer you add. You can edit it while it waits; later changes need an administrator's approval."}
+        </p>
+      )}
+      {proposing && (
+        <p className="field-hint">
+          {initial.status === "approved"
+            ? initial.pending_change
+              ? "You're changing the changes waiting for approval. The approved details stay as they are until an administrator approves; change everything back to withdraw them."
+              : "Your changes go to an administrator for approval. The approved details stay as they are until then."
+            : initial.status === "rejected"
+              ? "Correct the details and submit the dealer again for review."
+              : "Your changes update the dealer waiting for review."}
         </p>
       )}
       <div className="form-grid">{dealerFields.map(field)}</div>
@@ -183,7 +222,17 @@ export default function DealerForm({ initial, admin, onSaved, onCancel }) {
           Cancel
         </Button>
         <Button type="submit" disabled={busy}>
-          {busy ? "Saving…" : editing ? "Save changes" : "Add dealer"}
+          {busy
+            ? "Saving…"
+            : !editing
+              ? "Add dealer"
+              : !proposing
+                ? "Save changes"
+                : initial.status === "approved"
+                  ? "Send for approval"
+                  : initial.status === "rejected"
+                    ? "Submit again"
+                    : "Save changes"}
         </Button>
       </div>
     </form>
