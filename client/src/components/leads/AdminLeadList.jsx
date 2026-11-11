@@ -29,11 +29,11 @@ import { temperatureChoices } from "./PipelineParts";
 // leads: the database searches every lead by name or contact number (or an
 // HD number written with HD), applies the filters together and counts and
 // pages the result. # is the row's place in the list. Filters live in the
-// address, so Back from a lead returns to the same list. Bulk assignment
-// takes only leads with no agent; moving a lead from its agent is done one
-// lead at a time, after confirming. Update 058: the temperature and the
-// latest call's outcome, as in the Lead pipeline, in place of status and lost
-// reason (still on each lead's page).
+// address, so Back from a lead returns to the same list. Update 058: the
+// temperature and the latest call's outcome, as in the Lead pipeline, in
+// place of status and lost reason (still on each lead's page). Update 060:
+// Assign to agent moves the selected leads to one agent, whoever has them,
+// after confirming; Round-robin unassigned takes only leads with no agent.
 // First call: the names only are administrators' own; the values and what
 // they match (update 038) are as in agents' Assigned leads.
 const callLabels = {
@@ -323,7 +323,7 @@ export default function AdminLeadList() {
               >
                 <b>{plural(selection.ids.length, "lead")} selected</b>
                 <select
-                  aria-label="Agent for the selected unassigned leads"
+                  aria-label="Agent for the selected leads"
                   value={targetAgent}
                   onChange={(e) => setTargetAgent(e.target.value)}
                 >
@@ -338,7 +338,7 @@ export default function AdminLeadList() {
                   disabled={!targetAgent}
                   onClick={() => setBulk({ mode: "agent", agent: targetAgent })}
                 >
-                  Assign unassigned
+                  Assign to agent
                 </Button>
                 <Button
                   variant="secondary"
@@ -593,8 +593,9 @@ function AssignLeadDialog({ lead, agents, onClose, onDone }) {
   );
 }
 
-// Selected leads to one agent or round-robin, after confirming; leads with
-// an agent are skipped by the database and named in the results.
+// Selected leads, after confirming: to one agent, moving any that another
+// agent has (update 060), or round-robin among active agents for the leads
+// with no agent, which the database never takes from an agent (057).
 function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -603,14 +604,15 @@ function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
     setError("");
     try {
       onDone(
-        await api("/leads/assign-unassigned", {
-          method: "POST",
-          body: {
-            lead_ids: ids,
-            mode,
-            ...(mode === "agent" ? { agent_id: agentId } : {}),
-          },
-        }),
+        mode === "agent"
+          ? await api("/leads/assign-selected", {
+              method: "POST",
+              body: { lead_ids: ids, agent_id: agentId },
+            })
+          : await api("/leads/assign-unassigned", {
+              method: "POST",
+              body: { lead_ids: ids, mode },
+            }),
       );
     } catch (e) {
       setError(e.message);
@@ -620,17 +622,30 @@ function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
   return (
     <Modal title="Assign the selected leads" onClose={() => !busy && onClose()}>
       <ErrorBox error={error} />
-      <p>
-        Assign the selected leads that have no agent{" "}
-        {mode === "agent"
-          ? `to ${agent}`
-          : "among active agents in turn (round-robin)"}
-        ? {plural(ids.length, "lead")} selected.
-      </p>
-      <p>
-        Leads that already have an agent stay with that agent and are listed in
-        the results.
-      </p>
+      {mode === "agent" ? (
+        <>
+          <p>
+            Assign the selected leads to {agent}?{" "}
+            {plural(ids.length, "lead")} selected.
+          </p>
+          <p>
+            Leads that another agent has move to {agent}. Their calls, notes
+            and history stay with each lead, and pending follow-ups move with
+            it. Leads already with {agent} are not changed.
+          </p>
+        </>
+      ) : (
+        <>
+          <p>
+            Assign the selected leads that have no agent among active agents in
+            turn (round-robin)? {plural(ids.length, "lead")} selected.
+          </p>
+          <p>
+            Leads that already have an agent stay with that agent and are
+            listed in the results.
+          </p>
+        </>
+      )}
       <footer>
         <Button variant="secondary" disabled={busy} onClick={onClose}>
           Cancel
@@ -645,20 +660,25 @@ function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
 
 const resultLabels = {
   assigned: "Assigned",
+  reassigned: "Reassigned",
   skipped: "Not changed",
   failed: "Failed",
 };
+// Leads that moved from another agent are counted and listed apart (update
+// 060); round-robin results have none.
 function AssignmentResults({ result, onClose }) {
   const rows = result.results.filter((r) => r.result !== "assigned");
   return (
     <Modal title="Assignment results" onClose={onClose}>
       <p role="status">
         {plural(result.assigned, "lead")} assigned ·{" "}
+        {result.reassigned !== undefined &&
+          `${plural(result.reassigned, "lead")} reassigned · `}
         {plural(result.skipped, "lead")} not changed ·{" "}
         {plural(result.failed, "lead")} failed
       </p>
       {rows.length > 0 && (
-        <div className="import-results">
+        <div className="import-results assignment-results">
           <Table
             rows={rows}
             columns={[

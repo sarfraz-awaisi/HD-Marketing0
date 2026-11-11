@@ -642,6 +642,10 @@ export const unassignedAssignment = z
   .refine((body) => (body.mode === "agent") === !!body.agent_id, {
     message: "Choose an agent only for direct assignment",
   });
+// Moving selected leads to one agent, whoever has them now (update 060).
+export const selectedAssignment = z
+  .object({ lead_ids: leadIds, agent_id: uuid })
+  .strict();
 // Attendance (update 040). Self-service bodies never carry a user id: the
 // employee always comes from the verified session.
 const isoDay = z.iso.date();

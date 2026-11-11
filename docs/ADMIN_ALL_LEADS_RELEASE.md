@@ -89,7 +89,7 @@ Contact numbers are kept apart from leads (`crm_private.lead_phones`), where the
 ## Known limits
 
 - **Select all matching** takes at most 500 leads; narrow the filters first.
-- **Reassigning and removing an agent** are done one lead at a time, never in bulk, so no agent's lead is taken by mistake.
+- **Removing an agent** is done one lead at a time, never in bulk. Since update 060, **Assign to agent** moves selected leads from their agents in bulk, after confirming.
 - **The lead file filter** lists the latest 100 files. A file opened from Task assign or the Google Sheets page always works.
 - **A search of three or fewer digits** is treated as a name.
 
@@ -119,3 +119,35 @@ The All leads filter bar is now: search, assignment, **Temperature**, first call
 If the code goes out before 058, the page works but choosing Call outcome or Temperature says "This filter needs CRM database update 058 after 057." Applying 058 then fixes it.
 
 **Rollback:** roll back the application; the older code works with 058.
+
+## Update 060: move selected leads to another agent
+
+Before 060, bulk assignment in All leads only assigned leads with no agent. Moving five of one agent's leads to another agent gave "0 leads assigned · 5 leads not changed", each "Already assigned to" their current agent. The chosen agent was sent correctly, but 057's `assign_unassigned_leads` skips every lead that has an agent by design. The single-lead **Reassign** already worked.
+
+- **Assign to agent** (was "Assign unassigned") moves the selected leads to the chosen active agent, whoever has them and whatever their calls (No answer, Busy, Number off or answered). It uses the single-lead Reassign's rules:
+  - calls, notes, deals and history stay with the lead;
+  - pending follow-ups, scheduled visits and their reminders move to the new agent;
+  - each move is in the audit history, and both agents are notified;
+  - the new agent opens the lead, and the old agent no longer can.
+- **A moved lead starts a fresh first-call deadline** for the new agent and shows as **New** under First call until they call, as with single Reassign. Its earlier calls stay in its history.
+- **The confirmation** says that leads with another agent will move. **The results** read "N assigned · N reassigned · N not changed · N failed":
+  - **reassigned** leads are listed with "Moved from …";
+  - leads already with the chosen agent are **not changed** ("Already assigned to …").
+- **Round-robin unassigned** is unchanged: it only assigns leads with no agent. The single-lead Assign and Reassign and agents' permissions are unchanged.
+
+| Item            | Value                                                                                     |
+| --------------- | ----------------------------------------------------------------------------------------- |
+| Migration       | `supabase/migrations/060_admin_lead_reassignment.sql` (adds `admin_assign_leads` only; safe to rerun) |
+| Read-only check | `supabase/check-admin-lead-reassignment-060.sql`                                          |
+| Requires        | update 059 in production (applied)                                                        |
+
+**Why a migration:** telling "assigned" from "reassigned" exactly needs each lead's agent read under the same lock as the move. 060 adds one function and changes no table, data or existing function (a test compares them).
+
+**Release:**
+1. Back up the database and test the restore.
+2. Run the check (`at 059, ready for 060`), apply 060, then run the check again (`at 060`, `server_functions` = 3, `browser_function_access_must_be_0` = 0).
+3. Retire the inactive slot (green `bd793be`) and deploy.
+
+If the code goes out before 060, Assign to agent says "This feature needs CRM database update 060 after 059." Applying 060 then fixes it. Round-robin unassigned and single-lead Reassign keep working.
+
+**Rollback:** roll back the application. The older code works with 060, and its bulk Assign again skips leads that have an agent.
