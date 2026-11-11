@@ -491,3 +491,8 @@ dialog.lead-name-dialog {
     width: 100%;
   }
 }
+/* Assignment results list customers' names, not import row numbers. */
+.assignment-results th:first-child,
+.assignment-results td:first-child {
+  width: 40%;
+}

@@ -29,6 +29,7 @@ import {
   agentPipelineQuery,
   adminLeadsQuery,
   unassignedAssignment,
+  selectedAssignment,
   leadIds,
   auditQuery,
   leadName,
@@ -576,6 +577,30 @@ export function crmRouter(db, options = {}) {
             p_request: req.id,
           },
           "057 after 056",
+        ),
+      );
+    },
+  );
+  // Moves the selected leads to one agent, whoever has them now (update
+  // 060): the database reports each as assigned, reassigned, not changed
+  // (already that agent's) or failed.
+  router.post(
+    "/leads/assign-selected",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const body = selectedAssignment.parse(req.body);
+      res.json(
+        await salesRpc(
+          db,
+          "admin_assign_leads",
+          {
+            p_lead_ids: body.lead_ids,
+            p_actor: req.user.id,
+            p_agent: body.agent_id,
+            p_request: req.id,
+          },
+          "060 after 059",
         ),
       );
     },

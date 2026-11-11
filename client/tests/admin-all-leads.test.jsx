@@ -98,6 +98,22 @@ beforeEach(() => {
       };
     if (options.method === "POST") {
       posts.push([path, options.body]);
+      if (path === "/leads/assign-selected")
+        return {
+          assigned: 1,
+          reassigned: 1,
+          skipped: 0,
+          failed: 0,
+          results: [
+            { id: rows[0].id, name: "Customer 1", result: "assigned" },
+            {
+              id: rows[1].id,
+              name: "Customer 2",
+              result: "reassigned",
+              reason: "Moved from Ali Agent",
+            },
+          ],
+        };
       return path === "/leads/assign-unassigned" &&
         options.body.lead_ids.length > 1
         ? {
@@ -424,9 +440,9 @@ describe("administrators' All leads", () => {
     );
   });
 
-  it("bulk-assigns the selected unassigned leads after confirming and reports each one", async () => {
+  it("moves the selected leads to one agent, whoever has them, after confirming, and reports each one (update 060)", async () => {
     const user = userEvent.setup();
-    open("/leads?assignment=unassigned");
+    open("/leads?assignment=assigned");
     await user.click(
       await screen.findByRole("button", {
         name: "Select all 2 matching leads",
@@ -437,17 +453,20 @@ describe("administrators' All leads", () => {
     });
     expect(bar).toHaveTextContent("2 leads selected");
     await user.selectOptions(
-      within(bar).getByLabelText("Agent for the selected unassigned leads"),
+      within(bar).getByLabelText("Agent for the selected leads"),
       sara.id,
     );
     await user.click(
-      within(bar).getByRole("button", { name: "Assign unassigned" }),
+      within(bar).getByRole("button", { name: "Assign to agent" }),
     );
     const confirm = await screen.findByRole("dialog", {
       name: "Assign the selected leads",
     });
     expect(confirm).toHaveTextContent(
-      "Leads that already have an agent stay with that agent",
+      "Assign the selected leads to Sara Agent? 2 leads selected.",
+    );
+    expect(confirm).toHaveTextContent(
+      "Leads that another agent has move to Sara Agent. Their calls, notes and history stay with each lead",
     );
     expect(posts).toEqual([]);
     await user.click(within(confirm).getByRole("button", { name: "Assign" }));
@@ -456,20 +475,57 @@ describe("administrators' All leads", () => {
     });
     expect(posts).toEqual([
       [
+        "/leads/assign-selected",
+        { lead_ids: rows.map((r) => r.id), agent_id: sara.id },
+      ],
+    ]);
+    expect(report).toHaveTextContent(
+      "1 lead assigned · 1 lead reassigned · 0 leads not changed · 0 leads failed",
+    );
+    const moved = within(report).getByRole("row", { name: /Customer 2/ });
+    expect(moved).toHaveTextContent("Reassigned");
+    expect(moved).toHaveTextContent("Moved from Ali Agent");
+    expect(
+      mocks.api.mock.calls.some(([p]) =>
+        p.startsWith("/leads/all/selection?assignment=assigned"),
+      ),
+    ).toBe(true);
+  });
+
+  it("round-robins only the selected leads that have no agent, as before", async () => {
+    const user = userEvent.setup();
+    open("/leads?assignment=unassigned");
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Select all 2 matching leads",
+      }),
+    );
+    const bar = await screen.findByRole("toolbar", {
+      name: "Selected lead actions",
+    });
+    await user.click(
+      within(bar).getByRole("button", { name: "Round-robin unassigned" }),
+    );
+    const confirm = await screen.findByRole("dialog", {
+      name: "Assign the selected leads",
+    });
+    expect(confirm).toHaveTextContent(
+      "Leads that already have an agent stay with that agent",
+    );
+    await user.click(within(confirm).getByRole("button", { name: "Assign" }));
+    const report = await screen.findByRole("dialog", {
+      name: "Assignment results",
+    });
+    expect(posts).toEqual([
+      [
         "/leads/assign-unassigned",
-        { lead_ids: rows.map((r) => r.id), mode: "agent", agent_id: sara.id },
+        { lead_ids: rows.map((r) => r.id), mode: "round_robin" },
       ],
     ]);
     expect(report).toHaveTextContent(
       "1 lead assigned · 1 lead not changed · 0 leads failed",
     );
-    expect(report).toHaveTextContent("Customer 2");
     expect(report).toHaveTextContent("Already assigned to Ali Agent");
-    expect(
-      mocks.api.mock.calls.some(([p]) =>
-        p.startsWith("/leads/all/selection?assignment=unassigned"),
-      ),
-    ).toBe(true);
   });
 
   it("says when nothing matches", async () => {
