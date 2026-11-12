@@ -567,14 +567,14 @@ describe("dashboard numbers open their records (update 051)", () => {
     );
     const dialog = await screen.findByRole("dialog");
     expect(
-      within(dialog).getByRole("heading", { name: "Missed first calls" }),
+      within(dialog).getByRole("heading", { name: "Missed first call" }),
     ).toBeInTheDocument();
     expect(
       within(dialog).getByText(/Only your own work is listed/),
     ).toBeInTheDocument();
     expect(
       within(dialog).getByText(
-        "Your open leads not called yet whose first-call deadline has passed.",
+        "Your open leads not called yet in their current assignment, past the first-call deadline.",
       ),
     ).toBeInTheDocument();
     expect(

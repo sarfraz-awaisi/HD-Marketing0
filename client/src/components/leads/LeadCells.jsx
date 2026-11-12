@@ -49,6 +49,8 @@ export function DetailsLink({ lead, back }) {
   );
 }
 // The lead's latest call: its outcome, whether it connected, and when.
+// Administrators see when it came before the lead's current assignment
+// (update 063).
 export function LastCallCell({ lead }) {
   if (!lead.last_call_at)
     return <span className="lead-muted">Not called yet</span>;
@@ -60,6 +62,9 @@ export function LastCallCell({ lead }) {
         {lead.last_call_outcome || "Call in progress"}
       </span>
       <small>{date(lead.last_call_at)}</small>
+      {lead.last_call_earlier && (
+        <small className="lead-muted">Earlier assignment</small>
+      )}
     </span>
   );
 }

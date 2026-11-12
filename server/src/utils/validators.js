@@ -279,7 +279,9 @@ export const adminLeadsQuery = z
       .optional(),
     assignment: z.enum(["assigned", "unassigned"]).optional(),
     agent: uuid.optional(),
-    call: z.enum(["uncalled", "missed"]).optional(),
+    // Update 063: not_connected, overdue with no answered call in the
+    // current assignment.
+    call: z.enum(["uncalled", "missed", "not_connected"]).optional(),
     status: z.enum(statuses).optional(),
     lost_reason: z.enum(lostReasons).optional(),
     temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
@@ -486,6 +488,45 @@ export const insightQuery = z
   })
   .strict()
   .refine((v) => Date.parse(v.from) < Date.parse(v.to), {
+    message: "Date range must be increasing",
+    path: ["to"],
+  });
+// Team reports (update 063): a period of up to a year; day by day for up to
+// 62 days; and the records behind a number. The database checks the
+// metrics and ranges again.
+const teamRange = {
+  from: offsetTime,
+  to: offsetTime,
+};
+const increasing = (v) => Date.parse(v.from) < Date.parse(v.to);
+export const teamReportQuery = z
+  .object(teamRange)
+  .strict()
+  .refine(increasing, {
+    message: "Date range must be increasing",
+    path: ["to"],
+  });
+export const teamDaysQuery = z
+  .object({ ...teamRange, agent: uuid.optional() })
+  .strict()
+  .refine(increasing, {
+    message: "Date range must be increasing",
+    path: ["to"],
+  });
+export const teamRecordsQuery = z
+  .object({
+    ...teamRange,
+    metric: z.string().regex(/^[a-z_]{1,40}$/),
+    agent: uuid.optional(),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce
+      .number()
+      .int()
+      .refine((n) => n === 25 || n === 50)
+      .default(25),
+  })
+  .strict()
+  .refine(increasing, {
     message: "Date range must be increasing",
     path: ["to"],
   });

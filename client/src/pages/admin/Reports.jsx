@@ -13,13 +13,17 @@ import {
 import { drillParams, useDrillUrl } from "../../lib/useDrillUrl";
 import { Button, Table, ErrorBox, Loader } from "../../components/common/UI";
 import ReportDrilldown from "../../components/reports/ReportDrilldown";
+import TeamPerformance from "../../components/reports/TeamPerformance";
+import { dayRange, periodDays, periodOf, periods } from "../../lib/periods";
 import "../../styles/reports.css";
 // Administrators see everyone's numbers. Agents see the same reports with
-// only their own work, as My performance (update 051).
-const tabs = [
+// only their own work, as My performance (update 051). Update 063:
+// administrators' agent report is Team performance.
+const allTabs = [
   ["summary", "Summary"],
   ["sources", "Lead sources"],
-  ["agents", "Agents", "My activity"],
+  ["team", "Team performance", null, "admin"],
+  ["agents", "Agents", "My activity", "agent"],
   ["funnel", "Sales funnel"],
   ["lost", "Lost reasons"],
 ];
@@ -429,9 +433,12 @@ export default function Reports() {
   } = useDrillUrl();
   const client = useQueryClient();
   const [error, setError] = useState("");
-  const tab = tabs.some(([v]) => v === url.get("tab"))
-    ? url.get("tab")
-    : "summary";
+  const tabs = allTabs.filter(
+    ([, , , only]) => !only || only === (own ? "agent" : "admin"),
+  );
+  // An administrator's older Agents link opens Team performance.
+  const asked = !own && url.get("tab") === "agents" ? "team" : url.get("tab");
+  const tab = tabs.some(([v]) => v === asked) ? asked : "summary";
   const from = day.test(url.get("from") || "")
     ? url.get("from")
     : today.slice(0, 7) + "-01";
@@ -440,8 +447,8 @@ export default function Reports() {
   const agent = own ? "" : url.get("agent") || "";
   const source = url.get("source") || "";
   // Each report uses only the filters that apply to it.
-  const usesAgent = tab !== "agents" && !own,
-    usesSource = !["sources", "agents"].includes(tab);
+  const usesAgent = !["agents", "team"].includes(tab) && !own,
+    usesSource = !["sources", "agents", "team"].includes(tab);
   const params = {
     from: new Date(from + "T00:00:00+05:00").toISOString(),
     to: new Date(
@@ -454,6 +461,7 @@ export default function Reports() {
   const q = useQuery({
     queryKey: ["reports", tab, params],
     queryFn: ({ signal }) => api(path + "?" + reportSearch(params), { signal }),
+    enabled: tab !== "team",
   });
   const users = useQuery({
     queryKey: ["users"],
@@ -509,7 +517,7 @@ export default function Reports() {
               : "Full-dataset reports. Date ranges use Pakistan time."}
           </p>
         </div>
-        {!own && (
+        {!own && tab !== "team" && (
           <Button
             disabled={!q.data}
             onClick={async () => {
@@ -554,6 +562,24 @@ export default function Reports() {
       </div>
       <section className="panel report-panel">
         <div className="toolbar">
+          {/* Update 063: named periods, weeks Sunday to Saturday. */}
+          <select
+            aria-label="Report period"
+            value={periodOf(from, to)}
+            onChange={(e) => {
+              const p = periodDays(e.target.value);
+              if (p) change(p);
+            }}
+          >
+            {periods.map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+            <option value="custom" disabled>
+              Custom dates
+            </option>
+          </select>
           <label>
             From
             <input
@@ -602,7 +628,17 @@ export default function Reports() {
           )}
         </div>
         <ErrorBox error={error || q.error} />
-        {q.isPending ? (
+        {tab === "team" ? (
+          <TeamPerformance
+            range={dayRange(from, to)}
+            dayCount={
+              Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1
+            }
+            periodText={`${longDate.format(new Date(from))} – ${longDate.format(new Date(to))}, Pakistan time`}
+            agent={url.get("agent") || null}
+            onAgent={(id) => change({ agent: id })}
+          />
+        ) : q.isPending ? (
           <Loader />
         ) : q.error ? null : tab === "summary" ? (
           <Summary data={q.data} onOpen={openDrill} own={own} />

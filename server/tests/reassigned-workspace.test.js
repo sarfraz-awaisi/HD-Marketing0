@@ -664,13 +664,13 @@ describe("a lead reassigned to another agent (update 061)", () => {
         [lead],
       ),
     ).toEqual({ agent_id: sara, called: true });
-    // A lead's first agent is unchanged: an administrator's call counts as
-    // before (update 038).
+    // Update 063: on a lead's first agent too, an administrator's call is
+    // not the agent's first call.
     const first = await customer(ali, "First agent, admin call");
     await logCall(admin, first, "Interested");
     expect(
       (
-        await one("select first_call_at is not null f from leads where id=$1", [
+        await one("select first_call_at is null f from leads where id=$1", [
           first,
         ])
       ).f,

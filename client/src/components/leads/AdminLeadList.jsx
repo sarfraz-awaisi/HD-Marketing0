@@ -38,9 +38,12 @@ import { temperatureChoices } from "./PipelineParts";
 // chosen agents in turn, after a preview of who gets how many.
 // First call: the names only are administrators' own; the values and what
 // they match (update 038) are as in agents' Assigned leads.
+// Update 063: Missed first call is no call in the current assignment by its
+// deadline; Not connected (overdue) is no answered call in it, from anyone.
 const callLabels = {
   uncalled: "New",
-  missed: "Not connected",
+  missed: "Missed first call",
+  not_connected: "Not connected (overdue)",
 };
 const sources = [
   ["manual", "Manual"],

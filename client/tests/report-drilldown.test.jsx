@@ -569,34 +569,96 @@ describe("other reports", () => {
       await screen.findByRole("heading", { name: "Meta: Contacted" }),
     ).toBeInTheDocument();
   });
-  it("opens an agent's activity and switches between their numbers", async () => {
+  it("opens Team performance in place of Agents, every number with its records (update 063)", async () => {
+    const teamRow = {
+      agent_id: ali.id,
+      name: "Ali Agent",
+      active: true,
+      received: 12,
+      received_first_time: 10,
+      received_reassigned: 2,
+      calls: 30,
+      answered: 22,
+      talk_minutes: 90,
+    };
+    mocks.api.mockImplementation(async (path) => {
+      if (path === "/users") return [admin, ali, sara];
+      if (path.startsWith("/reports/team/records?"))
+        return {
+          metric: "calls",
+          count: 1,
+          page: 1,
+          limit: 25,
+          data: [
+            {
+              id: "c1",
+              kind: "call",
+              at: "2026-11-02T06:00:00Z",
+              agent: { id: ali.id, name: "Ali Agent", role: "agent" },
+              lead: {
+                id: "l1",
+                number: "HD-000101",
+                name: "Hamza",
+                status: "contacted",
+              },
+              record: {
+                outcome: "Interested",
+                status: "completed",
+                duration_seconds: 120,
+                caller: { id: ali.id, name: "Ali Agent", role: "agent" },
+              },
+            },
+          ],
+        };
+      if (path.startsWith("/reports/team/days?"))
+        return {
+          metrics: ["received", "calls"],
+          days: [{ day: "2026-11-01", received: 12, calls: 30 }],
+        };
+      if (path.startsWith("/reports/team?"))
+        return { metrics: [], agents: [teamRow], total: { ...teamRow } };
+      return [];
+    });
     open("/reports?tab=agents&from=2026-11-01&to=2026-11-04");
+    expect(
+      await screen.findByRole("tab", {
+        name: "Team performance",
+        selected: true,
+      }),
+    ).toBeInTheDocument();
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Ali Agent assigned: 12. Show the records",
+        name: "Ali Agent: Calls 30. Show the records",
       }),
     );
-    const dialog = await screen.findByRole("dialog");
+    const dialog = await screen.findByRole("dialog", {
+      name: "Calls · Ali Agent",
+    });
     expect(
-      within(dialog).getByRole("heading", { name: "Ali Agent: Assigned" }),
+      await within(dialog).findByText("HD-000101 · Hamza"),
     ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(requests().at(-1)).toEqual(
-        expect.objectContaining({
-          report: "agents",
-          metric: "assigned",
-          key: ali.id,
-        }),
-      ),
-    );
-    expect(requests().at(-1)).not.toHaveProperty("agent");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Calls 30" }));
-    await waitFor(() =>
-      expect(requests().at(-1)).toMatchObject({ metric: "calls", key: ali.id }),
+    expect(dialog).toHaveTextContent("Recorded by Ali Agent");
+    const records = mocks.api.mock.calls
+      .map(([p]) => p)
+      .find((p) => p.startsWith("/reports/team/records?"));
+    expect(
+      Object.fromEntries(new URLSearchParams(records.split("?")[1])),
+    ).toMatchObject({
+      metric: "calls",
+      agent: ali.id,
+      from: "2026-10-31T19:00:00.000Z",
+      to: "2026-11-04T19:00:00.000Z",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /close/i }));
+    // One agent: their numbers and day by day.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Ali Agent's performance" }),
     );
     expect(
-      await screen.findByText(/“Called by” shows who actually made each call/),
+      await screen.findByRole("heading", { name: "Ali Agent" }),
     ).toBeInTheDocument();
+    // Day by day, each Pakistan day with its weekday.
+    expect(await screen.findByText("Sun 1 Nov")).toBeInTheDocument();
   });
   it("opens lost leads by reason and those without an agent", async () => {
     open("/reports?tab=lost&from=2026-11-01&to=2026-11-04");

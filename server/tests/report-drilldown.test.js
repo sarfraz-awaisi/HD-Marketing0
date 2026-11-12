@@ -1319,24 +1319,28 @@ describe("an agent's own work (update 051)", () => {
       }
     const list = async (metric) =>
       names((await get(ali, { report: "today", metric, key: ali })).body.data);
-    expect(await list("calls_today")).toEqual([
-      "Answered today",
-      "No answer today",
-    ]);
+    // Update 063: calls belong to whoever recorded them. The administrator's
+    // No answer call on Ali's lead is counted apart, not as Ali's.
+    expect(await list("calls_today")).toEqual(["Answered today"]);
+    expect(mine.admin_calls_today).toBe(1);
     expect(await list("connected_today")).toEqual(["Answered today"]);
     expect(await list("waiting")).toContain("Waiting");
     expect(await list("missed")).toContain("Late");
     expect(await list("followups_overdue")).toEqual(["Answered today"]);
-    // The administrator logged the unanswered call.
-    const calls = await get(ali, {
-      report: "today",
-      metric: "calls_today",
-      key: ali,
+    // The administrator logged the unanswered call: it is listed among the
+    // administrators' calls on Ali's leads, with its caller (update 063).
+    const adminCalls = await rpc("report_team_drilldown", {
+      p_actor: admin,
+      p_query: {
+        metric: "admin_calls",
+        agent: ali,
+        from: new Date(today).toISOString(),
+        to: new Date(today + 86400000).toISOString(),
+      },
     });
     expect(
-      calls.body.data.find((r) => r.lead.name === "No answer today").record
-        .caller.id,
-    ).toBe(admin);
+      adminCalls.data.map((r) => [r.lead.name, r.record.caller.id]),
+    ).toEqual([["No answer today", admin]]);
     // Sara's numbers stay closed to Ali; administrators open them.
     expect(
       (await get(sara, { report: "today", metric: "waiting", key: ali }))

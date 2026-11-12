@@ -39,8 +39,10 @@ function Count({ value, label, onOpen, children }) {
   );
 }
 // Admin view: how each agent's calling is going today. onOpen(metric, agent)
-// shows the records behind a number.
-export function TeamCallActivity({ onOpen }) {
+// shows the records behind a number; onOpenTeam(metric, agent, name) those
+// of the team report (update 063): leads received, leads called, an
+// administrator's calls and Not connected.
+export function TeamCallActivity({ onOpen, onOpenTeam }) {
   const q = useCallActivity();
   const started = workdayStarted(q.data);
   const count = (a, metric, label, children) => (
@@ -48,6 +50,15 @@ export function TeamCallActivity({ onOpen }) {
       value={a[metric]}
       label={`${a.name}: ${label}`}
       onOpen={onOpen && (() => onOpen(metric, a.agent_id))}
+    >
+      {children}
+    </Count>
+  );
+  const teamCount = (a, field, metric, label, children) => (
+    <Count
+      value={a[field] ?? 0}
+      label={`${a.name}: ${label}`}
+      onOpen={onOpenTeam && (() => onOpenTeam(metric, a.agent_id, a.name))}
     >
       {children}
     </Count>
@@ -89,20 +100,55 @@ export function TeamCallActivity({ onOpen }) {
               ),
             },
             {
+              key: "received_today",
+              label: "Leads received today",
+              render: (a) =>
+                teamCount(
+                  a,
+                  "received_today",
+                  "received",
+                  "leads received today",
+                ),
+            },
+            {
               key: "calls_today",
               label: "Calls today",
               render: (a) => (
-                <span>
-                  {count(a, "calls_today", "calls today")} (
-                  {count(
-                    a,
-                    "connected_today",
-                    "answered calls today",
-                    `${a.connected_today} answered`,
+                <span className="call-counts">
+                  <span>
+                    {count(a, "calls_today", "calls today")} (
+                    {count(
+                      a,
+                      "connected_today",
+                      "answered calls today",
+                      `${a.connected_today} answered`,
+                    )}
+                    )
+                  </span>
+                  {a.admin_calls_today > 0 && (
+                    <small>
+                      {teamCount(
+                        a,
+                        "admin_calls_today",
+                        "admin_calls",
+                        "admin calls on their leads today",
+                        `+ ${a.admin_calls_today} by an admin`,
+                      )}
+                    </small>
                   )}
-                  )
                 </span>
               ),
+            },
+            {
+              key: "leads_called_today",
+              label: "Leads called",
+              render: (a) =>
+                teamCount(
+                  a,
+                  "leads_called_today",
+                  "leads_called",
+                  "leads called today",
+                ),
             },
             {
               key: "first_calls_today",
@@ -116,7 +162,7 @@ export function TeamCallActivity({ onOpen }) {
             },
             {
               key: "missed",
-              label: "Missed first calls",
+              label: "Missed first call",
               render: (a) =>
                 count(
                   a,
@@ -124,6 +170,22 @@ export function TeamCallActivity({ onOpen }) {
                   "missed first calls",
                   a.missed ? (
                     <span className="badge overdue">{a.missed}</span>
+                  ) : (
+                    0
+                  ),
+                ),
+            },
+            {
+              key: "not_connected",
+              label: "Not connected",
+              render: (a) =>
+                teamCount(
+                  a,
+                  "not_connected",
+                  "not_connected_now",
+                  "not connected, deadline passed",
+                  a.not_connected ? (
+                    <span className="badge overdue">{a.not_connected}</span>
                   ) : (
                     0
                   ),

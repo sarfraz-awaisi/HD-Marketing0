@@ -546,6 +546,14 @@ export function crmRouter(db, options = {}) {
       );
     } catch (error) {
       if (
+        q.call === "not_connected" &&
+        error.message === "Choose valid lead filters"
+      )
+        throw Object.assign(
+          new Error("This filter needs CRM database update 063 after 062."),
+          { status: 503 },
+        );
+      if (
         (q.outcome || q.temperature) &&
         error.message === "Choose valid lead filters"
       )

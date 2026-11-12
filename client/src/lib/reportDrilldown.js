@@ -192,11 +192,11 @@ const agents = {
 const today = {
   calls_today: [
     "Calls today",
-    "Calls started today (Pakistan time) and recorded under this agent. “Called by” shows who actually made each call.",
+    "Calls this agent recorded that started today (Pakistan time). An administrator's calls on the agent's leads are counted apart (update 063).",
   ],
   connected_today: [
     "Answered calls today",
-    "Calls started today and recorded under this agent that were answered.",
+    "Calls this agent recorded today that were answered.",
   ],
   first_calls_today: [
     "First calls today",
@@ -207,8 +207,8 @@ const today = {
     "This agent's leads not called yet whose first-call deadline has not passed.",
   ],
   missed: [
-    "Missed first calls",
-    "This agent's open leads not called yet whose first-call deadline has passed.",
+    "Missed first call",
+    "This agent's open leads not called yet in their current assignment, past the first-call deadline.",
   ],
   idle: [
     "No recent activity",
