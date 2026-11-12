@@ -298,6 +298,10 @@ describe("Lead pipeline", () => {
       .map((r) => r.name)
       .sort();
     expect(names).toEqual(["Spoke", "Spoke, then lost"]);
+    // Update 061: the call before the move was Ali's, so the lead joins
+    // Sara's pipeline only once she speaks to the customer herself.
+    expect((await list({ view: "pipeline" }, sara)).data).toEqual([]);
+    await call(moved, { agent: sara });
     expect(
       (await list({ view: "pipeline" }, sara)).data.map((r) => r.name),
     ).toEqual(["Moved to Sara"]);

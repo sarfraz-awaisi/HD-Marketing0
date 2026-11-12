@@ -66,6 +66,14 @@ import {
   scheduleFollowUp,
   unscheduledFollowUps,
 } from "../services/leadActivity.js";
+import {
+  agentWorkspaces,
+  earlierWorkRefusal,
+  shownStates,
+  workspaceLeads,
+  workspaceReady,
+  workspaceRecords,
+} from "../services/leadWorkspace.js";
 import { inventoryRouter } from "./inventory.routes.js";
 import { sheetsAdminRouter } from "./sheets.routes.js";
 import { leadInquiries } from "../services/sheetsImport.js";
@@ -692,6 +700,11 @@ export function crmRouter(db, options = {}) {
   );
   router.get("/leads/:id/timeline", async (req, res) => {
     const lead = await ownedLead(db, req.user, req.params.id);
+    // Update 061: on a lead reassigned to them, an agent sees the current
+    // assignment only; administrators see everything.
+    const since =
+      (await agentWorkspaces(db, req.user, [lead.id]))?.get(lead.id)?.since ||
+      null;
     const timeline = [];
     for (const table of [
       "notes",
@@ -702,21 +715,30 @@ export function crmRouter(db, options = {}) {
       "assignments",
       "lead_status_history",
     ]) {
+      let query = db
+        .from(table)
+        .select(since ? "*,workspace_state" : "*")
+        .eq("lead_id", lead.id);
+      if (since) query = query.in("workspace_state", shownStates);
       const data = unwrap(
-        await db
-          .from(table)
-          .select("*")
-          .eq("lead_id", lead.id)
-          .order("created_at", { ascending: false })
-          .limit(100),
+        await query.order("created_at", { ascending: false }).limit(100),
       );
-      timeline.push(...data.map((item) => ({ ...item, kind: table })));
+      // The first stage change of the assignment started from the earlier
+      // assignment's stage, which is not shown.
+      if (since && table === "lead_status_history" && data.length)
+        data[data.length - 1] = { ...data.at(-1), from_status: null };
+      timeline.push(
+        ...(since ? workspaceRecords(data) : data).map((item) => ({
+          ...item,
+          kind: table,
+        })),
+      );
     }
     // Who did what comes from the audit log. If that lookup fails, the
     // activity itself is still shown, without the names.
     let items;
     try {
-      items = await enrichTimeline(db, lead, timeline);
+      items = await enrichTimeline(db, lead, timeline, since);
     } catch {
       console.error("Lead timeline shown without activity details");
       items = timeline.sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -1020,16 +1042,26 @@ export function crmRouter(db, options = {}) {
             : "*",
           { count: "exact" },
         );
+      // Update 061: an agent's records leave out earlier assignments' work
+      // on leads reassigned to them.
+      const scoped =
+        !["leads", "targets"].includes(table) &&
+        (await workspaceReady(db, req.user));
       if (req.user.role !== "admin") {
         if (table === "leads") query = query.eq("assigned_agent", req.user.id);
         else if (table === "targets") query = query.eq("agent_id", req.user.id);
-        else
+        else {
           query = db
             .from(table)
-            .select("*,leads!inner(lead_no,name,assigned_agent)", {
-              count: "exact",
-            })
+            .select(
+              "*," +
+                (scoped ? "workspace_state," : "") +
+                "leads!inner(lead_no,name,assigned_agent)",
+              { count: "exact" },
+            )
             .eq("leads.assigned_agent", req.user.id);
+          if (scoped) query = query.in("workspace_state", shownStates);
+        }
       }
       if (table === "leads") query = query.is("deleted_at", null);
       if (["calls", "followups", "visits", "deals"].includes(table))
@@ -1146,8 +1178,14 @@ export function crmRouter(db, options = {}) {
       res.json({
         data:
           table === "leads"
-            ? await leadContacts(db, req, unwrap(result))
-            : unwrap(result),
+            ? await workspaceLeads(
+                db,
+                req.user,
+                await leadContacts(db, req, unwrap(result)),
+              )
+            : scoped
+              ? workspaceRecords(unwrap(result))
+              : unwrap(result),
         count: result.count,
         page: q.page,
         limit: q.limit,
@@ -1156,7 +1194,11 @@ export function crmRouter(db, options = {}) {
     if (table === "leads")
       router.get("/leads/:id", async (req, res) => {
         const lead = await ownedLead(db, req.user, req.params.id);
-        const [contact] = await leadContacts(db, req, [lead]);
+        const [contact] = await workspaceLeads(
+          db,
+          req.user,
+          await leadContacts(db, req, [lead]),
+        );
         res.json(contact);
       });
     if (!["leads", "calls"].includes(table))
@@ -1212,6 +1254,34 @@ export function crmRouter(db, options = {}) {
           if (before && before.outcome !== followUpOutcome)
             throw needsFollowUpTime();
         }
+      }
+      // Update 061: an earlier assignment's work stays as it was recorded
+      // (the database refuses it too; this says why).
+      if (
+        ["calls", "followups", "visits", "deals"].includes(table) &&
+        (await workspaceReady(db, req.user))
+      ) {
+        const row = unwrap(
+          await db
+            .from(table)
+            .select("workspace_state")
+            .eq("id", id)
+            .maybeSingle(),
+        );
+        const refusal = earlierWorkRefusal(
+          table,
+          row?.workspace_state,
+          Object.keys(data).filter(
+            (field) =>
+              ![
+                "outcome_submitted_at",
+                "missing_outcome",
+                "lead_id",
+                "agent_id",
+              ].includes(field),
+          ),
+        );
+        if (refusal) throw Object.assign(new Error(refusal), { status: 403 });
       }
       if (
         table === "leads" &&

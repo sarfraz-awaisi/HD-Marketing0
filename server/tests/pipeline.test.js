@@ -421,6 +421,16 @@ function apiDatabase(role = "agent", owner = agent) {
     },
     rpc: vi.fn(async (name, args) => {
       try {
+        // Update 061: the server asks for the agent's lead workspaces.
+        if (name === "agent_workspaces")
+          return {
+            data: (
+              await one("select agent_workspaces($1,$2) as value", [
+                args.p_actor,
+                args.p_leads,
+              ])
+            ).value,
+          };
         return {
           data: (
             await one("select crm_mutate($1,$2,$3::jsonb,$4,$5) as value", [

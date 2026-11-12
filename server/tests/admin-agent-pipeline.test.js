@@ -179,35 +179,35 @@ describe("who an agent spoke to", () => {
       followups_due: 0,
       followups_overdue: 0,
       earlier: 1,
-      // Chand (an administrator), Danish (Sara, before he became Ali's) and
-      // Ghazal (a call with no recorded caller).
-      answered_by_others: 3,
+      // Chand (an administrator) and Ghazal (a call with no recorded
+      // caller). Danish, answered by Sara before he became Ali's, is not in
+      // Ali's own pipeline since update 061.
+      answered_by_others: 2,
       answered_by_admins: 1,
-      answered_by_other_agents: 1,
+      answered_by_other_agents: 0,
       answered_unrecorded: 1,
     });
-    // The agent's own Lead pipeline (update 052) is unchanged: it lists
-    // every lead of his with an answered call, whoever answered it, so its
-    // count is his contacts plus those answered by others.
+    // The agent's own Lead pipeline (update 052) lists every lead of his
+    // with an answered call in his current assignment, whoever answered it,
+    // so its count is his contacts plus those answered by others.
     const own = await rpc("agent_lead_list", {
       p_actor: ali,
       p_query: { view: "pipeline" },
     });
-    expect(own.count).toBe(5);
+    expect(own.count).toBe(4);
     expect(own.data.map((r) => r.name).sort()).toEqual([
       "Asad Khan",
       "Chand Khan",
-      "Danish Khan",
       "Faraz Khan",
       "Ghazal Khan",
     ]);
     // Sara: Danish is no longer hers; Ehsan is hers, but only Ali spoke to
-    // him.
+    // him, before the move (update 061: not in her pipeline).
     expect((await pipeline(sara)).summary).toMatchObject({
       contacted: 0,
       earlier: 1,
-      answered_by_others: 1,
-      answered_by_other_agents: 1,
+      answered_by_others: 0,
+      answered_by_other_agents: 0,
       answered_unrecorded: 0,
     });
     // Ali's earlier contact is Ehsan, now Sara's; Sara's is Danish.
@@ -341,12 +341,12 @@ describe("an agent's own Lead pipeline (My pipeline and Personally contacted)", 
       personally_contacted: 2,
     });
     // Asad was Ali's, but the administrator answered last; Chand only the
-    // administrator; Danish Sara before he became Ali's; Ghazal no one on
-    // record. Faraz was last answered by Ali, and Ehsan is Sara's now.
+    // administrator; Ghazal no one on record. Faraz was last answered by
+    // Ali, and Ehsan is Sara's now. Danish was answered by Sara before he
+    // became Ali's: not in Ali's pipeline (update 061).
     expect(result.answered_by).toEqual({
       [lead.Asad]: "admin",
       [lead.Chand]: "admin",
-      [lead.Danish]: "agent",
       [lead.Ghazal]: "unknown",
     });
     await expect(
@@ -369,7 +369,7 @@ describe("an agent's own Lead pipeline (My pipeline and Personally contacted)", 
       .set(as(ali));
     expect(res.status).toBe(200);
     expect(res.body.pipeline_counts).toEqual({
-      pipeline: 5,
+      pipeline: 4,
       personally_contacted: 2,
     });
     expect(
@@ -377,7 +377,6 @@ describe("an agent's own Lead pipeline (My pipeline and Personally contacted)", 
     ).toEqual({
       "Asad Khan": "admin",
       "Chand Khan": "admin",
-      "Danish Khan": "agent",
       "Faraz Khan": null,
       "Ghazal Khan": "unknown",
     });
@@ -385,7 +384,7 @@ describe("an agent's own Lead pipeline (My pipeline and Personally contacted)", 
     const hot = await request(app())
       .get("/api/my-leads?view=pipeline&temperature=hot")
       .set(as(ali));
-    expect([hot.body.count, hot.body.pipeline_counts.pipeline]).toEqual([1, 5]);
+    expect([hot.body.count, hot.body.pipeline_counts.pipeline]).toEqual([1, 4]);
     const assigned = await request(app()).get("/api/my-leads").set(as(ali));
     expect(assigned.body.pipeline_counts).toBeUndefined();
     expect(assigned.body.data[0]).not.toHaveProperty("answered_by");
@@ -398,7 +397,7 @@ describe("an agent's own Lead pipeline (My pipeline and Personally contacted)", 
         .get("/api/my-leads?view=pipeline")
         .set(as(ali));
       expect(before.status).toBe(200);
-      expect(before.body.count).toBe(5);
+      expect(before.body.count).toBe(4);
       expect(before.body.pipeline_counts).toBeUndefined();
       expect(before.body.data[0]).not.toHaveProperty("answered_by");
     } finally {

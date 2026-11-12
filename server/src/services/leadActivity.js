@@ -1,4 +1,5 @@
 import { followUpOutcome } from "../utils/validators.js";
+import { workspaceReady } from "./leadWorkspace.js";
 // Lead follow-ups and activity. Nothing here adds a table: follow-ups stay in
 // followups (saved through crm_mutate, which checks the lead owner and writes
 // the audit entry), and "who did what" comes from the existing audit_log.
@@ -70,8 +71,10 @@ const fieldsOf = (entry) =>
 // Adds to each timeline item who did it (actor) and, for follow-ups, visits
 // and deals, who is responsible; adds later changes from the audit log; and
 // adds lead detail edits that have no row of their own. Historical items get
-// the same details, because the audit log has recorded every change.
-export async function enrichTimeline(db, lead, items) {
+// the same details, because the audit log has recorded every change. With
+// since (update 061: an agent's current assignment), changes made before it
+// are left out.
+export async function enrichTimeline(db, lead, items, since = null) {
   const byTable = {};
   for (const item of items)
     if (auditActions[item.kind]) (byTable[item.kind] ||= []).push(item.id);
@@ -117,8 +120,10 @@ export async function enrichTimeline(db, lead, items) {
       : [],
   );
   const name = (id) => (id ? names.get(id) || "Former employee" : null);
+  const current = (e) =>
+    !since || Date.parse(e.created_at) >= Date.parse(since);
   const audits = new Map();
-  for (const e of entries) {
+  for (const e of entries.filter(current)) {
     const key = e.entity + ":" + e.entity_id;
     (audits.get(key) || audits.set(key, []).get(key)).push(e);
   }
@@ -154,7 +159,7 @@ export async function enrichTimeline(db, lead, items) {
     };
   });
   // Lead detail edits. Stage changes already have their own history rows.
-  for (const e of leadEntries) {
+  for (const e of leadEntries.filter(current)) {
     const fields =
       e.action === "lead.phone_changed"
         ? ["phone number"]
@@ -176,16 +181,21 @@ export async function enrichTimeline(db, lead, items) {
 // Leads whose latest call ended with "Follow-up required" but have no
 // follow-up scheduled since: calls logged before follow-ups could be scheduled
 // from the call form, or follow-ups that were never created. They are listed
-// for the owner (all for administrators) to schedule; no date is guessed.
+// for the owner (all for administrators) to schedule; no date is guessed. An
+// agent's list leaves out calls from an earlier assignment (update 061).
 export async function unscheduledFollowUps(db, user, cap = 100) {
+  const scoped = await workspaceReady(db, user);
   let query = db
     .from("calls")
     .select(
-      "id,lead_id,started_at,created_at,outcome,leads!inner(lead_no,name,status,assigned_agent,deleted_at)",
+      "id,lead_id,started_at,created_at,outcome," +
+        (scoped ? "workspace_state," : "") +
+        "leads!inner(lead_no,name,status,assigned_agent,deleted_at)",
     )
     .eq("outcome", followUpOutcome)
     .is("leads.deleted_at", null);
   if (user.role !== "admin") query = query.eq("leads.assigned_agent", user.id);
+  if (scoped) query = query.in("workspace_state", ["current"]);
   const flagged = unwrap(
     await query
       .order("created_at", { ascending: false })

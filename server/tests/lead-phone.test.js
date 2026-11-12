@@ -144,7 +144,7 @@ function database() {
         cap = Infinity;
       async function run() {
         try {
-          const sql = `select ${fields} from public.${table} r${joins}${filters.length ? " where " + filters.map(([key, op], i) => `${key} ${op} $${i + 1}`).join(" and ") : ""}${orders.length ? " order by " + orders.join(",") : ""}`;
+          const sql = `select ${fields} from public.${table} r${joins}${filters.length ? " where " + filters.map(([key, op], i) => (op === "= any" ? `${key} = any($${i + 1})` : `${key} ${op} $${i + 1}`)).join(" and ") : ""}${orders.length ? " order by " + orders.join(",") : ""}`;
           const rows = JSON.parse(
             JSON.stringify(
               (
@@ -192,6 +192,10 @@ function database() {
         },
         ilike(key, value) {
           filters.push(["r." + key, "ilike", value]);
+          return q;
+        },
+        in(key, value) {
+          filters.push(["r." + key + "::text", "= any", value]);
           return q;
         },
         order(key, opts) {
@@ -691,13 +695,14 @@ describe("Contact APIs and response privacy", () => {
     const response = await get(app, "/api/leads?page=2");
     expect(response.status).toBe(200);
     expect(response.body.data).toHaveLength(20);
-    expect(client.rpc).toHaveBeenCalledExactlyOnceWith(
-      "lead_contact_phones",
-      expect.objectContaining({
-        p_actor: agent,
-        p_leads: response.body.data.map((row) => row.id),
-      }),
-    );
+    // One contact lookup for the page, then (update 061) one workspace
+    // lookup for the same leads.
+    expect(
+      client.rpc.mock.calls.map(([name, args]) => [name, args.p_leads]),
+    ).toEqual([
+      ["lead_contact_phones", response.body.data.map((row) => row.id)],
+      ["agent_workspaces", response.body.data.map((row) => row.id)],
+    ]);
     client.rpc.mockResolvedValueOnce({
       error: { code: "PGRST202", message: leads[0].phone },
     });

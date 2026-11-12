@@ -4,6 +4,7 @@ import { PhoneCall } from "lucide-react";
 import { api } from "../../lib/api";
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { dueLabel, firstCallState } from "../../lib/firstCall";
+import { WorkspaceBadges } from "../leads/LeadCells";
 import { ErrorBox, Loader, Table } from "../common/UI";
 import "../../styles/reports.css";
 export const useCallActivity = () =>
@@ -209,6 +210,7 @@ export function MyCalls({ onOpen }) {
                   {formatLeadNo(lead.lead_no)} · {lead.name}
                 </b>
                 <small>Due {dueLabel(lead.call_due_at)}</small>
+                <WorkspaceBadges lead={lead} />
               </div>
               {state && (
                 <span className={`badge plain ${state.tone}`}>

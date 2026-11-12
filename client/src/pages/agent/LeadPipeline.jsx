@@ -102,7 +102,8 @@ export default function LeadPipeline() {
           <p className="pipeline-count-note">
             My pipeline counts every lead of yours with an answered call.
             Personally contacted counts those with an answered call you made
-            yourself, as your reports do.
+            yourself. On a lead reassigned to you, only calls made since it
+            reached you count.
           </p>
         </>
       )}

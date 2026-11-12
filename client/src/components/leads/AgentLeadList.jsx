@@ -27,7 +27,13 @@ export default function AgentLeadList({ importId }) {
     qc = useQueryClient(),
     toast = useToast();
   const back = location.pathname + location.search;
-  const [f, change] = useUrlFilters(["q", "call", "outcome", "page"]);
+  const [f, change] = useUrlFilters([
+    "q",
+    "call",
+    "outcome",
+    "assignment",
+    "page",
+  ]);
   const [dialLead, setDialLead] = useState(null);
   const page = Math.max(1, Number(f.page) || 1);
   const set = (values) => change({ ...values, page: null });
@@ -38,6 +44,7 @@ export default function AgentLeadList({ importId }) {
     ...(f.q ? { search: f.q } : {}),
     ...(f.call ? { call: f.call } : {}),
     ...(f.outcome ? { outcome: f.outcome } : {}),
+    ...(f.assignment ? { assignment: f.assignment } : {}),
   });
   const q = useQuery({
     queryKey: ["my-leads", user.id, params.toString()],
@@ -57,9 +64,18 @@ export default function AgentLeadList({ importId }) {
     ...(f.outcome
       ? [[`Last call: ${f.outcome}`, () => set({ outcome: null })]]
       : []),
+    ...(f.assignment
+      ? [["Reassigned to me", () => set({ assignment: null })]]
+      : []),
   ];
   const reset = () =>
-    change({ q: null, call: null, outcome: null, page: null });
+    change({
+      q: null,
+      call: null,
+      outcome: null,
+      assignment: null,
+      page: null,
+    });
   return (
     <>
       <Link className="back-link" to="/leads">
@@ -108,6 +124,15 @@ export default function AgentLeadList({ importId }) {
                 {o}
               </option>
             ))}
+          </select>
+          {/* Update 061: leads that came from another agent. */}
+          <select
+            aria-label="Filter by assignment"
+            value={f.assignment}
+            onChange={(e) => set({ assignment: e.target.value })}
+          >
+            <option value="">Any assignment</option>
+            <option value="reassigned">Reassigned to me</option>
           </select>
         </div>
         <ActiveFilters items={filters} onReset={reset} />

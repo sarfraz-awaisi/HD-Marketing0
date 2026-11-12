@@ -248,6 +248,8 @@ export const agentLeadsQuery = z
     outcome: z.enum(outcomes).optional(),
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     call: z.enum(["uncalled", "missed"]).optional(),
+    // Leads that came to the agent from another agent (update 061).
+    assignment: z.enum(["reassigned"]).optional(),
     sort: z
       .enum([
         "file",
