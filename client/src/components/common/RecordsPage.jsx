@@ -109,7 +109,11 @@ export function ActivityForm({ entity, leadId, initial, onSave }) {
                 : ["scheduled", "completed", "cancelled", "no-show"],
           },
         ]),
-    { key: "notes", label: "Notes", type: "textarea" },
+    // A commitment carried over from an earlier assignment (update 061)
+    // keeps that assignment's comments, which are not shown or changed.
+    ...(initial?.carried_over
+      ? []
+      : [{ key: "notes", label: "Notes", type: "textarea" }]),
   ];
   const timekey = entity === "followups" ? "due_at" : "scheduled_at";
   return (
@@ -294,7 +298,18 @@ export default function RecordsPage({
             ),
           },
         ]),
-    { key: "notes", label: "Notes" },
+    {
+      key: "notes",
+      label: "Notes",
+      render: (r) =>
+        r.carried_over ? (
+          <span className="carried-label">
+            Carried over from an earlier assignment
+          </span>
+        ) : (
+          r.notes
+        ),
+    },
     {
       key: "actions",
       label: "Actions",

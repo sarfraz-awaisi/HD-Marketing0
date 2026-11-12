@@ -496,3 +496,58 @@ dialog.lead-name-dialog {
 .assignment-results td:first-child {
   width: 40%;
 }
+/* Update 061: a lead reassigned from another agent. Words, never colour
+   alone. */
+.workspace-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.workspace-flag {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.workspace-flag.reassigned {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.workspace-flag.new {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.workspace-flag.previous {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.workspace-note {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+.carried-over {
+  margin-bottom: 16px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.carried-over h3 {
+  margin: 0 0 8px;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+}
+.carried-label {
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+.timeline-item .carried-label {
+  display: block;
+  margin-top: 4px;
+}

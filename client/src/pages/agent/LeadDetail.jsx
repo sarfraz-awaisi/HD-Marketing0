@@ -26,6 +26,7 @@ import TimelineItem from "../../components/leads/TimelineItem";
 import LeadKycDocuments from "../../components/documents/LeadKycDocuments";
 import EditLeadName from "../../components/leads/EditLeadName";
 import AdInquiries from "../../components/leads/AdInquiries";
+import { WorkspaceBadges } from "../../components/leads/LeadCells";
 export default function LeadDetail() {
   const { id } = useParams(),
     { user } = useAuth(),
@@ -97,6 +98,22 @@ export default function LeadDetail() {
   if (q.isPending) return <Loader />;
   if (q.error) return <ErrorBox error={q.error} />;
   const lead = q.data;
+  // Update 061: on a lead reassigned to them, an agent's timeline holds the
+  // current assignment, with commitments carried over from the earlier one
+  // listed first.
+  const items = timeline.data || [];
+  const carried = items.filter((item) => item.carried_over);
+  const current = items.filter((item) => !item.carried_over);
+  const entry = (item) => (
+    <TimelineItem
+      key={item.kind + item.id}
+      item={item}
+      onOutcome={(c) => {
+        setCall(c);
+        setModal("outcome");
+      }}
+    />
+  );
   return (
     <>
       <Link
@@ -130,6 +147,7 @@ export default function LeadDetail() {
             )}
           </div>
           <p className="lead-number">{formatLeadNo(lead.lead_no)}</p>
+          <WorkspaceBadges lead={lead} />
           <p>
             {lead.email || "No email"} · {lead.source}
           </p>
@@ -217,7 +235,12 @@ export default function LeadDetail() {
         </section>
         <section className="panel">
           <div className="panel-heading">
-            <h2>Activity timeline · {formatLeadNo(lead.lead_no)}</h2>
+            <h2>
+              {lead.reassigned
+                ? "Your current assignment"
+                : "Activity timeline"}{" "}
+              · {formatLeadNo(lead.lead_no)}
+            </h2>
             <Button variant="secondary" onClick={() => setModal("note")}>
               + Note
             </Button>
@@ -237,22 +260,34 @@ export default function LeadDetail() {
               </Button>
             ))}
           </div>
+          {lead.reassigned && (
+            <p className="workspace-note">
+              Reassigned to you on {date(lead.reassigned_at)}. Activity from
+              earlier assignments is kept for administrators.
+            </p>
+          )}
           <ErrorBox error={timeline.error} />
           {timeline.isPending ? (
             <Loader />
-          ) : !timeline.data?.length ? (
+          ) : lead.reassigned ? (
+            <>
+              {carried.length > 0 && (
+                <div className="carried-over">
+                  <h3>Carried over from the previous assignment</h3>
+                  {carried.map(entry)}
+                </div>
+              )}
+              {!current.some((item) => item.kind === "notes") && (
+                <div className="empty">
+                  No notes added during your current assignment.
+                </div>
+              )}
+              {current.map(entry)}
+            </>
+          ) : !items.length ? (
             <div className="empty">No activity yet. Start a conversation.</div>
           ) : (
-            timeline.data.map((item) => (
-              <TimelineItem
-                key={item.kind + item.id}
-                item={item}
-                onOutcome={(c) => {
-                  setCall(c);
-                  setModal("outcome");
-                }}
-              />
-            ))
+            items.map(entry)
           )}
         </section>
       </div>

@@ -21,12 +21,14 @@ export function idleFor(value, now = Date.now()) {
   return Number.isNaN(days) ? "—" : `${days} day${days === 1 ? "" : "s"}`;
 }
 // Badge state for a lead row: called, waiting with a deadline, or missed.
+// A Lost lead reassigned to another agent waits for that agent's first call
+// too (update 061).
 export function firstCallState(lead, now = Date.now()) {
   if (lead.first_call_at) return { tone: "completed", label: "Called" };
   if (
     !lead.assigned_agent ||
     !lead.call_due_at ||
-    ["won", "lost"].includes(lead.status)
+    (["won", "lost"].includes(lead.status) && !lead.first_call_reopened)
   )
     return null;
   return Date.parse(lead.call_due_at) < now

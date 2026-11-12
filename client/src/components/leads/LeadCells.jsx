@@ -13,8 +13,27 @@ export function CustomerCell({ lead, back, email = true }) {
       <div>
         <b>{lead.name}</b>
         {email && <small>{lead.email || "No email"}</small>}
+        <WorkspaceBadges lead={lead} />
       </div>
     </Link>
+  );
+}
+// Update 061: a lead that came to the agent from another agent. Reassigned
+// stays for the whole assignment; New, and the previous assignment's result
+// when it was Not interested, only until the agent's first call.
+export function WorkspaceBadges({ lead }) {
+  if (!lead.reassigned) return null;
+  const fresh = !lead.first_call_at;
+  return (
+    <span className="workspace-flags">
+      <span className="workspace-flag reassigned">Reassigned</span>
+      {fresh && <span className="workspace-flag new">New</span>}
+      {fresh && lead.previous_result === "not_interested" && (
+        <span className="workspace-flag previous">
+          Previously not interested
+        </span>
+      )}
+    </span>
   );
 }
 export function DetailsLink({ lead, back }) {

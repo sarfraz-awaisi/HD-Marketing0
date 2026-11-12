@@ -98,6 +98,11 @@ function database() {
         [args.p_actor, args.p_leads, args.p_request],
       ],
       private_phone: ["select private_phone($1) as value", [args.p_lead]],
+      // Update 061: the server asks for the agent's lead workspaces.
+      agent_workspaces: [
+        "select agent_workspaces($1,$2) as value",
+        [args.p_actor, args.p_leads],
+      ],
     };
     try {
       return { data: (await one(...calls[name])).value };

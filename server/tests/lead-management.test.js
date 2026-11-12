@@ -758,7 +758,11 @@ function database() {
         lt: (key, value) => add(key, "<", value),
         lte: (key, value) => add(key, "<=", value),
         gt: (key, value) => add(key, ">", value),
-        in: (key, value) => add(key, "= any", value),
+        in(key, list) {
+          values.push(list);
+          clauses.push(`${field(key)}::text = any($${values.length})`);
+          return q;
+        },
         or(value) {
           const match = value.match(/^name\.ilike\.(.+),lead_no\.eq\.(\d+)$/);
           if (!match) throw new Error("Invalid fixture filter");

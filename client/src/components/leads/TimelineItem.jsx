@@ -37,6 +37,14 @@ function byline(item) {
     parts.push(`Agent: ${item.agent_name}`);
   return parts.join(" · ");
 }
+// A follow-up, visit or deal carried over from an earlier assignment (update
+// 061): its time, status and property, without the earlier comments.
+const carried = (item) =>
+  item.carried_over && (
+    <small className="carried-label">
+      Carried over from an earlier assignment
+    </small>
+  );
 export default function TimelineItem({ item, onOutcome }) {
   const updates = item.updates || [];
   return (
@@ -86,6 +94,7 @@ export default function TimelineItem({ item, onOutcome }) {
             {item.completed_at && (
               <small>Completed {date(item.completed_at)}</small>
             )}
+            {carried(item)}
           </>
         )}
         {item.kind === "visits" && (
@@ -94,6 +103,7 @@ export default function TimelineItem({ item, onOutcome }) {
               Visit {date(item.scheduled_at)} · <Badge value={item.status} />
             </p>
             {item.notes && <p>{item.notes}</p>}
+            {carried(item)}
           </>
         )}
         {item.kind === "deals" && (
@@ -102,6 +112,7 @@ export default function TimelineItem({ item, onOutcome }) {
               <Badge value={item.stage} />
             </p>
             {item.notes && <p>{item.notes}</p>}
+            {carried(item)}
           </>
         )}
         {item.kind === "assignments" && (
@@ -112,7 +123,9 @@ export default function TimelineItem({ item, onOutcome }) {
         {item.kind === "lead_status_history" && (
           <>
             <p>
-              {statusLabel(item.from_status)} → {statusLabel(item.to_status)}
+              {item.from_status
+                ? `${statusLabel(item.from_status)} → ${statusLabel(item.to_status)}`
+                : `Stage set to ${statusLabel(item.to_status)}`}
             </p>
             {item.lost_reason && (
               <small>Lost reason: {lostReasonLabel(item.lost_reason)}</small>
