@@ -30,6 +30,7 @@ import {
   adminLeadsQuery,
   unassignedAssignment,
   selectedAssignment,
+  leadDistribution,
   leadIds,
   auditQuery,
   leadName,
@@ -613,6 +614,33 @@ export function crmRouter(db, options = {}) {
       );
     },
   );
+  // Shares the selected leads among the chosen agents in turn, or gives them
+  // to one agent, moving leads other agents have too (update 062). The
+  // preview changes nothing; carrying it out works the plan out again under
+  // the assignment lock, and returns the new plan instead (stale) if the
+  // leads or agents changed since the preview.
+  for (const [path, apply, limit] of [
+    ["/leads/distribute/preview", false, reportLimit],
+    ["/leads/distribute", true, sensitiveLimit],
+  ])
+    router.post(path, adminOnly, limit, async (req, res) => {
+      const body = leadDistribution.parse(req.body);
+      res.json(
+        await salesRpc(
+          db,
+          "admin_distribute_leads",
+          {
+            p_actor: req.user.id,
+            p_lead_ids: body.lead_ids,
+            p_agents: body.agent_ids,
+            p_apply: apply,
+            p_token: body.token || null,
+            p_request: req.id,
+          },
+          "062 after 061",
+        ),
+      );
+    });
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
     const q = listQuery.parse(req.query);
     let query = db

@@ -1,5 +1,5 @@
 import "../../styles/leads.css";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
@@ -34,6 +34,8 @@ import { temperatureChoices } from "./PipelineParts";
 // place of status and lost reason (still on each lead's page). Update 060:
 // Assign to agent moves the selected leads to one agent, whoever has them,
 // after confirming; Round-robin unassigned takes only leads with no agent.
+// Update 062: Assign to agents gives them to one agent or shares them among
+// chosen agents in turn, after a preview of who gets how many.
 // First call: the names only are administrators' own; the values and what
 // they match (update 038) are as in agents' Assigned leads.
 const callLabels = {
@@ -90,7 +92,6 @@ export default function AdminLeadList() {
     [bulk, setBulk] = useState(null),
     [results, setResults] = useState(null),
     [deleteIds, setDeleteIds] = useState(null),
-    [targetAgent, setTargetAgent] = useState(""),
     [error, setError] = useState("");
   const filters = new URLSearchParams(query(f));
   const params = new URLSearchParams({ ...query(f), page });
@@ -322,23 +323,8 @@ export default function AdminLeadList() {
                 aria-label="Selected lead actions"
               >
                 <b>{plural(selection.ids.length, "lead")} selected</b>
-                <select
-                  aria-label="Agent for the selected leads"
-                  value={targetAgent}
-                  onChange={(e) => setTargetAgent(e.target.value)}
-                >
-                  <option value="">Choose an active agent</option>
-                  {activeAgents.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  disabled={!targetAgent}
-                  onClick={() => setBulk({ mode: "agent", agent: targetAgent })}
-                >
-                  Assign to agent
+                <Button onClick={() => setBulk({ mode: "distribute" })}>
+                  Assign to agents
                 </Button>
                 <Button
                   variant="secondary"
@@ -451,21 +437,31 @@ export default function AdminLeadList() {
           }}
         />
       )}
-      {bulk && (
-        <BulkAssignDialog
-          ids={selection.ids}
-          mode={bulk.mode}
-          agent={bulk.mode === "agent" ? agentName(bulk.agent) : null}
-          agentId={bulk.agent}
-          onClose={() => setBulk(null)}
-          onDone={(result) => {
-            setBulk(null);
-            setResults(result);
-            selection.clear();
-            done();
-          }}
-        />
-      )}
+      {bulk &&
+        (bulk.mode === "distribute" ? (
+          <DistributeDialog
+            ids={selection.ids}
+            agents={activeAgents}
+            onClose={() => setBulk(null)}
+            onDone={(result) => {
+              setBulk(null);
+              setResults(result);
+              selection.clear();
+              done();
+            }}
+          />
+        ) : (
+          <BulkAssignDialog
+            ids={selection.ids}
+            onClose={() => setBulk(null)}
+            onDone={(result) => {
+              setBulk(null);
+              setResults(result);
+              selection.clear();
+              done();
+            }}
+          />
+        ))}
       {results && (
         <AssignmentResults result={results} onClose={() => setResults(null)} />
       )}
@@ -593,10 +589,10 @@ function AssignLeadDialog({ lead, agents, onClose, onDone }) {
   );
 }
 
-// Selected leads, after confirming: to one agent, moving any that another
-// agent has (update 060), or round-robin among active agents for the leads
-// with no agent, which the database never takes from an agent (057).
-function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
+// Round-robin among all active agents for the selected leads that have no
+// agent, after confirming; the database never takes a lead from an agent
+// (update 057).
+function BulkAssignDialog({ ids, onClose, onDone }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   async function confirm() {
@@ -604,15 +600,10 @@ function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
     setError("");
     try {
       onDone(
-        mode === "agent"
-          ? await api("/leads/assign-selected", {
-              method: "POST",
-              body: { lead_ids: ids, agent_id: agentId },
-            })
-          : await api("/leads/assign-unassigned", {
-              method: "POST",
-              body: { lead_ids: ids, mode },
-            }),
+        await api("/leads/assign-unassigned", {
+          method: "POST",
+          body: { lead_ids: ids, mode: "round_robin" },
+        }),
       );
     } catch (e) {
       setError(e.message);
@@ -622,30 +613,14 @@ function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
   return (
     <Modal title="Assign the selected leads" onClose={() => !busy && onClose()}>
       <ErrorBox error={error} />
-      {mode === "agent" ? (
-        <>
-          <p>
-            Assign the selected leads to {agent}?{" "}
-            {plural(ids.length, "lead")} selected.
-          </p>
-          <p>
-            Leads that another agent has move to {agent}. Their calls, notes
-            and history stay with each lead, and pending follow-ups move with
-            it. Leads already with {agent} are not changed.
-          </p>
-        </>
-      ) : (
-        <>
-          <p>
-            Assign the selected leads that have no agent among active agents in
-            turn (round-robin)? {plural(ids.length, "lead")} selected.
-          </p>
-          <p>
-            Leads that already have an agent stay with that agent and are
-            listed in the results.
-          </p>
-        </>
-      )}
+      <p>
+        Assign the selected leads that have no agent among active agents in turn
+        (round-robin)? {plural(ids.length, "lead")} selected.
+      </p>
+      <p>
+        Leads that already have an agent stay with that agent and are listed in
+        the results.
+      </p>
       <footer>
         <Button variant="secondary" disabled={busy} onClick={onClose}>
           Cancel
@@ -658,6 +633,221 @@ function BulkAssignDialog({ ids, mode, agent, agentId, onClose, onDone }) {
   );
 }
 
+// The selected leads to one agent, or shared among chosen active agents in
+// turn (update 062), whoever has them now. The preview, worked out by the
+// database, changes nothing. Confirmed, the database works the plan out
+// again under its assignment lock; if the leads or agents changed since the
+// preview, nothing moves and the new plan comes back to confirm.
+function DistributeDialog({ ids, agents, onClose, onDone }) {
+  const [mode, setMode] = useState("one"),
+    [search, setSearch] = useState(""),
+    [chosen, setChosen] = useState([]),
+    [asked, setAsked] = useState([]),
+    [newer, setNewer] = useState(null),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  // The preview follows the choice after a short pause, not every click.
+  useEffect(() => {
+    const t = setTimeout(() => setAsked(chosen), 300);
+    return () => clearTimeout(t);
+  }, [chosen]);
+  const preview = useQuery({
+    queryKey: ["lead-distribution", ids, asked],
+    queryFn: ({ signal }) =>
+      api("/leads/distribute/preview", {
+        method: "POST",
+        body: { lead_ids: ids, agent_ids: asked },
+        signal,
+      }),
+    enabled: asked.length > 0,
+    gcTime: 0,
+  });
+  const ready = asked.join() === chosen.join() && !preview.isFetching;
+  const plan = newer || (chosen.length && ready ? preview.data : null);
+  const words = search.trim().toLowerCase();
+  const shown = agents.filter(
+    (a) =>
+      !words ||
+      a.name.toLowerCase().includes(words) ||
+      String(a.uid || "").includes(words),
+  );
+  const pick = (id) => {
+    setNewer(null);
+    setChosen((now) =>
+      mode === "one"
+        ? [id]
+        : now.includes(id)
+          ? now.filter((x) => x !== id)
+          : [...now, id],
+    );
+  };
+  const switchTo = (next) => {
+    setNewer(null);
+    setMode(next);
+    if (next === "one") setChosen((now) => now.slice(0, 1));
+  };
+  async function confirm() {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api("/leads/distribute", {
+        method: "POST",
+        body: { lead_ids: ids, agent_ids: chosen, token: plan.token },
+      });
+      if (result.applied) return onDone(result);
+      setNewer(result);
+      setBusy(false);
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+    }
+  }
+  const moves = plan ? plan.assigned + plan.reassigned : 0;
+  return (
+    <Modal title="Assign the selected leads" onClose={() => !busy && onClose()}>
+      <ErrorBox error={error || preview.error} />
+      <p>
+        {plural(ids.length, "lead")} selected. Leads that another agent has move
+        too: their calls, notes and history stay with each lead, and pending
+        follow-ups move with it.
+      </p>
+      <fieldset className="distribution-mode" disabled={busy}>
+        <legend>How to assign</legend>
+        <label className="checkbox-field">
+          <input
+            type="radio"
+            name="distribution-mode"
+            checked={mode === "one"}
+            onChange={() => switchTo("one")}
+          />
+          One agent
+        </label>
+        <label className="checkbox-field">
+          <input
+            type="radio"
+            name="distribution-mode"
+            checked={mode === "turns"}
+            onChange={() => switchTo("turns")}
+          />
+          Share among agents in turn (round-robin)
+        </label>
+      </fieldset>
+      <input
+        type="search"
+        className="distribution-search"
+        aria-label="Search agents"
+        placeholder="Search active agents by name or UID"
+        value={search}
+        disabled={busy}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div
+        className="distribution-agents"
+        role="group"
+        aria-label="Active agents"
+      >
+        {shown.map((a) => (
+          <label key={a.id} className="checkbox-field">
+            <input
+              type={mode === "one" ? "radio" : "checkbox"}
+              name="distribution-agent"
+              checked={chosen.includes(a.id)}
+              disabled={busy}
+              onChange={() => pick(a.id)}
+            />
+            {a.name} {a.uid && <small>UID {a.uid}</small>}
+          </label>
+        ))}
+        {!shown.length && (
+          <p className="lead-muted">No active agent matches your search.</p>
+        )}
+      </div>
+      <p className="lead-muted">
+        {chosen.length
+          ? `${plural(chosen.length, "agent")} chosen.`
+          : mode === "one"
+            ? "Choose the agent."
+            : "Choose the agents to share the leads among."}
+        {mode === "turns" &&
+          " Each gets an even share; leads already with one of them stay where their share allows."}
+      </p>
+      {newer && (
+        <div role="alert" className="error">
+          The leads or agents changed after the preview, so nothing was
+          assigned. This is the updated plan: check it and assign again.
+        </div>
+      )}
+      {chosen.length > 0 &&
+        (plan ? (
+          <DistributionSummary result={plan} preview />
+        ) : (
+          !preview.error && <Loader />
+        ))}
+      <footer>
+        <Button variant="secondary" disabled={busy} onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={busy || !plan || !moves} onClick={confirm}>
+          {busy ? "Assigning…" : plan && !moves ? "Nothing to move" : "Assign"}
+        </Button>
+      </footer>
+    </Modal>
+  );
+}
+
+// Who gets how many (update 062): each agent's leads kept, newly assigned
+// and moved in, and the total they end with, then where moved leads come
+// from. A preview says it is worked out now and may change.
+function DistributionSummary({ result, preview = false }) {
+  const failed = result.results.filter((r) => r.result === "failed");
+  return (
+    <div className="distribution-summary">
+      {preview && (
+        <p className="pipeline-hint" role="note">
+          Preview, worked out just now. If someone changes these leads or agents
+          before you confirm, nothing moves and you see the updated plan first.
+        </p>
+      )}
+      <p role="status">
+        {preview ? "Plan: " : ""}
+        {plural(result.assigned, "lead")} assigned ·{" "}
+        {plural(result.reassigned, "lead")} reassigned ·{" "}
+        {plural(result.skipped, "lead")} not changed ·{" "}
+        {plural(result.failed, "lead")} failed
+      </p>
+      <div className="assignment-results">
+        <Table
+          rows={result.agents}
+          columns={[
+            { key: "name", label: "Agent" },
+            { key: "kept", label: "Keeps" },
+            { key: "assigned", label: "New" },
+            { key: "reassigned", label: "Moved in" },
+            { key: "total", label: "Total" },
+          ]}
+        />
+      </div>
+      {result.moved_from.length > 0 && (
+        <p>
+          Moved from:{" "}
+          {result.moved_from.map((f) => `${f.name} (${f.count})`).join(", ")}
+        </p>
+      )}
+      {preview && failed.length > 0 && (
+        <div className="import-results assignment-results">
+          <Table
+            rows={failed}
+            columns={[
+              { key: "name", label: "Customer", render: (r) => r.name || "—" },
+              { key: "reason", label: "Cannot be assigned" },
+            ]}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 const resultLabels = {
   assigned: "Assigned",
   reassigned: "Reassigned",
@@ -665,18 +855,23 @@ const resultLabels = {
   failed: "Failed",
 };
 // Leads that moved from another agent are counted and listed apart (update
-// 060); round-robin results have none.
+// 060); round-robin unassigned results have none. Shared leads (update 062)
+// add each agent's counts.
 function AssignmentResults({ result, onClose }) {
   const rows = result.results.filter((r) => r.result !== "assigned");
   return (
     <Modal title="Assignment results" onClose={onClose}>
-      <p role="status">
-        {plural(result.assigned, "lead")} assigned ·{" "}
-        {result.reassigned !== undefined &&
-          `${plural(result.reassigned, "lead")} reassigned · `}
-        {plural(result.skipped, "lead")} not changed ·{" "}
-        {plural(result.failed, "lead")} failed
-      </p>
+      {result.agents ? (
+        <DistributionSummary result={result} />
+      ) : (
+        <p role="status">
+          {plural(result.assigned, "lead")} assigned ·{" "}
+          {result.reassigned !== undefined &&
+            `${plural(result.reassigned, "lead")} reassigned · `}
+          {plural(result.skipped, "lead")} not changed ·{" "}
+          {plural(result.failed, "lead")} failed
+        </p>
+      )}
       {rows.length > 0 && (
         <div className="import-results assignment-results">
           <Table

@@ -372,6 +372,32 @@ add(
       ]),
     ),
 );
+// Update 062: selected leads shared among chosen agents, or given to one.
+add(
+  "lead.bulk_distributed",
+  "leads",
+  "leads",
+  "assign",
+  "Shared leads among agents",
+  (c) =>
+    withCounts(
+      `Shared the selected leads among ${number(c.m.agents) != null ? count(c.m.agents, "agent") : "agents"}`,
+      counts(c, [
+        ["assigned", "lead assigned", "leads assigned"],
+        [
+          "reassigned",
+          "lead moved from another agent",
+          "leads moved from other agents",
+        ],
+        [
+          "skipped",
+          "already with the right agent",
+          "already with the right agent",
+        ],
+        ["failed", "failed", "failed"],
+      ]),
+    ),
+);
 add("lead.bulk_deleted", "leads", "leads", "delete", "Deleted leads", (c) =>
   withCounts(
     "Moved leads to Deleted leads, where they can be restored for a limited time",

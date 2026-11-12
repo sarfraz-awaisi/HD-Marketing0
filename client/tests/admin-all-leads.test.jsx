@@ -60,7 +60,72 @@ const lead = (n, extra = {}) => ({
   last_call_connected: null,
   ...extra,
 });
-let rows, posts;
+let rows, posts, previews, staleOnce;
+// Update 062: the database's plan for the chosen agents, mocked for the two
+// selected leads (Customer 2 is Ali's).
+const planFor = (agentIds, applied, token = "a".repeat(32)) => {
+  const turns = agentIds.length > 1;
+  return {
+    applied,
+    stale: false,
+    token,
+    assigned: 1,
+    reassigned: turns ? 0 : 1,
+    skipped: turns ? 1 : 0,
+    failed: 0,
+    agents: turns
+      ? [
+          {
+            id: ali.id,
+            name: "Ali Agent",
+            kept: 1,
+            assigned: 0,
+            reassigned: 0,
+            total: 1,
+          },
+          {
+            id: sara.id,
+            name: "Sara Agent",
+            kept: 0,
+            assigned: 1,
+            reassigned: 0,
+            total: 1,
+          },
+        ]
+      : [
+          {
+            id: sara.id,
+            name: "Sara Agent",
+            kept: 0,
+            assigned: 1,
+            reassigned: 1,
+            total: 2,
+          },
+        ],
+    moved_from: turns ? [] : [{ id: ali.id, name: "Ali Agent", count: 1 }],
+    results: [
+      {
+        id: rows[0].id,
+        name: "Customer 1",
+        result: "assigned",
+        reason: "Assigned to Sara Agent",
+      },
+      turns
+        ? {
+            id: rows[1].id,
+            name: "Customer 2",
+            result: "skipped",
+            reason: "Already with Ali Agent",
+          }
+        : {
+            id: rows[1].id,
+            name: "Customer 2",
+            result: "reassigned",
+            reason: "Moved from Ali Agent to Sara Agent",
+          },
+    ],
+  };
+};
 beforeEach(() => {
   vi.clearAllMocks();
   HTMLDialogElement.prototype.showModal = function () {
@@ -68,6 +133,8 @@ beforeEach(() => {
   };
   mocks.user = { ...owner };
   posts = [];
+  previews = [];
+  staleOnce = false;
   rows = [
     lead(1),
     lead(2, {
@@ -96,8 +163,22 @@ beforeEach(() => {
         data: [{ id: sheet, file_name: "DHA plots", file_format: "sheets" }],
         count: 1,
       };
+    if (path === "/leads/distribute/preview") {
+      previews.push(options.body.agent_ids);
+      return planFor(options.body.agent_ids, false);
+    }
     if (options.method === "POST") {
       posts.push([path, options.body]);
+      if (path === "/leads/distribute") {
+        if (staleOnce) {
+          staleOnce = false;
+          return {
+            ...planFor(options.body.agent_ids, false, "b".repeat(32)),
+            stale: true,
+          };
+        }
+        return planFor(options.body.agent_ids, true);
+      }
       if (path === "/leads/assign-selected")
         return {
           assigned: 1,
@@ -440,9 +521,8 @@ describe("administrators' All leads", () => {
     );
   });
 
-  it("moves the selected leads to one agent, whoever has them, after confirming, and reports each one (update 060)", async () => {
-    const user = userEvent.setup();
-    open("/leads?assignment=assigned");
+  const assignToAgents = async (user, query) => {
+    open("/leads?" + query);
     await user.click(
       await screen.findByRole("button", {
         name: "Select all 2 matching leads",
@@ -452,44 +532,130 @@ describe("administrators' All leads", () => {
       name: "Selected lead actions",
     });
     expect(bar).toHaveTextContent("2 leads selected");
-    await user.selectOptions(
-      within(bar).getByLabelText("Agent for the selected leads"),
-      sara.id,
-    );
     await user.click(
-      within(bar).getByRole("button", { name: "Assign to agent" }),
+      within(bar).getByRole("button", { name: "Assign to agents" }),
     );
-    const confirm = await screen.findByRole("dialog", {
-      name: "Assign the selected leads",
+    return screen.findByRole("dialog", { name: "Assign the selected leads" });
+  };
+  it("moves the selected leads to one agent, whoever has them, after a preview, and reports each one (updates 060 and 062)", async () => {
+    const user = userEvent.setup();
+    const dialog = await assignToAgents(user, "assignment=assigned");
+    expect(dialog).toHaveTextContent(
+      "2 leads selected. Leads that another agent has move too",
+    );
+    expect(
+      within(dialog).getByRole("radio", { name: "One agent" }),
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("button", { name: "Assign" }),
+    ).toBeDisabled();
+    // Active agents only; the owner (an administrator) is not offered.
+    const choices = within(dialog).getByRole("group", {
+      name: "Active agents",
     });
-    expect(confirm).toHaveTextContent(
-      "Assign the selected leads to Sara Agent? 2 leads selected.",
+    expect(
+      within(choices)
+        .getAllByRole("radio")
+        .map((r) => r.closest("label").textContent),
+    ).toEqual(["Ali Agent ", "Sara Agent "]);
+    await user.click(
+      within(choices).getByRole("radio", { name: /Sara Agent/ }),
     );
-    expect(confirm).toHaveTextContent(
-      "Leads that another agent has move to Sara Agent. Their calls, notes and history stay with each lead",
-    );
+    expect(
+      await within(dialog).findByText(
+        "Plan: 1 lead assigned · 1 lead reassigned · 0 leads not changed · 0 leads failed",
+      ),
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Preview, worked out just now.");
+    expect(
+      within(dialog).getByRole("row", { name: /Sara Agent/ }),
+    ).toHaveTextContent("Sara Agent0112");
+    expect(dialog).toHaveTextContent("Moved from: Ali Agent (1)");
+    expect(previews).toEqual([[sara.id]]);
     expect(posts).toEqual([]);
-    await user.click(within(confirm).getByRole("button", { name: "Assign" }));
+    await user.click(within(dialog).getByRole("button", { name: "Assign" }));
     const report = await screen.findByRole("dialog", {
       name: "Assignment results",
     });
     expect(posts).toEqual([
       [
-        "/leads/assign-selected",
-        { lead_ids: rows.map((r) => r.id), agent_id: sara.id },
+        "/leads/distribute",
+        {
+          lead_ids: rows.map((r) => r.id),
+          agent_ids: [sara.id],
+          token: "a".repeat(32),
+        },
       ],
     ]);
     expect(report).toHaveTextContent(
       "1 lead assigned · 1 lead reassigned · 0 leads not changed · 0 leads failed",
     );
+    expect(report).not.toHaveTextContent("Plan:");
     const moved = within(report).getByRole("row", { name: /Customer 2/ });
     expect(moved).toHaveTextContent("Reassigned");
-    expect(moved).toHaveTextContent("Moved from Ali Agent");
+    expect(moved).toHaveTextContent("Moved from Ali Agent to Sara Agent");
     expect(
       mocks.api.mock.calls.some(([p]) =>
         p.startsWith("/leads/all/selection?assignment=assigned"),
       ),
     ).toBe(true);
+  });
+
+  it("shares the selected leads among chosen agents in turn, and shows the new plan when something changed first (update 062)", async () => {
+    const user = userEvent.setup();
+    staleOnce = true;
+    const dialog = await assignToAgents(user, "");
+    await user.click(
+      within(dialog).getByRole("radio", {
+        name: "Share among agents in turn (round-robin)",
+      }),
+    );
+    const choices = within(dialog).getByRole("group", {
+      name: "Active agents",
+    });
+    // Search narrows the list; choices made stay chosen.
+    await user.type(
+      within(dialog).getByRole("searchbox", { name: "Search agents" }),
+      "sar",
+    );
+    expect(within(choices).getAllByRole("checkbox")).toHaveLength(1);
+    await user.click(
+      within(choices).getByRole("checkbox", { name: /Sara Agent/ }),
+    );
+    await user.clear(
+      within(dialog).getByRole("searchbox", { name: "Search agents" }),
+    );
+    await user.click(
+      within(choices).getByRole("checkbox", { name: /Ali Agent/ }),
+    );
+    expect(dialog).toHaveTextContent("2 agents chosen.");
+    expect(
+      await within(dialog).findByText(
+        "Plan: 1 lead assigned · 0 leads reassigned · 1 lead not changed · 0 leads failed",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("row", { name: /Ali Agent/ }),
+    ).toHaveTextContent("Ali Agent1001");
+    expect(previews.at(-1)).toEqual([sara.id, ali.id]);
+    // Someone changed the leads after the preview: nothing moved.
+    await user.click(within(dialog).getByRole("button", { name: "Assign" }));
+    expect(
+      await within(dialog).findByText(
+        /The leads or agents changed after the preview, so nothing was assigned/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Assignment results" }),
+    ).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Assign" }));
+    await screen.findByRole("dialog", { name: "Assignment results" });
+    expect(
+      posts.map(([path, body]) => [path, body.agent_ids, body.token]),
+    ).toEqual([
+      ["/leads/distribute", [sara.id, ali.id], "a".repeat(32)],
+      ["/leads/distribute", [sara.id, ali.id], "b".repeat(32)],
+    ]);
   });
 
   it("round-robins only the selected leads that have no agent, as before", async () => {
