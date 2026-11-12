@@ -648,6 +648,26 @@ export const unassignedAssignment = z
 export const selectedAssignment = z
   .object({ lead_ids: leadIds, agent_id: uuid })
   .strict();
+// Sharing selected leads among chosen agents in turn, or giving them to one
+// (update 062). The token is the preview's: the plan is carried out only if
+// nothing changed since.
+export const leadDistribution = z
+  .object({
+    lead_ids: leadIds,
+    agent_ids: z
+      .array(uuid)
+      .min(1, "Choose at least one agent")
+      .max(50)
+      .refine(
+        (ids) => new Set(ids).size === ids.length,
+        "Choose distinct agents",
+      ),
+    token: z
+      .string()
+      .regex(/^[0-9a-f]{32}$/)
+      .optional(),
+  })
+  .strict();
 // Attendance (update 040). Self-service bodies never carry a user id: the
 // employee always comes from the verified session.
 const isoDay = z.iso.date();

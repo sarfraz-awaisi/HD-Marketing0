@@ -151,3 +151,52 @@ Before 060, bulk assignment in All leads only assigned leads with no agent. Movi
 If the code goes out before 060, Assign to agent says "This feature needs CRM database update 060 after 059." Applying 060 then fixes it. Round-robin unassigned and single-lead Reassign keep working.
 
 **Rollback:** roll back the application. The older code works with 060, and its bulk Assign again skips leads that have an agent.
+
+## Update 062: share selected leads among agents
+
+Before 062, bulk assignment gave the selected leads to one agent (060), or shared only leads with no agent among all active agents (Round-robin unassigned, 057). **Assign to agents** now opens one dialog for both, with a preview first.
+
+- **The agent list** shows active agents only, searchable by name or UID.
+- **One agent** gives every selected lead to that agent, as 060 did. **Share among agents in turn (round-robin)** shares them among the chosen agents, whoever has them now and whatever their calls (No answer, Busy, Number off, Interested or any other outcome):
+  - each agent gets an even share; the shares differ by at most one lead;
+  - a lead already with one of the chosen agents stays with them while their share allows, so no lead moves without need. The larger shares go first to the agents who already have the most of the selected leads;
+  - the other leads go to the agents in turn, alphabetically, lowest lead number first. The same leads and agents always give the same plan, whatever order the agents were chosen in.
+- **Preview.** Before anything changes, the dialog shows the plan:
+  - how many leads are assigned, reassigned, not changed and failed;
+  - for each agent, the leads they keep, get new, get moved in, and their total;
+  - which agents the moved leads come from.
+
+  The preview is marked as worked out at that moment. When it is confirmed, the database works the plan out again under its assignment lock. If anything changed since the preview (another administrator moved or deleted one of the leads, or an agent was deactivated), nothing moves and the updated plan is shown to confirm again.
+
+- **Results** show the same counts and each agent's share, and list every lead that moved, did not change or failed, with the reason.
+- **Each move is a normal assignment:**
+  - calls, notes, deals and audit history stay with the lead;
+  - pending follow-ups, scheduled visits and their reminders move with it;
+  - both agents are notified;
+  - a lead that came from another agent opens a fresh workspace for its new agent (update 061);
+  - one entry in the audit history ("Shared leads among agents") records the action.
+- **Refused or reported:**
+  - an incoming social lead still waiting for its first agent is refused when shared among two or more agents, as round-robin always has; with one agent it is assigned;
+  - deleted leads are reported as failed;
+  - agents that are inactive, deleted, staff or administrators are refused, as are an empty choice, the same agent twice, and more than 500 leads.
+- **Select all matching** works as before: it sends at most 500 lead ids, never lead details.
+- **Unchanged:** Round-robin unassigned, the single-lead Assign and Reassign, and agents' permissions. The 060 endpoint stays for compatibility.
+
+| Item            | Value                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------- |
+| Migration       | `supabase/migrations/062_admin_lead_distribution.sql` (adds `admin_distribute_leads` only; safe to rerun) |
+| Read-only check | `supabase/check-admin-lead-distribution-062.sql`                                                          |
+| Requires        | update 061 in production                                                                                  |
+
+**Why a migration:** the plan must be worked out from each lead's agent under the same lock as the moves, and the preview must change nothing. 062 adds one function and changes no table, row or existing function (a test compares them).
+
+**Release:** after 061.
+
+1. Back up the database and test the restore.
+2. Run the check: it should read `at 061, ready for 062`.
+3. Apply 062, then run the check again: it should read `at 062`, with `server_functions` = 3 and `browser_function_access_must_be_0` = 0.
+4. Deploy.
+
+Apply 062 before the code. If the code goes out first, Assign to agents says "This feature needs CRM database update 062 after 061" until 062 is applied, including when one agent is chosen. Round-robin unassigned and the single-lead Reassign keep working.
+
+**Rollback:** roll back the application. The older code works with 062 and brings back the single-agent picker.

@@ -551,3 +551,37 @@ dialog.lead-name-dialog {
   display: block;
   margin-top: 4px;
 }
+/* Update 062: Assign to agents, one agent or shared in turn. */
+.distribution-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-4);
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  border: 0;
+}
+.distribution-mode legend {
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+}
+.distribution-search {
+  width: 100%;
+}
+.distribution-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0 var(--space-3);
+  max-height: 240px;
+  margin: var(--space-2) 0;
+  overflow-y: auto;
+}
+.distribution-agents small {
+  color: var(--ink-4);
+}
+.distribution-summary {
+  margin-top: var(--space-3);
+}
+/* Five short columns fit a phone, as the import results do. */
+.distribution-summary table {
+  min-width: 0;
+}

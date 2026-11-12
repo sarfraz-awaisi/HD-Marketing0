@@ -161,6 +161,25 @@ describe("plain-English audit entries", () => {
     ).toBe(
       "Assigned several leads in one action (5 leads assigned and 1 skipped).",
     );
+    // Update 062: leads shared among chosen agents.
+    expect(
+      presentAuditEntry(
+        row({
+          action: "lead.bulk_distributed",
+          metadata: {
+            agents: 3,
+            assigned: 3,
+            reassigned: 2,
+            skipped: 5,
+            failed: 0,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      title: "Shared leads among agents",
+      description:
+        "Shared the selected leads among 3 agents (3 leads assigned, 2 leads moved from other agents and 5 already with the right agent).",
+    });
     expect(
       presentAuditEntry(
         row({
