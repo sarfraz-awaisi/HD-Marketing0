@@ -4,13 +4,13 @@ Update 056 imports leads from Meta Lead Ads' Google Sheets through a Google Apps
 
 **The owner approves every step that touches production.** Nothing in this plan has been run against production. The release leaves the import **off**: no key exists and no Sheet is on until the owner turns them on (stages 2 and 3). **The historical import is enabled only after the owner's explicit confirmation**, which the CRM itself requires and records (stage 3).
 
-| Item            | Value                                                                                         |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| Migration       | `supabase/migrations/056_google_sheets_import.sql` (one transaction, `lock_timeout` 5 s, safe to rerun) |
-| Read-only check | `supabase/check-google-sheets-import-056.sql`: one SELECT, flags and counts only              |
-| Requires        | update 055 in production                                                                      |
+| Item            | Value                                                                                                                   |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Migration       | `supabase/migrations/056_google_sheets_import.sql` (one transaction, `lock_timeout` 5 s, safe to rerun)                 |
+| Read-only check | `supabase/check-google-sheets-import-056.sql`: one SELECT, flags and counts only                                        |
+| Requires        | update 055 in production                                                                                                |
 | New settings    | none required. Optional: `RATE_LIMIT_SHEETS_SYNC_REFUSED_PER_15_MIN` (30) and `RATE_LIMIT_SHEETS_SYNC_PER_15_MIN` (900) |
-| Nginx           | no change. `/api` is already proxied, with a 25 MB body limit and 50 requests per second per address |
+| Nginx           | no change. `/api` is already proxied, with a 25 MB body limit and 50 requests per second per address                    |
 
 ## What 056 changes
 
@@ -38,6 +38,7 @@ Update 056 imports leads from Meta Lead Ads' Google Sheets through a Google Apps
    - `transactions_open_over_1_min` = 0.
 
    Note the `existing_*` counts and `lead_file_formats`.
+
 4. **Apply 056** in the SQL Editor: paste the whole file and run it. If it reports a lock timeout, run it again when the CRM is quiet.
 5. **Run the check again.** Required:
    - `release_stage` = `at 056`;
@@ -111,3 +112,34 @@ Update 056 imports leads from Meta Lead Ads' Google Sheets through a Google Apps
 - **A tab of more than 50,000 rows** is refused: move older rows to another tab.
 - **Per-run time:** a free Google account allows about 90 minutes of triggers a day. A normal five-minute run takes a few seconds; a large first import spreads over several runs.
 - **No automatic assignment,** by the owner's decision: rows arriving after a file was assigned wait for an administrator.
+
+## Update 064: phone numbers from any country
+
+Overseas customers' numbers are read with their country's numbering rules (libphonenumber) and stored in E.164; Pakistani numbers read as before. See "Phone numbers" in [GOOGLE_SHEETS_IMPORT.md](GOOGLE_SHEETS_IMPORT.md).
+
+| Item            | Value                                                                              |
+| --------------- | ---------------------------------------------------------------------------------- |
+| Migration       | `supabase/migrations/064_international_phones.sql` (no row changes; safe to rerun) |
+| Read-only check | `supabase/check-international-phones-064.sql`                                      |
+| Requires        | update 063 in production                                                           |
+| New dependency  | `libphonenumber-js` (server, MIT, no dependencies)                                 |
+
+**What 064 changes:** two more rejection reasons, `phone_missing` and `phone_needs_country`, in the rejections table's check and in `sheet_sync_import`'s list. Numbers are stored by the same rule as before: E.164, 10 to 15 digits. Each edit checks the existing text first, and the update stops and changes nothing if anything differs.
+
+**Release:**
+
+1. Back up the database and test the restore.
+2. Run the check. It should read `at 063, ready for 064`. Note the counts, and `numbers_with_0_after_92` (older `+920…` numbers the import's `+92…` will not match).
+3. Apply 064 and run the check again. It should read `at 064`, with `new_reasons_accepted` = true, `browser_function_access_must_be_0` = 0 and the same counts.
+4. Deploy the code.
+
+Apply 064 before the code. The live code works with 064. If the new code went out first, any batch with a row missing its phone or its country code would be refused as a whole (and tried again on each run) until 064 is applied.
+
+**Rollback:** roll back the application; the older code works with 064. No data changes.
+
+**Known limits:**
+
+- **A local number without a country code that is also a valid Pakistani number** is read as Pakistani. For example, New York's `212 555 0123` is also a Karachi landline. A country code or a `country` column settles it.
+- **Existing numbers are not rewritten.** A lead stored in an older form (`+920300…`) is not matched by a new import's `+92300…`, so such a customer gets a new lead. The check counts these numbers; a cleanup would be a separate, approved update.
+- **Numbers shorter than 10 digits** (valid only in a few small territories, such as Niue or the Falkland Islands) are refused as not valid. The CRM's number protection shows three characters at each end of a number, which would reveal most of so short a number.
+- **Other ways leads are added** (Add lead, file imports, Meta Lead Ads) keep their earlier rule, in which a leading `0` means Pakistan.

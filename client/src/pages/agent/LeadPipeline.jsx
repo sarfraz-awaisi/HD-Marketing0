@@ -42,7 +42,13 @@ export default function LeadPipeline() {
     qc = useQueryClient(),
     toast = useToast();
   const back = location.pathname + location.search;
-  const [f, change] = useUrlFilters(["q", "temperature", "outcome", "page"]);
+  const [f, change] = useUrlFilters([
+    "q",
+    "temperature",
+    "outcome",
+    "country",
+    "page",
+  ]);
   const [dialLead, setDialLead] = useState(null);
   const page = Math.max(1, Number(f.page) || 1);
   const set = (values) => change({ ...values, page: null });
@@ -52,6 +58,7 @@ export default function LeadPipeline() {
     ...(f.q ? { search: f.q } : {}),
     ...(f.temperature ? { temperature: f.temperature } : {}),
     ...(f.outcome ? { outcome: f.outcome } : {}),
+    ...(f.country ? { country: f.country } : {}),
   });
   const q = useQuery({
     queryKey: ["my-leads", user.id, params.toString()],
@@ -62,7 +69,13 @@ export default function LeadPipeline() {
   });
   const filters = pipelineFilterChips(f, set);
   const reset = () =>
-    change({ q: null, temperature: null, outcome: null, page: null });
+    change({
+      q: null,
+      temperature: null,
+      outcome: null,
+      country: null,
+      page: null,
+    });
   const counts = q.data?.temperatures;
   // Update 055: both counts cover every lead, whatever the filters.
   const totals = q.data?.pipeline_counts;

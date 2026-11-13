@@ -785,7 +785,9 @@ describe("a lead reassigned to another agent (update 061)", () => {
     });
     expect(mine.lead.status).toBe("interested");
     const theirs = (await today(admin)).data.find((r) => r.lead.id === lead);
-    expect(theirs).toMatchObject({ calls: 1, temperature: "Warm lead" });
+    // Administrators keep the whole call history; since update 066 the
+    // classification is the current agent's, here none yet.
+    expect(theirs).toMatchObject({ calls: 1, temperature: null });
     expect(theirs.last_call.outcome).toBe("Interested");
     expect(own.value).toBe((await today(admin)).value);
   });

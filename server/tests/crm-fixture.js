@@ -54,6 +54,8 @@ export async function startCrmDatabase() {
             filters.map(([, v]) => v),
           ),
         }),
+        // As the Supabase client: the row, or null when there is none.
+        maybeSingle: async () => ({ data: (await q.single()).data ?? null }),
       };
       return q;
     },

@@ -1,3 +1,4 @@
+import { numberCountry } from "../utils/internationalPhone.js";
 export function phoneRevealLimit() {
   const value = process.env.PHONE_REVEAL_DAILY_LIMIT || "80";
   if (!/^[1-9]\d{0,4}$/.test(value) || Number(value) > 10000)
@@ -53,5 +54,9 @@ export async function leadContacts(db, req, rows) {
     p_request: req.id,
   });
   req.visibleLeadPhones = result.phones;
-  return rows.map((row) => ({ ...row, phone: result.phones[row.id] || null }));
+  // Update 065: the country of each number shown, for its flag.
+  return rows.map((row) => {
+    const phone = result.phones[row.id] || null;
+    return { ...row, phone, phone_country: numberCountry(phone) };
+  });
 }

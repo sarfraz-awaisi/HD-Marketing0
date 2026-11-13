@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { digest } from "./accountsSecurity.js";
-import { normalizePhone } from "../utils/phoneMask.js";
+import { phoneCountry, readPhone } from "../utils/internationalPhone.js";
 // Google Sheets lead import (update 056). Meta Lead Ads write each
 // advertisement's submissions to a Sheet; the Apps Script in
 // integrations/google-sheets sends the rows here with the integration key.
@@ -100,7 +100,10 @@ const mapped = new Set(Object.values(columns).flat());
 const questions = { interest: /interest/, budget: /budget/ };
 export const rejectionReasons = {
   id_invalid: "Meta lead ID missing or not recognised",
-  phone_invalid: "Phone number missing or invalid",
+  phone_missing: "Phone number missing",
+  phone_invalid: "Phone number not valid for its country",
+  phone_needs_country:
+    "Phone number has no country code and is not a Pakistani number",
   name_missing: "Customer name missing",
   name_too_long: "Customer name longer than 200 characters",
   date_missing: "Submission date missing or unreadable",
@@ -129,15 +132,21 @@ export const metaLeadId = (value) => {
   const id = text(value).replace(/^l:/i, "");
   return /^\d{1,40}$/.test(id) ? id : null;
 };
-// Meta writes "p:+923001234567". A Pakistani mobile whose leading zero was
-// lost because the cell held a number (3XX XXXXXXX, ten digits) is read with
-// it; everything else follows the CRM's usual rule.
-export function sheetPhone(value) {
-  const raw = text(value).replace(/^p:\s*/i, "");
-  const digits = raw.replace(/[\s()+.-]/g, "");
-  return normalizePhone(
-    !/^[+0]/.test(raw) && /^3\d{9}$/.test(digits) ? "0" + digits : raw,
+// Meta writes "p:+923001234567". Numbers from any country are read with
+// their country's rules (update 064, utils/internationalPhone.js); one
+// without a country code is read for the row's country column when it says
+// clearly which country, otherwise as Pakistani (03XX…, or 3XX… whose
+// leading zero a number cell dropped). Throws with the rejection reason.
+export function sheetPhone(value, country = "") {
+  const read = readPhone(
+    text(value).replace(/^p:\s*/i, ""),
+    phoneCountry(country),
   );
+  if (read.error)
+    throw Object.assign(new Error("Phone number not accepted"), {
+      code: read.error,
+    });
+  return read.phone;
 }
 // Meta's created_time, such as 2026-11-01T10:15:30+0500 or the script's
 // 2026-11-01T05:15:30.000Z. A time without a zone is Pakistan time.
@@ -204,9 +213,10 @@ export function readSheetRow({ row, values }) {
   if (name.length > 200) return reject("name_too_long");
   let phone;
   try {
-    phone = sheetPhone(get("phone"));
-  } catch {
-    return reject("phone_invalid");
+    // A country column, when the form asks for one, stays in the answers.
+    phone = sheetPhone(get("phone"), text(values[byKey.get("country")]));
+  } catch (error) {
+    return reject(error.code || "phone_invalid");
   }
   const [interestHeading, interestKey] = question(questions.interest);
   const [budgetHeading, budgetKey] = question(questions.budget);

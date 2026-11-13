@@ -1,3 +1,4 @@
+import { PhoneFlag } from "../leads/LeadPhone";
 import "../../styles/calls.css";
 import { useEffect, useId, useRef, useState } from "react";
 import { MessageCircle, Phone } from "lucide-react";
@@ -266,6 +267,7 @@ export default function OutcomeForm({
                 <div>
                   <b>{customer.name}</b>
                   <span className="call-customer-phone">
+                    {phone && <PhoneFlag country={customer.phone_country} />}
                     {phone || "Number unavailable"}
                   </span>
                   {customer.details && <small>{customer.details}</small>}

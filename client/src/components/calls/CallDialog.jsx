@@ -58,6 +58,7 @@ export default function CallDialog({ lead, role, onClose, onSaved }) {
         customer={{
           name: lead.name,
           phone: lead.phone,
+          phone_country: lead.phone_country,
           details: [lead.preferred_location, budget]
             .filter(Boolean)
             .join(" · "),

@@ -103,6 +103,12 @@ beforeEach(() => {
           last_seen_at: "2026-11-09T09:05:00Z",
         },
         {
+          row: 8,
+          reason: "phone_needs_country",
+          meta_lead_id: "7100000000000008",
+          last_seen_at: "2026-11-09T09:05:00Z",
+        },
+        {
           row: 9,
           reason: "lead_deleted",
           meta_lead_id: "7100000000000009",
@@ -204,7 +210,13 @@ describe("the Google Sheets page", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Rejected rows · Bahria flats",
     });
-    await within(dialog).findByText("Phone number missing or invalid");
+    await within(dialog).findByText(
+      "Phone number not valid for its country. Check the digits and the country code",
+    );
+    // Update 064: a number without its country code says how to fix it.
+    expect(dialog).toHaveTextContent(
+      "no country code and is not a Pakistani number. Write it with + and its country code",
+    );
     expect(dialog).toHaveTextContent(
       "This number is in Deleted leads (HD-000123)",
     );

@@ -359,7 +359,7 @@ describe("the Google Apps Script", () => {
     expect(log).toContain(
       "2 new leads, 0 repeat inquiries, 2 rejected, 0 failed",
     );
-    expect(log).toContain("rejected rows 3 (phone_invalid), 4 (name_missing)");
+    expect(log).toContain("rejected rows 3 (phone_missing), 4 (name_missing)");
     expect(
       await sql("select phone from crm_private.lead_phones order by phone"),
     ).toEqual([{ phone: "+923010000001" }, { phone: "+923011112222" }]);

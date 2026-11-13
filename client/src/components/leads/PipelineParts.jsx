@@ -2,6 +2,8 @@ import { date } from "../../lib/api";
 import { callOutcomes } from "../../lib/calls";
 import { temperatures, temperatureText } from "../../lib/temperature";
 import { LeadSearch } from "./LeadSearch";
+import CountryFilter from "./CountryFilter";
+import { countryLabel } from "../../lib/countries";
 // The Lead pipeline's filters and contact cell (updates 052 and 053), shared
 // by an agent's own pipeline and administrators' view of one agent's
 // pipeline (update 055). `f` holds the filters from the address; `set`
@@ -38,6 +40,10 @@ export function PipelineFilters({ f, set }) {
           </option>
         ))}
       </select>
+      <CountryFilter
+        value={f.country}
+        onChange={(country) => set({ country })}
+      />
     </>
   );
 }
@@ -54,6 +60,9 @@ export const pipelineFilterChips = (f, set) => [
     : []),
   ...(f.outcome
     ? [[`Latest call: ${f.outcome}`, () => set({ outcome: null })]]
+    : []),
+  ...(f.country
+    ? [[`Country: ${countryLabel(f.country)}`, () => set({ country: null })]]
     : []),
 ];
 // Who recorded the latest answered call when it was not the agent (update

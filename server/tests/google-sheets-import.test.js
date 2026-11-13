@@ -369,7 +369,7 @@ describe("Google Sheets import (update 056)", () => {
     expect(body.rows).toEqual([
       { row: 2, status: "inserted" },
       { row: 3, status: "rejected", reason: "id_invalid" },
-      { row: 4, status: "rejected", reason: "phone_invalid" },
+      { row: 4, status: "rejected", reason: "phone_missing" },
       { row: 5, status: "rejected", reason: "name_missing" },
       { row: 6, status: "inserted" },
     ]);
@@ -384,7 +384,7 @@ describe("Google Sheets import (update 056)", () => {
       ).body.map((r) => [r.row, r.reason]),
     ).toEqual([
       [3, "id_invalid"],
-      [4, "phone_invalid"],
+      [4, "phone_missing"],
       [5, "name_missing"],
     ]);
     expect(
