@@ -376,6 +376,8 @@ describe("administrators' All leads", () => {
       "Filter by call outcome",
       "Filter by source",
       "Filter by lead file",
+      // Update 065.
+      "Filter by country",
     ]);
     expect(screen.queryByLabelText("Filter by status")).toBeNull();
     expect(screen.queryByLabelText("Filter by lost reason")).toBeNull();

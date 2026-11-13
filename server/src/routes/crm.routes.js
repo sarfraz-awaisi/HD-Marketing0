@@ -60,6 +60,7 @@ import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
 import { dealersRouter } from "./dealers.routes.js";
 import { reportDrilldownRouter } from "./reportDrilldown.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
+import { phoneCountries } from "../utils/internationalPhone.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
 import {
   callFollowUpNotes,
@@ -437,6 +438,23 @@ export function crmRouter(db, options = {}) {
   // of leads with an answered call. Search, filters, counts and pages are
   // worked out in the database across every page; the database refuses
   // anyone but an active agent. Numbers are shown as in the leads list.
+  // Update 065: the country filter, refused by lists from before 065.
+  const countryRefusal = (q, refusal, error) =>
+    q.country && error.message === refusal
+      ? Object.assign(
+          new Error(
+            "The Country filter needs CRM database update 065 after 064.",
+          ),
+          { status: 503 },
+        )
+      : error;
+  // The countries a lead's number can be from, for the Country filter
+  // (update 065): every country the phone-number library knows.
+  router.get("/phone-countries", (req, res) =>
+    res
+      .set("Cache-Control", "private, max-age=3600")
+      .json({ countries: phoneCountries() }),
+  );
   router.get("/my-leads", async (req, res) => {
     if (req.user.role !== "agent")
       return res.status(403).json({ error: "Agent access required" });
@@ -457,7 +475,9 @@ export function crmRouter(db, options = {}) {
         p_query: { ...q, ...(import_id ? { import: import_id } : {}) },
       },
       "053 after 052",
-    );
+    ).catch((error) => {
+      throw countryRefusal(q, "Choose valid lead filters", error);
+    });
     // Update 055: My pipeline and Personally contacted, and who recorded
     // the latest answered call of each lead on the page when it was not
     // the agent. Before 055 the pipeline shows as it did.
@@ -516,7 +536,9 @@ export function crmRouter(db, options = {}) {
       "admin_agent_pipeline",
       { p_actor: req.user.id, p_agent: agent, p_query: q },
       "055 after 054",
-    );
+    ).catch((error) => {
+      throw countryRefusal(q, "Choose valid pipeline filters", error);
+    });
     res.set("Cache-Control", "no-store").json({
       ...result,
       data: await leadContacts(db, req, result.data),
@@ -545,6 +567,8 @@ export function crmRouter(db, options = {}) {
         "057 after 056",
       );
     } catch (error) {
+      const refused = countryRefusal(q, "Choose valid lead filters", error);
+      if (refused !== error) throw refused;
       if (
         q.call === "not_connected" &&
         error.message === "Choose valid lead filters"

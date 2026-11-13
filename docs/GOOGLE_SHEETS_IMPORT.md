@@ -39,16 +39,17 @@ Each run:
 
 ### What each row becomes
 
-| Result      | Meaning                                                                                                                   |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `inserted`  | A new lead in the Sheet's lead file.                                                                                      |
-| `existing`  | The phone number already belongs to a lead: a **repeat inquiry** on that lead, which is not changed.                      |
-| `duplicate` | Already imported from this Sheet (the same Meta lead ID).                                                                 |
-| `skipped`   | Submitted before the Sheet's start date.                                                                                  |
+| Result      | Meaning                                                                                                                       |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `inserted`  | A new lead in the Sheet's lead file.                                                                                          |
+| `existing`  | The phone number already belongs to a lead: a **repeat inquiry** on that lead, which is not changed.                          |
+| `duplicate` | Already imported from this Sheet (the same Meta lead ID).                                                                     |
+| `skipped`   | Submitted before the Sheet's start date.                                                                                      |
 | `rejected`  | Cannot be imported as it is: the reason is shown on the Google Sheets page. Sent again on later runs, so a fixed row imports. |
-| `failed`    | An unexpected error. Nothing was saved for it, and it is sent again on the next run.                                      |
+| `failed`    | An unexpected error. Nothing was saved for it, and it is sent again on the next run.                                          |
 
 **Existing customers.** The CRM allows one lead per phone number. When an advertisement brings a number the CRM already has, the submission is kept as a repeat inquiry on that lead, as Meta Lead Ads does.
+
 - Nothing on the lead changes: not its name (even one an agent corrected), agent, calls, temperature, notes, follow-ups, status or history. The lead stays in its own file, and the repeat inquiry shows on its page.
 - **The lead's current agent gets an in-app notification**, "New advertisement inquiry: HD-…", linking to the lead.
   - It is sent once per inquiry, so retries never repeat it.
@@ -61,26 +62,35 @@ Each run:
 
 Columns are found by heading, ignoring case and spacing, in any order. Extra columns are kept, and a missing optional column is simply empty.
 
-| Sheet column                                                       | In the CRM                                                                       |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| `id`                                                               | The Meta lead ID: the import's identity. Required. Meta's `l:` prefix is removed. |
-| `full_name` (or `first_name` + `last_name`)                        | Lead name. Required, up to 200 characters.                                       |
-| `phone_number`                                                     | The lead's protected number. Required. See below.                                |
-| `email`                                                            | Lead email, when valid; otherwise left empty (the original is kept).             |
-| `city`                                                             | Preferred location, and City on the inquiry.                                     |
-| `created_time`                                                     | Submitted, kept apart from the CRM's import time.                                |
-| `what_are_you_interested_in?_` (any column mentioning "interest")  | Property interest, on the inquiry.                                               |
-| `what_is_your_preferred_investment_budget?_` (any mentioning "budget") | Preferred budget, as text, on the inquiry. The numeric budget fields stay empty. |
-| `ad_name`, `adset_name`, `campaign_name`, `form_name` and their IDs | Advertisement details, on the inquiry.                                          |
-| `platform`, `is_organic`                                           | Facebook, Instagram, Messenger or Audience Network; organic or paid.             |
-| `lead_status`                                                      | Kept as Meta's own status. It is never the CRM's sales status.                   |
-| any other column                                                   | Kept and shown on the inquiry as another answer.                                 |
+| Sheet column                                                           | In the CRM                                                                        |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `id`                                                                   | The Meta lead ID: the import's identity. Required. Meta's `l:` prefix is removed. |
+| `full_name` (or `first_name` + `last_name`)                            | Lead name. Required, up to 200 characters.                                        |
+| `phone_number`                                                         | The lead's protected number. Required. See below.                                 |
+| `email`                                                                | Lead email, when valid; otherwise left empty (the original is kept).              |
+| `city`                                                                 | Preferred location, and City on the inquiry.                                      |
+| `created_time`                                                         | Submitted, kept apart from the CRM's import time.                                 |
+| `what_are_you_interested_in?_` (any column mentioning "interest")      | Property interest, on the inquiry.                                                |
+| `what_is_your_preferred_investment_budget?_` (any mentioning "budget") | Preferred budget, as text, on the inquiry. The numeric budget fields stay empty.  |
+| `ad_name`, `adset_name`, `campaign_name`, `form_name` and their IDs    | Advertisement details, on the inquiry.                                            |
+| `platform`, `is_organic`                                               | Facebook, Instagram, Messenger or Audience Network; organic or paid.              |
+| `lead_status`                                                          | Kept as Meta's own status. It is never the CRM's sales status.                    |
+| any other column                                                       | Kept and shown on the inquiry as another answer.                                  |
 
-**Phone numbers** follow the CRM's usual rule (a leading `0` means Pakistan), plus three things Sheets do:
+**Phone numbers** from any country are checked against that country's numbering rules (update 064, Google's libphonenumber data). They are stored in E.164, `+` then the country code and digits, as every CRM number is. So the same customer is found however the number was written, and different customers are never merged.
 
-- Meta's `p:` prefix is removed.
-- A number stored as a number keeps its digits.
-- A 10-digit number starting with 3 is a Pakistani mobile whose leading zero the cell dropped, so `3001234567` becomes `+923001234567`.
+- **With a country code:** `+971 50 123 4567`, `(+971) 50-123-4567` and `00971501234567` are all `+971501234567`. A `0` written by mistake after the code (`+92 0300 …`, `+44 (0)7911 …`) is dropped.
+- **Pakistani numbers, as before:** `03001234567`, `0300-1234567`, `3001234567` (a number cell that dropped the leading zero), `923001234567`, `0092 300 1234567`.
+- **Without a country code:** the number is read for the row's `country` column when the form has one and it says clearly which country. That can be an English name (`United Arab Emirates`), a two-letter code (`AE`), a common short form (`UAE`, `KSA`, `UK`, `USA`) or a calling code (`+971`). Otherwise the number is read as Pakistani, as the CRM always has. It is never guessed to be from another country.
+- Meta's `p:` prefix, spaces, hyphens, brackets and dots, Arabic-Indic and Urdu digits, and invisible direction marks copied with a number are all handled.
+
+A number that cannot be read is rejected with one of these reasons; fix the row in the Sheet and the next sync imports it:
+
+| Reason                                                         | Meaning                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phone number missing                                           | The phone cell is empty.                                                                                                                                                                                                                                                  |
+| Phone number not valid for its country                         | Wrong digits or length for the country (for example a Pakistani mobile with a digit missing, or an unknown country code). Numbers shorter than 10 digits, valid only in a few small territories, are also refused: the CRM keeps and protects numbers of 10 to 15 digits. |
+| Phone number has no country code and is not a Pakistani number | Write it with `+` and its country code (`+971 50 123 4567`), or add a `country` column.                                                                                                                                                                                   |
 
 **What is stored for the lead page.** Every original column except the phone number is kept on the inquiry. The phone number is kept only as the lead's protected number, behind the usual number reveal.
 
@@ -118,6 +128,7 @@ Use a **company-controlled Google account** that can open every Sheet. Viewer ac
      - `CRM_SHEETS_KEY` = the key from the CRM.
 
    Never put the key in the code.
+
 4. Run **`checkSetup`**. Google asks for permission the first time. It imports nothing. The log should say the CRM accepted the key and, for each Sheet that is on, "the columns the CRM needs are there".
 5. Turn the Sheets on in the CRM, confirming each historical import, then run **`syncLeads`** once. This is the historical import:
    - one run imports as much as it can in about 4½ minutes;
@@ -144,14 +155,14 @@ The next run picks it up. No code changes.
 
 **Nothing needs retrying by hand.** Every run sends again the rejected and failed rows and any rows not yet imported. To run at once instead of waiting up to five minutes, run `syncLeads` in the Apps Script editor.
 
-| Latest error                    | What to do                                                                                                                                  |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| The script cannot open the spreadsheet | Share it with the script's Google account.                                                                                           |
-| No tab with this name           | Correct the tab name in the CRM (Edit).                                                                                                     |
-| The first row needs id, phone_number and full_name | Restore Meta's heading row.                                                                                              |
-| Some rows could not be saved    | Tried again on the next run. If it stays, check the CRM's error log.                                                                        |
-| More than 50,000 rows           | Move older rows to another tab; they are already imported.                                                                                 |
-| The lead file was deleted       | Restore the file from Deleted leads, or choose **Start a new lead file**. A new file is never started on its own, and rows already imported are not imported again. |
+| Latest error                                       | What to do                                                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The script cannot open the spreadsheet             | Share it with the script's Google account.                                                                                                                          |
+| No tab with this name                              | Correct the tab name in the CRM (Edit).                                                                                                                             |
+| The first row needs id, phone_number and full_name | Restore Meta's heading row.                                                                                                                                         |
+| Some rows could not be saved                       | Tried again on the next run. If it stays, check the CRM's error log.                                                                                                |
+| More than 50,000 rows                              | Move older rows to another tab; they are already imported.                                                                                                          |
+| The lead file was deleted                          | Restore the file from Deleted leads, or choose **Start a new lead file**. A new file is never started on its own, and rows already imported are not imported again. |
 
 **Logs.** The Apps Script log (Executions) shows Sheet names, counts and row numbers only, never names, phone numbers, emails or the key. The CRM's audit history records each Sheet change, each key change, and each import that added leads, under "Facebook and Google Sheets leads".
 
@@ -180,6 +191,7 @@ The owner's decisions (2026-11-09):
 
 - **Lead source:** Meta.
 - **Phone numbers:** valid Pakistani mobiles are normalized, including 10-digit numbers beginning with 3. This rule applies only to Sheets imports; the CRM's other imports are unchanged.
+- **Phone numbers from any country (2026-11-13, update 064):** checked with each country's rules and stored in E.164. A number without a country code is read for a clear `country` column, otherwise as Pakistani; another country is never guessed. Existing numbers were not rewritten.
 - **Interest and budget** are kept as the original text. They are not parsed into the numeric budget fields.
 - **No automatic assignment:**
   - imported leads wait for an administrator, even in a file assigned to an agent;

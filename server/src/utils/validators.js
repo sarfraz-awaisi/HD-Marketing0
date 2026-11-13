@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { normalizePhone } from "./phoneMask.js";
+import { isPhoneCountry } from "./internationalPhone.js";
 export const uuid = z.string().uuid();
 export const mfaVerification = z
   .object({ factor_id: uuid, code: z.string().regex(/^\d{6}$/) })
@@ -230,6 +231,14 @@ export const schemas = {
 export const callOutcome = schemas.calls.superRefine((data, ctx) =>
   checkTemperature(data, ctx, true),
 );
+// The country of a lead's number (update 065): a country's code from the
+// phone-number library, or unknown for numbers placed in no one country.
+const countryFilter = z
+  .string()
+  .refine((v) => v === "unknown" || isPhoneCountry(v), {
+    message: "Choose a country from the list",
+  })
+  .optional();
 // An agent's own leads (update 052): Assigned leads or the Lead pipeline.
 // Search: a customer's name or contact number in any common format (053).
 export const agentLeadsQuery = z
@@ -250,6 +259,7 @@ export const agentLeadsQuery = z
     call: z.enum(["uncalled", "missed"]).optional(),
     // Leads that came to the agent from another agent (update 061).
     assignment: z.enum(["reassigned"]).optional(),
+    country: countryFilter,
     sort: z
       .enum([
         "file",
@@ -288,6 +298,7 @@ export const adminLeadsQuery = z
     outcome: z.enum(outcomes).optional(),
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     import_id: uuid.optional(),
+    country: countryFilter,
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
   .strict()
@@ -314,6 +325,7 @@ export const agentPipelineQuery = z
     search: pipelineSearch,
     temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
     outcome: z.enum(outcomes).optional(),
+    country: countryFilter,
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
   .strict()

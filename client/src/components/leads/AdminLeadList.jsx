@@ -23,6 +23,8 @@ import LeadPhone from "./LeadPhone";
 import CallDialog from "../calls/CallDialog";
 import DeleteLeadsDialog from "./DeleteLeadsDialog";
 import { ActiveFilters, LeadSearch } from "./LeadSearch";
+import CountryFilter from "./CountryFilter";
+import { countryLabel } from "../../lib/countries";
 import { CustomerCell, LastCallCell } from "./LeadCells";
 import { temperatureChoices } from "./PipelineParts";
 // Administrators' All leads (update 057), built like an agent's Assigned
@@ -62,6 +64,7 @@ const keys = [
   "outcome",
   "source",
   "import_id",
+  "country",
   "page",
 ];
 // What the database is asked for, from the address.
@@ -77,6 +80,7 @@ const query = (f) => ({
   ...(f.outcome ? { outcome: f.outcome } : {}),
   ...(f.source ? { source: f.source } : {}),
   ...(f.import_id ? { import_id: f.import_id } : {}),
+  ...(f.country ? { country: f.country } : {}),
 });
 const plural = (n, one, many = one + "s") =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -169,6 +173,9 @@ export default function AdminLeadList() {
       : []),
     ...(f.import_id
       ? [[`File: ${fileName(f.import_id)}`, () => set({ import_id: null })]]
+      : []),
+    ...(f.country
+      ? [[`Country: ${countryLabel(f.country)}`, () => set({ country: null })]]
       : []),
   ];
   const reset = () => change(Object.fromEntries(keys.map((k) => [k, null])));
@@ -299,6 +306,10 @@ export default function AdminLeadList() {
             </option>
           ))}
         </select>
+        <CountryFilter
+          value={f.country}
+          onChange={(country) => set({ country })}
+        />
       </div>
       <ActiveFilters items={chips} onReset={reset} />
       <ErrorBox error={error || q.error} />

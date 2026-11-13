@@ -35,7 +35,12 @@ const errors = {
 };
 export const rejectionReasons = {
   id_invalid: "Meta lead ID missing or not recognised",
-  phone_invalid: "Phone number missing or invalid",
+  // Update 064: numbers from any country, with their country code.
+  phone_missing: "Phone number missing",
+  phone_invalid:
+    "Phone number not valid for its country. Check the digits and the country code",
+  phone_needs_country:
+    "Phone number has no country code and is not a Pakistani number. Write it with + and its country code (for example +971 50 123 4567), or add a country column",
   name_missing: "Customer name missing",
   name_too_long: "Customer name longer than 200 characters",
   date_missing:

@@ -6,6 +6,7 @@ import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
 import { useUrlFilters } from "../../lib/useUrlFilters";
+import { countryLabel } from "../../lib/countries";
 import { followUpNotice } from "../../lib/calls";
 import { temperatures } from "../../lib/temperature";
 import {
@@ -51,6 +52,7 @@ export default function AgentPipeline() {
     "q",
     "temperature",
     "outcome",
+    "country",
     "page",
   ]);
   const [dialLead, setDialLead] = useState(null);
@@ -63,6 +65,7 @@ export default function AgentPipeline() {
     ...(f.q ? { search: f.q } : {}),
     ...(!earlier && f.temperature ? { temperature: f.temperature } : {}),
     ...(!earlier && f.outcome ? { outcome: f.outcome } : {}),
+    ...(!earlier && f.country ? { country: f.country } : {}),
   });
   const q = useQuery({
     queryKey: ["agent-pipeline", agentId, params.toString()],
@@ -78,6 +81,11 @@ export default function AgentPipeline() {
   });
   const agent = q.data?.agent;
   const numbers = q.data?.summary;
+  // Update 065: with a country chosen, the contacted and temperature
+  // numbers are those of the leads listed (that country's), not the
+  // agent's whole pipeline.
+  const byCountry = !earlier && f.country ? q.data?.temperatures : null;
+  const shown = byCountry && numbers ? { ...numbers, ...byCountry } : numbers;
   const name = agent?.name || "This agent";
   const filters = earlier
     ? f.q
@@ -85,13 +93,20 @@ export default function AgentPipeline() {
       : []
     : pipelineFilterChips(f, set);
   const reset = () =>
-    change({ q: null, temperature: null, outcome: null, page: null });
+    change({
+      q: null,
+      temperature: null,
+      outcome: null,
+      country: null,
+      page: null,
+    });
   const showView = (view) =>
     change({
       view: view === "earlier" ? "earlier" : null,
       q: null,
       temperature: null,
       outcome: null,
+      country: null,
       page: null,
     });
   const lead = {
@@ -186,7 +201,7 @@ export default function AgentPipeline() {
         >
           <div className="pipeline-stat">
             <span>Personally contacted</span>
-            <b>{numbers.contacted}</b>
+            <b>{shown.contacted}</b>
           </div>
           {temperatures.map((t) => (
             <button
@@ -210,7 +225,7 @@ export default function AgentPipeline() {
               <span>
                 {t.emoji} {t.label}
               </span>
-              <b>{numbers[t.value]}</b>
+              <b>{shown[t.value]}</b>
             </button>
           ))}
           <div className="pipeline-stat">
@@ -218,6 +233,13 @@ export default function AgentPipeline() {
             <FollowUpsDue numbers={numbers} />
           </div>
         </div>
+      )}
+      {byCountry && (
+        <p className="pipeline-count-note">
+          Personally contacted and temperatures: {countryLabel(f.country)} only
+          {f.q || f.outcome ? ", with your search and filters" : ""}. Follow-ups
+          due: every country.
+        </p>
       )}
       {numbers?.answered_by_others > 0 && (
         <p className="pipeline-hint" role="note">
