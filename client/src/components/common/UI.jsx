@@ -202,7 +202,8 @@ export function Table({
                     key={c.key}
                     data-field={c.key}
                     data-label={
-                      typeof c.label === "string" ? c.label : "Select"
+                      c.cardLabel ||
+                      (typeof c.label === "string" ? c.label : "Select")
                     }
                   >
                     {c.render

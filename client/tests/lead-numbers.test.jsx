@@ -47,18 +47,20 @@ beforeEach(() => {
           targets: [],
           leaders: [],
         }
-      : {
-          data: [
-            {
-              id: "record",
-              lead_id: "lead",
-              leads: { lead_no: 123, name: "Customer" },
-              status: "pending",
-              stage: "discussion",
-            },
-          ],
-          count: 1,
-        },
+      : path.startsWith("/targets")
+        ? { data: [], count: 0 }
+        : {
+            data: [
+              {
+                id: "record",
+                lead_id: "lead",
+                leads: { lead_no: 123, name: "Customer" },
+                status: "pending",
+                stage: "discussion",
+              },
+            ],
+            count: 1,
+          },
   );
 });
 describe("lead numbering shared by both portals", () => {

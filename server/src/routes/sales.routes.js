@@ -18,6 +18,9 @@ import {
   targetQuery,
   targetCopy,
   insightQuery,
+  teamReportQuery,
+  teamDaysQuery,
+  teamRecordsQuery,
   uuid,
 } from "../utils/validators.js";
 import { csvCell } from "../utils/phoneMask.js";
@@ -354,6 +357,54 @@ export function salesRouter(db) {
       ),
     );
   });
+  // Update 063: every agent's numbers for a period, one agent (or all) day
+  // by day, and the records behind any number. Administrators only; the
+  // database checks again.
+  router.get("/reports/team", adminOnly, reportLimit, async (req, res) => {
+    const q = teamReportQuery.parse(req.query);
+    res.json(
+      await salesRpc(
+        db,
+        "report_team",
+        { p_actor: req.user.id, p_from: q.from, p_to: q.to },
+        "063 after 062",
+      ),
+    );
+  });
+  router.get("/reports/team/days", adminOnly, reportLimit, async (req, res) => {
+    const q = teamDaysQuery.parse(req.query);
+    res.json(
+      await salesRpc(
+        db,
+        "report_team_days",
+        {
+          p_actor: req.user.id,
+          p_from: q.from,
+          p_to: q.to,
+          p_agent: q.agent || null,
+        },
+        "063 after 062",
+      ),
+    );
+  });
+  router.get(
+    "/reports/team/records",
+    adminOnly,
+    reportLimit,
+    async (req, res) => {
+      const q = teamRecordsQuery.parse(req.query);
+      res
+        .set("Cache-Control", "no-store")
+        .json(
+          await salesRpc(
+            db,
+            "report_team_drilldown",
+            { p_actor: req.user.id, p_query: q },
+            "063 after 062",
+          ),
+        );
+    },
+  );
   // Other paths (such as /reports/export) continue to the next router before
   // any report limit is counted.
   const known = (req, _res, next) =>

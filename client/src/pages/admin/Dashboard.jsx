@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -36,6 +36,7 @@ import {
   MyCalls,
   useCallActivity,
 } from "../../components/sales/CallActivity";
+import { TeamRecords } from "../../components/reports/TeamPerformance";
 import {
   drillInfo,
   relatedNumbers,
@@ -166,6 +167,15 @@ export default function Dashboard() {
   const { drill, open, close, setState } = useDrillUrl();
   const openSummary = (metric) => open(metric, undefined, "summary");
   const openToday = (metric, agent) => open(metric, agent, "today");
+  // Update 063: Today's calling numbers that open the team records.
+  const activity = useCallActivity();
+  const [teamOpen, setTeamOpen] = useState(null);
+  const notConnected = admin
+    ? (activity.data?.agents || []).reduce(
+        (n, a) => n + (a.not_connected || 0),
+        0,
+      )
+    : undefined;
   const metrics = { ...snapshot, data: snapshot.data?.metrics };
   const followups = snapshot.data?.followups || [];
   const visits = snapshot.data?.visits || [];
@@ -175,7 +185,13 @@ export default function Dashboard() {
   const onTime = d.first_calls_with_deadline
     ? Math.round((d.on_time_first_calls / d.first_calls_with_deadline) * 100)
     : null;
-  const pipelineTotal = Math.max(1, d.leads || 0);
+  // Update 063: the pipeline is every open lead now, by its current stage.
+  const open_by_status = d.open_by_status || {};
+  const openStages = statuses.filter((s) => !["won", "lost"].includes(s));
+  const pipelineTotal = Math.max(
+    1,
+    openStages.reduce((n, s) => n + (open_by_status[s] || 0), 0),
+  );
   return (
     <div className="dashboard">
       <div className="page-heading dash-heading">
@@ -277,13 +293,23 @@ export default function Dashboard() {
                   value={d.missed_first_calls}
                   note={
                     admin
-                      ? "Waiting for your decision"
+                      ? "Deadline passed, not called yet this assignment"
                       : "Call these customers now"
                   }
                   icon={PhoneMissed}
                   tone="red"
                   to="/leads?view=all&call=missed"
                 />
+                {admin && notConnected !== undefined && (
+                  <KpiTile
+                    label="Not connected (overdue)"
+                    value={notConnected}
+                    note="Deadline passed, no answered call this assignment"
+                    icon={PhoneMissed}
+                    tone="red"
+                    to="/leads?view=all&call=not_connected"
+                  />
+                )}
                 <section className="kpi kpi-ring fx-card">
                   <div className="kpi-top">
                     <span className="kpi-label">On-time first calls</span>
@@ -333,23 +359,27 @@ export default function Dashboard() {
                 <h2 id="pipeline-title">Lead pipeline</h2>
                 <Link to="/leads">View leads ↗</Link>
               </div>
-              {Object.keys(d.by_status || {}).length ? (
+              <p className="panel-meta">
+                {admin ? "All open leads" : "Your open leads"} now, by current
+                stage
+              </p>
+              {Object.keys(open_by_status).length ? (
                 <>
                   <div className="pipeline-stack" aria-hidden="true">
-                    {statuses.map((status) =>
-                      d.by_status[status] ? (
+                    {openStages.map((status) =>
+                      open_by_status[status] ? (
                         <span
                           key={status}
                           data-stage={status}
                           style={{
-                            flexGrow: d.by_status[status],
+                            flexGrow: open_by_status[status],
                           }}
                         />
                       ) : null,
                     )}
                   </div>
-                  {statuses
-                    .map((status) => [status, d.by_status[status] || 0])
+                  {openStages
+                    .map((status) => [status, open_by_status[status] || 0])
                     .map(([status, count]) => (
                       <div className="pipeline-row" key={status}>
                         <Badge value={status} />
@@ -410,7 +440,12 @@ export default function Dashboard() {
       {admin ? (
         <>
           <LeadReview />
-          <TeamCallActivity onOpen={openToday} />
+          <TeamCallActivity
+            onOpen={openToday}
+            onOpenTeam={(metric, agent, name) =>
+              setTeamOpen({ metric, agent, name })
+            }
+          />
         </>
       ) : (
         <MyCalls onOpen={openToday} />
@@ -528,6 +563,16 @@ export default function Dashboard() {
         )}
       </section>
       {!admin && <CurrentTargets />}
+      {teamOpen && activity.data?.from && (
+        <TeamRecords
+          metric={teamOpen.metric}
+          agent={teamOpen.agent}
+          agentName={teamOpen.name}
+          range={{ from: activity.data.from, to: activity.data.to }}
+          periodText="Today, Pakistan time."
+          onClose={() => setTeamOpen(null)}
+        />
+      )}
       {drill.metric && (
         <DashboardDrill
           drill={drill}

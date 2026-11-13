@@ -333,7 +333,7 @@ describe("administrators' All leads", () => {
     for (const chip of [
       "Search: 0300 1234",
       "Assigned to Ali Agent",
-      "First call: Not connected",
+      "First call: Missed first call",
       "Source: Meta",
       "File: DHA plots",
     ])
@@ -383,10 +383,13 @@ describe("administrators' All leads", () => {
       within(screen.getByLabelText(label))
         .getAllByRole("option")
         .map((o) => o.textContent);
+    // Update 063: Missed first call (no call yet in this assignment) and
+    // Not connected (no answered call in it).
     expect(options("Filter by first call")).toEqual([
       "Any first-call state",
       "New",
-      "Not connected",
+      "Missed first call",
+      "Not connected (overdue)",
     ]);
     expect(options("Filter by call outcome")).toEqual([
       "All call outcomes",
