@@ -20,9 +20,14 @@ import { healthRouter } from "./routes/health.routes.js";
 export function createApp(db, options = {}) {
   const app = express();
   // Production reads the RATE_LIMIT_* settings (docs/RATE_LIMITS.md);
-  // options.rateLimits lets tests use small limits. Route modules reach these
-  // limiters through the policy middleware in rateLimit.js.
-  const limits = createApiLimiters(options.rateLimits);
+  // options.rateLimits lets tests use small limits, and
+  // options.rateLimitDiagnostics read the refusal lines. Route modules reach
+  // these limiters through the policy middleware in rateLimit.js.
+  const limits = createApiLimiters(
+    options.rateLimits,
+    process.env,
+    options.rateLimitDiagnostics,
+  );
   app.locals.rateLimiters = limits;
   app.disable("x-powered-by");
   app.set("trust proxy", trustProxy(process.env.TRUST_PROXY || "loopback"));

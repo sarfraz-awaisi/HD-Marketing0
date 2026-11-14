@@ -193,8 +193,97 @@ const options = {
     requestWasSuccessful: (req) => Boolean(req.sheetsKey),
   },
 };
-export function createApiLimiters(overrides = {}, env = process.env) {
+// Diagnostics: every refusal is one structured line (event "rate_limited"),
+// so a blocked employee can be matched to the limit that refused them. A
+// request Nginx refused, or one that never reached the server, leaves no
+// such line (docs/RATE_LIMITS.md, "Telling blocks apart"). The line names
+// the policy, its limit and window, the route with its IDs replaced, and
+// the subject the policy counts: the verified user's ID for per-user
+// limits, the client address (as TRUST_PROXY derives it) for per-address
+// ones, the integration key's ID for Google Sheets. Never the query, body,
+// headers, tokens or cookies. Repeated refusals of one subject by one
+// policy are counted rather than each written: one line when a minute
+// starts, then lines at its 10th, 100th, 1,000th and 10,000th refusal, so a
+// flood shows at once without flooding the log.
+export const rateLimitLogInterval = 60000;
+const floodMarks = new Set([10, 100, 1000, 10000]);
+const writeEvent = (event) => {
+  if (process.env.NODE_ENV !== "test") console.log(JSON.stringify(event));
+};
+// "/api/leads/<uuid>/assign?x=y" → "/api/leads/:id/assign": path words
+// stay, anything with a digit or other characters becomes :id.
+export function routeCategory(req) {
+  return (
+    String(req.originalUrl || req.url || "")
+      .split("?")[0]
+      .split("/")
+      .slice(0, 8)
+      .map((part) =>
+        !part || /^[a-z][a-z_-]{0,39}$/i.test(part) ? part : ":id",
+      )
+      .join("/") || "/"
+  );
+}
+const subjects = {
+  user: (req) => ({ user_id: req.rateLimitUser || null }),
+  invitee: (req) => ({ user_id: req.invitedUser?.id || null }),
+  integration: (req) => ({ integration: req.rateLimitIntegration || null }),
+  ip: (req) => ({ client_ip: req.ip || null }),
+};
+function refusalLog(write = writeEvent, now = Date.now) {
+  const recent = new Map();
+  const line = (req, name, policy, limit, subject, at, minute, repeated) => {
+    const reset = req.rateLimit?.resetTime;
+    write({
+      event: "rate_limited",
+      at: new Date(at).toISOString(),
+      source: "api",
+      policy: name,
+      per: policy.per,
+      limit,
+      window_minutes: policy.minutes,
+      method: req.method,
+      route: routeCategory(req),
+      authenticated: Boolean(req.rateLimitUser),
+      ...subject,
+      retry_after_s: reset
+        ? Math.max(0, Math.ceil((new Date(reset).getTime() - at) / 1000))
+        : null,
+      // Refusals of this subject by this policy in the current minute, this
+      // one included, and those not written since its previous line.
+      refusals_this_minute: minute,
+      repeated,
+      request_id: req.id || null,
+    });
+  };
+  return (req, name, policy, limit) => {
+    const subject = subjects[policy.per](req);
+    const key = name + "|" + Object.values(subject).join("|");
+    const at = now();
+    const last = recent.get(key);
+    if (last && at - last.at < rateLimitLogInterval) {
+      last.count++;
+      last.held++;
+      if (!floodMarks.has(last.count)) return;
+      line(req, name, policy, limit, subject, at, last.count, last.held - 1);
+      last.held = 0;
+      return;
+    }
+    if (recent.size >= 10000)
+      for (const [k, v] of recent)
+        if (at - v.at >= rateLimitLogInterval) recent.delete(k);
+    if (recent.size >= 10000) recent.clear();
+    recent.set(key, { at, count: 1, held: 0 });
+    line(req, name, policy, limit, subject, at, 1, last ? last.held : 0);
+  };
+}
+export function createApiLimiters(
+  overrides = {},
+  env = process.env,
+  diagnostics = {},
+) {
   const limits = rateLimitSettings(env, overrides);
+  const logRefusal = refusalLog(diagnostics.write, diagnostics.now);
   const limiters = {};
   for (const [name, policy] of Object.entries(rateLimitPolicies)) {
     const error =
@@ -207,8 +296,15 @@ export function createApiLimiters(overrides = {}, env = process.env) {
       legacyHeaders: false,
       identifier: name,
       keyGenerator: keys[policy.per],
-      handler: (req, res) =>
-        res.status(429).json({ error, request_id: req.id }),
+      handler: (req, res) => {
+        // The refusal is answered whatever happens to its log line.
+        try {
+          logRefusal(req, name, policy, limits[name]);
+        } catch {
+          // A diagnostics failure never changes the response.
+        }
+        res.status(429).json({ error, request_id: req.id });
+      },
       ...options[name],
     });
   }
