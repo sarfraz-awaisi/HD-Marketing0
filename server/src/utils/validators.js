@@ -319,6 +319,13 @@ export const pipelineAgentsQuery = z
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
   .strict();
+// Lead pipeline export: one temperature of every agent's leads.
+export const pipelineExportQuery = z
+  .object({
+    temperature: z.enum(["hot", "warm", "cold"]),
+    format: z.enum(["csv", "xlsx"]).default("csv"),
+  })
+  .strict();
 export const agentPipelineQuery = z
   .object({
     view: z.enum(["current", "earlier"]).default("current"),

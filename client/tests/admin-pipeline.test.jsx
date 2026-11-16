@@ -94,6 +94,10 @@ const calls = (prefix) =>
     .map((path) => Object.fromEntries(new URLSearchParams(path.split("?")[1])));
 beforeEach(() => {
   vi.clearAllMocks();
+  // jsdom has no modal dialogs; the export dialog only needs to open.
+  HTMLDialogElement.prototype.showModal = function () {
+    this.setAttribute("open", "");
+  };
   // "All agents" returns to the list as last seen in this tab.
   sessionStorage.clear();
   mocks.user = { ...owner };
@@ -146,6 +150,9 @@ beforeEach(() => {
       };
     }
     if (path === "/call-capabilities") return { manual: true, mock: false };
+    if (path === "/pipeline/export/summary")
+      return { agents: 2, hot: 4, warm: 7, cold: 0 };
+    if (path.startsWith("/pipeline/export?")) return new Blob(["file"]);
     return { data: [], count: 0 };
   });
 });
@@ -381,5 +388,91 @@ describe("one agent's pipeline", () => {
       expect(screen.queryByRole("heading", { name: "Sara Agent" })).toBe(null),
     );
     expect(calls("/pipeline/agents")).toHaveLength(0);
+  });
+});
+
+describe("the Lead pipeline export", () => {
+  it("asks which leads to export and downloads every agent's leads of that temperature", async () => {
+    const user = userEvent.setup();
+    globalThis.URL.createObjectURL = vi.fn(() => "blob:x");
+    globalThis.URL.revokeObjectURL = vi.fn();
+    open("/leads/pipeline");
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Export pipeline leads",
+    });
+    // Counts across every agent, Excel first.
+    expect(await within(dialog).findByText("4 leads")).toBeInTheDocument();
+    expect(within(dialog).getByText("7 leads")).toBeInTheDocument();
+    expect(within(dialog).getByText("No cold leads")).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: "Excel" })).toBeChecked();
+    expect(
+      within(dialog).getByRole("button", { name: /Export cold leads/ }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).getByText(/includes full phone numbers/),
+    ).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole("button", { name: /Export warm leads/ }),
+    );
+    expect(
+      await within(dialog).findByText("Warm leads exported."),
+    ).toBeInTheDocument();
+    expect(calls("/pipeline/export?")).toEqual([
+      { temperature: "warm", format: "xlsx" },
+    ]);
+    expect(
+      mocks.api.mock.calls.find(([path]) =>
+        path.startsWith("/pipeline/export?"),
+      )[1],
+    ).toEqual({ download: true });
+    expect(globalThis.URL.createObjectURL).toHaveBeenCalledTimes(1);
+    // CSV, for the hot leads.
+    await user.click(within(dialog).getByRole("radio", { name: "CSV" }));
+    await user.click(
+      within(dialog).getByRole("button", { name: /Export hot leads/ }),
+    );
+    await waitFor(() =>
+      expect(calls("/pipeline/export?").at(-1)).toEqual({
+        temperature: "hot",
+        format: "csv",
+      }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Export pipeline leads" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+  it("shows why an export was refused", async () => {
+    const user = userEvent.setup();
+    const answer = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) => {
+      if (path.startsWith("/pipeline/export?"))
+        throw Object.assign(
+          new Error(
+            "The pipeline changed while the file was being prepared. Export again.",
+          ),
+          { status: 409 },
+        );
+      return answer(path, options);
+    });
+    open("/leads/pipeline");
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Export pipeline leads",
+    });
+    await user.click(
+      await within(dialog).findByRole("button", { name: /Export hot leads/ }),
+    );
+    expect(
+      await within(dialog).findByText(
+        "The pipeline changed while the file was being prepared. Export again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByText("Hot leads exported."),
+    ).not.toBeInTheDocument();
   });
 });

@@ -27,6 +27,7 @@ import {
   agentLeadsQuery,
   pipelineAgentsQuery,
   agentPipelineQuery,
+  pipelineExportQuery,
   adminLeadsQuery,
   unassignedAssignment,
   selectedAssignment,
@@ -60,6 +61,15 @@ import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
 import { dealersRouter } from "./dealers.routes.js";
 import { reportDrilldownRouter } from "./reportDrilldown.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
+import {
+  exportTemperatures,
+  pipelineExportLeads,
+  pipelineExportSheet,
+  pipelineTotals,
+  pkToday,
+  withDetails,
+} from "../services/pipelineExport.js";
+import { sendSheet } from "../utils/spreadsheet.js";
 import { phoneCountries } from "../utils/internationalPhone.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
 import {
@@ -544,6 +554,50 @@ export function crmRouter(db, options = {}) {
       data: await leadContacts(db, req, result.data),
     });
   });
+  // Lead pipeline export: every agent's Hot, Warm or Cold leads, as the
+  // pipeline counts them, with every detail of each lead's page, in one CSV
+  // or Excel file. Contact numbers are shown and recorded as in every lead
+  // list, and the export itself is recorded in Audit history before the
+  // file is sent.
+  const pipelineRpc = (req) => (name, args) =>
+    salesRpc(db, name, { p_actor: req.user.id, ...args }, "055 after 054");
+  router.get("/pipeline/export/summary", adminOnly, async (req, res) => {
+    const { agents, totals } = await pipelineTotals(pipelineRpc(req));
+    res
+      .set("Cache-Control", "no-store")
+      .json({ agents: agents.length, ...totals });
+  });
+  router.get(
+    "/pipeline/export",
+    adminOnly,
+    sensitiveLimit,
+    exportLimit,
+    async (req, res) => {
+      const q = pipelineExportQuery.parse(req.query);
+      const label = exportTemperatures[q.temperature];
+      const leads = await pipelineExportLeads(pipelineRpc(req), q.temperature);
+      if (!leads.length)
+        throw Object.assign(
+          new Error(`There are no ${label.toLowerCase()} leads to export.`),
+          { status: 404 },
+        );
+      const rows = await withDetails(db, req, leads);
+      await audit(db, req, "pipeline.exported", "leads", null, {
+        temperature: q.temperature,
+        format: q.format,
+        leads: rows.length,
+        agents: new Set(rows.map((r) => r.agent.id)).size,
+      });
+      res.set("Cache-Control", "no-store");
+      sendSheet(
+        res,
+        pipelineExportSheet(rows),
+        `hd-pipeline-${q.temperature}-leads-${pkToday()}`,
+        q.format,
+        `${label} leads`,
+      );
+    },
+  );
   // Administrators' All leads (update 057): search, filters, counts and
   // pages are worked out in the database across every lead; numbers are
   // added as in every lead list. With selection, the IDs of up to 500

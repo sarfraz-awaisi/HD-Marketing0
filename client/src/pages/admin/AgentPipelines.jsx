@@ -11,6 +11,7 @@ import {
   Table,
 } from "../../components/common/UI";
 import { LeadSearch } from "../../components/leads/LeadSearch";
+import PipelineExport from "../../components/leads/PipelineExport";
 // Administrators' Lead pipeline (update 055): every agent with the leads
 // assigned to them that they personally contacted, found by name or UID; an
 // agent opens their own pipeline. Numbers cover every lead, not one page.
@@ -59,6 +60,7 @@ export default function AgentPipelines() {
             personally contacted. Only answered calls the agent made count.
           </p>
         </div>
+        <PipelineExport />
       </div>
       <section className="panel">
         <div className="toolbar lead-toolbar">

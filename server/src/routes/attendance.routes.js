@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { utils, write } from "xlsx";
 import { z } from "zod";
 import {
   exportLimit,
@@ -23,7 +22,7 @@ import {
   attendanceManage,
   attendanceManageDay,
 } from "../utils/validators.js";
-import { csvCell } from "../utils/phoneMask.js";
+import { sendSheet } from "../utils/spreadsheet.js";
 // Attendance (update 040). Every handler runs after the shared auth
 // middleware; the employee is always req.user, never an id from the browser.
 // SQL raises HA<status> with messages written for the signed-in user.
@@ -314,22 +313,6 @@ function periodSheet(result) {
     ]),
   ];
 }
-function sendSheet(res, rows, name, format) {
-  if (format === "xlsx") {
-    // Cells are written as plain values; no formulas are ever created.
-    const book = utils.book_new();
-    utils.book_append_sheet(book, utils.aoa_to_sheet(rows), "Attendance");
-    return res
-      .type("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-      .attachment(name + ".xlsx")
-      .send(write(book, { type: "buffer", bookType: "xlsx" }));
-  }
-  res
-    .type("text/csv")
-    .attachment(name + ".csv")
-    .send(rows.map((row) => row.map(csvCell).join(",")).join("\r\n"));
-}
-
 export function attendanceAdminRouter(db) {
   const router = Router();
   const admin = (req, name, args = {}, update) =>
@@ -493,6 +476,7 @@ export function attendanceAdminRouter(db) {
         dailySheet(result),
         `hd-attendance-${q.date}`,
         q.format,
+        "Attendance",
       );
     }
     const range =
@@ -505,6 +489,7 @@ export function attendanceAdminRouter(db) {
       periodSheet(result),
       `hd-attendance-${q.type === "weekly" ? "week-" + q.week_start : q.month}`,
       q.format,
+      "Attendance",
     );
   });
   return router;
