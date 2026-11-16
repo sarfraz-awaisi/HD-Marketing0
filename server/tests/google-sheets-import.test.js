@@ -1056,7 +1056,12 @@ describe("Google Sheets import (update 056)", () => {
     }).expect(200);
     // Only new submissions (a start date after the Sheet was added): no
     // historical import to confirm.
-    const tomorrow = new Date(Date.now() + 86400e3).toISOString().slice(0, 10);
+    // Tomorrow in Pakistan, as the CRM counts days (not in UTC, which is
+    // still the day before until 5 am Pakistan time).
+    const tomorrow = new Date(Date.now() + 86400e3).toLocaleDateString(
+      "en-CA",
+      { timeZone: "Asia/Karachi" },
+    );
     await add({
       name: "Ad 3",
       spreadsheet: sheetId(3),
