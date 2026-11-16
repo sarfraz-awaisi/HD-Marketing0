@@ -15,6 +15,7 @@ export function securityAlertLabel(type) {
       phone_reveal_warning: "Number limit warning",
       phone_reveal_limit: "Number limit reached",
       mass_lead_deletion: "More than 50 leads deleted today",
+      mass_lead_erasure: "More than 50 leads permanently deleted today",
       inactive_agent_leads: "Inactive account still owns leads",
       mfa_verification_failures: "Repeated authenticator failures",
       account_login_locked: "Sign-in locked after wrong passwords",

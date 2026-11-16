@@ -85,7 +85,7 @@ export default function DeleteLeadsDialog({ ids, file, onClose, onDeleted }) {
         <p>
           {file && mode === "file_only"
             ? "Customer leads will remain in Leads without this file."
-            : "Leads can be restored for 30 days. They will be unassigned; pending follow-ups and visits will be cancelled, and unread reminders removed. After retention, the background job erases them."}
+            : "Leads can be restored for 14 days. They will be unassigned; pending follow-ups and visits will be cancelled, and unread reminders removed. After 14 days they are erased, or at once with Delete instantly in Deleted leads."}
         </p>
         <label>
           Reason

@@ -1,4 +1,5 @@
 import { leadManagementRpc } from "../services/leadManagement.js";
+import { eraseRpc, removeErasedFiles } from "../services/leadErasure.js";
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -352,6 +353,21 @@ export function crmRouter(db, options = {}) {
       }),
     );
   });
+  // Delete instantly (update 069): leads already in Deleted leads are erased
+  // now, with every record, and cannot be restored.
+  router.post("/leads/erase", adminOnly, sensitiveLimit, async (req, res) => {
+    z.object({}).strict().parse(req.query);
+    const body = z.object({ lead_ids: leadIds }).strict().parse(req.body);
+    const result = await eraseRpc(db, "erase_deleted_leads", {
+      p_lead_ids: body.lead_ids,
+      p_actor: req.user.id,
+      p_request: req.id,
+    });
+    res.json({
+      ...result,
+      files_removed: result.erased ? await removeErasedFiles(db) : true,
+    });
+  });
   router.delete(
     "/lead-imports/:id",
     adminOnly,
@@ -403,6 +419,26 @@ export function crmRouter(db, options = {}) {
           p_request: req.id,
         }),
       );
+    },
+  );
+  // Delete instantly (update 069): the leads a deleted file moved to Deleted
+  // leads, erased now; the file can no longer be restored.
+  router.post(
+    "/lead-imports/:id/erase",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      z.object({}).strict().parse(req.query);
+      z.object({}).strict().parse(req.body);
+      const result = await eraseRpc(db, "erase_deleted_import", {
+        p_import: uuid.parse(req.params.id),
+        p_actor: req.user.id,
+        p_request: req.id,
+      });
+      res.json({
+        ...result,
+        files_removed: result.erased ? await removeErasedFiles(db) : true,
+      });
     },
   );
   router.post(

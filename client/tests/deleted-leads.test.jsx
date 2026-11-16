@@ -148,8 +148,91 @@ describe("deleted lead controls", () => {
         expect.objectContaining({ body: { lead_ids: ["lead"] } }),
       ),
     );
+    // Update 069: 14 days to restore.
+    expect(screen.getByText(/Restore within 14 days/)).toBeInTheDocument();
+  });
+  it("deletes the selected leads instantly only after DELETE is typed (update 069)", async () => {
+    const user = userEvent.setup();
+    mount(<DeletedLeads />);
+    await user.click(
+      await screen.findByRole("checkbox", { name: "Select Deleted customer" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Delete instantly" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete permanently" });
+    expect(dialog).toHaveTextContent("This lead and all its records");
+    expect(dialog).toHaveTextContent("This cannot be undone.");
+    const button = screen.getByRole("button", {
+      name: "Delete lead permanently",
+    });
+    expect(button).toBeDisabled();
+    await user.type(screen.getByLabelText("Type DELETE to confirm"), "delete");
+    expect(button).toBeDisabled();
+    await user.clear(screen.getByLabelText("Type DELETE to confirm"));
+    await user.type(screen.getByLabelText("Type DELETE to confirm"), "DELETE");
+    mocks.api.mockImplementationOnce(async () => ({
+      erased: 1,
+      failed: 0,
+      files_removed: true,
+    }));
+    await user.click(button);
+    expect(mocks.api).toHaveBeenCalledWith(
+      "/leads/erase",
+      expect.objectContaining({
+        method: "POST",
+        body: { lead_ids: ["lead"] },
+      }),
+    );
     expect(
-      screen.queryByRole("button", { name: /permanent|erase/i }),
+      await screen.findByText("1 permanently deleted"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Delete permanently" }),
     ).not.toBeInTheDocument();
+  });
+  it("deletes a deleted file's leads instantly, and cancelling changes nothing (update 069)", async () => {
+    const user = userEvent.setup();
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) =>
+      path === "/deleted-lead-imports"
+        ? [
+            {
+              id: "file",
+              file_name: "October buyers.csv",
+              deleted_at: "2026-11-10",
+              delete_reason: "Wrong list",
+            },
+          ]
+        : path === "/lead-imports/file/erase"
+          ? { erased: 12, failed: 1, files_removed: false }
+          : base(path, options),
+    );
+    mount(<DeletedLeads />);
+    await screen.findByText("October buyers.csv");
+    await user.click(screen.getByRole("button", { name: "Delete instantly" }));
+    expect(
+      screen.getByRole("dialog", { name: "Delete permanently" }),
+    ).toHaveTextContent(
+      "The leads deleted with “October buyers.csv” and all their records",
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(mocks.api.mock.calls.some(([path]) => path.endsWith("/erase"))).toBe(
+      false,
+    );
+    await user.click(screen.getByRole("button", { name: "Delete instantly" }));
+    await user.type(screen.getByLabelText("Type DELETE to confirm"), "DELETE");
+    await user.click(
+      screen.getByRole("button", {
+        name: "Delete the file's leads permanently",
+      }),
+    );
+    expect(mocks.api).toHaveBeenCalledWith(
+      "/lead-imports/file/erase",
+      expect.objectContaining({ method: "POST", body: {} }),
+    );
+    expect(
+      await screen.findByText(
+        "12 permanently deleted, 1 kept (won deal or no longer here). Some recordings or documents will be removed from storage later.",
+      ),
+    ).toBeInTheDocument();
   });
 });

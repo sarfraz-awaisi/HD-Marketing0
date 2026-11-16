@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from "vitest";
 import { purgeDeletedLeads } from "../src/jobs/purgeDeletedLeads.js";
 afterEach(() => vi.unstubAllEnvs());
 describe("durable deleted-lead cleanup job", () => {
-  it("cleans queued storage before acknowledging and uses the 30-day default", async () => {
+  it("cleans queued storage before acknowledging and uses the 14-day default (update 069)", async () => {
     const remove = vi.fn(async () => ({})),
       rpc = vi.fn(async (name) => ({
         data:
@@ -12,7 +12,7 @@ describe("durable deleted-lead cleanup job", () => {
       }));
     await purgeDeletedLeads({ rpc, storage: { from: () => ({ remove }) } });
     expect(rpc).toHaveBeenCalledWith("purge_deleted_leads", {
-      p_retention: 30,
+      p_retention: 14,
     });
     expect(remove).toHaveBeenCalledWith(["fixture/path"]);
     expect(rpc).toHaveBeenLastCalledWith("lead_recording_cleanup_done", {
@@ -38,7 +38,7 @@ describe("durable deleted-lead cleanup job", () => {
       rpc.mock.calls.some(([name]) => name === "lead_recording_cleanup_done"),
     ).toBe(false);
   });
-  it.each(["0", "29", "not-a-number", "3651"])(
+  it.each(["0", "13", "not-a-number", "3651"])(
     "refuses invalid retention %s before querying",
     async (value) => {
       vi.stubEnv("LEAD_DELETE_RETENTION_DAYS", value);
