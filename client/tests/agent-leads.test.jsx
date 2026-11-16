@@ -546,3 +546,33 @@ describe("the call's lead temperature", () => {
     ]);
   });
 });
+
+describe("the advertisement a lead came from (update 068)", () => {
+  it("shows under the customer's name in Assigned leads and Lead pipeline, and on the lead's page", async () => {
+    leads = [row(1, { ad_name: "DHA Phase 9 plots" }), row(2)];
+    for (const path of [`/leads?import_id=${file}`, "/leads/pipeline"]) {
+      const view = open(path);
+      const table = await screen.findByRole("table");
+      const [, first, second] = within(table).getAllByRole("row");
+      expect(within(first).getByText("Ad: DHA Phase 9 plots")).toHaveAttribute(
+        "title",
+        "DHA Phase 9 plots",
+      );
+      expect(second).not.toHaveTextContent("Ad:");
+      view.unmount();
+    }
+    const page = open("/leads/" + leads[0].id);
+    const details = (
+      await screen.findByRole("heading", { name: "Lead details" })
+    ).closest("section");
+    expect(within(details).getByText("Advertisement")).toBeInTheDocument();
+    expect(within(details).getByText("DHA Phase 9 plots")).toBeInTheDocument();
+    page.unmount();
+    open("/leads/" + leads[1].id);
+    expect(
+      (await screen.findByRole("heading", { name: "Lead details" })).closest(
+        "section",
+      ),
+    ).not.toHaveTextContent("Advertisement");
+  });
+});

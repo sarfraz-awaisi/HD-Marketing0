@@ -25,6 +25,7 @@ const importFields = [
   ["property_id", "Property ID"],
   ["assigned_agent", "Agent (name or ID)"],
   ["source", "Source (saved as CSV / Excel)"],
+  ["ad_name", "Ad name"],
 ];
 export default function Leads() {
   const { user } = useAuth();
@@ -206,8 +207,8 @@ function AdminLeads({ importId }) {
         CSV, XLSX or XLS · Maximum 5 MB and 1,000 leads. Excel uses the first
         worksheet with name and phone headers in row 1. Format phone cells as
         Text to preserve leading zeros and country codes. Common headings like
-        Full Name and Mobile Number work too; other columns can be matched or
-        skipped.
+        Full Name, Mobile Number and Ad Name work too; other columns can be
+        matched or skipped.
       </p>
       <ErrorBox error={!importMapping && error} />
       <AdminLeadList />

@@ -514,7 +514,18 @@ describe("Google Sheets import (update 056)", () => {
         .expect(200)
     ).body;
     expect(statuses(body)).toEqual(["existing", "inserted"]);
-    expect(await snapshot()).toEqual(before);
+    // Update 068: the lead had no advertisement, so it takes this one.
+    // Nothing else about it changes.
+    const after = await snapshot();
+    expect(after.lead.ad_name).toBe("DHA Phase 9 plots");
+    expect({
+      ...after,
+      lead: {
+        ...after.lead,
+        ad_name: before.lead.ad_name,
+        updated_at: before.lead.updated_at,
+      },
+    }).toEqual(before);
     // On the lead page, for the administrator and the lead's agent.
     for (const user of [admin, ali]) {
       const inquiries = (
@@ -1158,10 +1169,17 @@ describe("Google Sheets import (update 056)", () => {
         lead_id: lead,
       }),
     ]);
-    // The lead, its agent and status included, is unchanged; no one else is told.
-    expect(
-      (await one("select to_jsonb(l) l from leads l where id=$1", [lead])).l,
-    ).toEqual(before.l);
+    // The lead, its agent and status included, is unchanged, apart from
+    // the advertisement it had none of (update 068); no one else is told.
+    const after = (
+      await one("select to_jsonb(l) l from leads l where id=$1", [lead])
+    ).l;
+    expect(after.ad_name).toBe("DHA Phase 9 plots");
+    expect({
+      ...after,
+      ad_name: before.l.ad_name,
+      updated_at: before.l.updated_at,
+    }).toEqual(before.l);
     expect(
       (
         await one(

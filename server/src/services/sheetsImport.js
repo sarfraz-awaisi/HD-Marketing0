@@ -76,7 +76,7 @@ const columns = {
   id: ["id", "lead_id"],
   created_time: ["created_time"],
   ad_id: ["ad_id"],
-  ad_name: ["ad_name"],
+  ad_name: ["ad_name", "adname", "ad", "advertisement", "advertisement_name"],
   adset_id: ["adset_id"],
   adset_name: ["adset_name"],
   campaign_id: ["campaign_id"],

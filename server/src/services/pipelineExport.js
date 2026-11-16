@@ -245,7 +245,7 @@ export function pipelineExportSheet(rows) {
           ? (platforms[ad.platform] ?? ad.platform) +
             (ad.is_organic ? " (organic)" : "")
           : "",
-        ad.ad_name ?? "",
+        ad.ad_name || r.ad_name || "",
         ad.campaign_name ?? "",
         ad.form_name ?? "",
         answer(ad.interest),

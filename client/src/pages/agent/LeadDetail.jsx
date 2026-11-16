@@ -191,6 +191,13 @@ export default function LeadDetail() {
             <dd>
               <LeadPhone lead={lead} onCall={() => setModal("dial")} />
             </dd>
+            {/* Update 068: the advertisement the lead came from. */}
+            {lead.ad_name && (
+              <>
+                <dt>Advertisement</dt>
+                <dd>{lead.ad_name}</dd>
+              </>
+            )}
             <dt>Preferred location</dt>
             <dd>{lead.preferred_location || "—"}</dd>
             <dt>Budget</dt>
