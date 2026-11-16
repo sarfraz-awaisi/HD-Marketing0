@@ -332,24 +332,34 @@ export default function LeadDetail() {
               }}
             />
           ) : modal === "assign" ? (
-            <RecordForm
-              fields={[
-                {
-                  key: "agent_id",
-                  label: "Agent (leave blank for round-robin)",
-                  options: (users.data || [])
-                    .filter((u) => u.role === "agent" && u.active)
-                    .map((u) => ({ value: u.id, label: u.name })),
-                },
-              ]}
-              onSave={async (data) => {
-                await api("/leads/" + id + "/assign", {
-                  method: "POST",
-                  body: { agent_id: data.agent_id || null },
-                });
-                refresh();
-              }}
-            />
+            <>
+              {lead.assigned_agent && (
+                <p className="field-hint">
+                  Giving the lead to a different agent starts it fresh for them,
+                  without the current agent&apos;s comments or results. The
+                  current agent&apos;s pending follow-ups and scheduled visits
+                  on it are cancelled; administrators keep the full history.
+                </p>
+              )}
+              <RecordForm
+                fields={[
+                  {
+                    key: "agent_id",
+                    label: "Agent (leave blank for round-robin)",
+                    options: (users.data || [])
+                      .filter((u) => u.role === "agent" && u.active)
+                      .map((u) => ({ value: u.id, label: u.name })),
+                  },
+                ]}
+                onSave={async (data) => {
+                  await api("/leads/" + id + "/assign", {
+                    method: "POST",
+                    body: { agent_id: data.agent_id || null },
+                  });
+                  refresh();
+                }}
+              />
+            </>
           ) : modal === "note" ? (
             <RecordForm
               fields={[

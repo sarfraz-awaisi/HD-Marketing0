@@ -556,7 +556,7 @@ function AssignLeadDialog({ lead, agents, onClose, onDone }) {
       <ErrorBox error={error} />
       <p>
         {current
-          ? `${lead.name} is assigned to ${lead.assigned_name}. Moving the lead takes it from ${lead.assigned_name}; its calls, notes and history stay with the lead.`
+          ? `${lead.name} is assigned to ${lead.assigned_name}. Moving the lead takes it from ${lead.assigned_name}; its calls, notes and history stay with the lead for administrators. The new agent starts fresh, without ${lead.assigned_name}'s comments or results, and ${lead.assigned_name}'s pending follow-ups and scheduled visits on it are cancelled.`
           : `${lead.name} has no agent yet.`}
       </p>
       <label>
@@ -722,8 +722,9 @@ function DistributeDialog({ ids, agents, onClose, onDone }) {
       <ErrorBox error={error || preview.error} />
       <p>
         {plural(ids.length, "lead")} selected. Leads that another agent has move
-        too: their calls, notes and history stay with each lead, and pending
-        follow-ups move with it.
+        too: their calls, notes and history stay with each lead for
+        administrators, and the new agent starts fresh. The earlier agent&apos;s
+        pending follow-ups and scheduled visits on those leads are cancelled.
       </p>
       <fieldset className="distribution-mode" disabled={busy}>
         <legend>How to assign</legend>

@@ -627,6 +627,30 @@ generic(
 generic("deals", "activities", "Created a deal", "Updated a deal", (c) =>
   c.lead ? `for ${leadRef(c)}` : "",
 );
+// Update 067: a lead given to a different agent starts fresh, so the earlier
+// agent's pending follow-ups and scheduled visits on it are cancelled. The
+// entry names whose commitment it was (affected), its day, the lead and the
+// new agent.
+const earlierOwner = (c) =>
+  c.affected ? `${person(c.affected)}'s` : "the earlier agent's";
+add(
+  "followup.reassignment_cancelled",
+  "followups",
+  "activities",
+  "update",
+  "Cancelled a follow-up when the lead was reassigned",
+  (c) =>
+    `Cancelled ${earlierOwner(c)} pending follow-up${dayText(c.m.due_on) ? ` due ${dayText(c.m.due_on)}` : ""}${c.lead ? ` for ${leadRef(c)}` : ""} when the lead was given to ${agentText(c)}.`,
+);
+add(
+  "visit.reassignment_cancelled",
+  "visits",
+  "activities",
+  "update",
+  "Cancelled a site visit when the lead was reassigned",
+  (c) =>
+    `Cancelled ${earlierOwner(c)} site visit${dayText(c.m.visit_on) ? ` booked for ${dayText(c.m.visit_on)}` : ""}${c.lead ? ` for ${leadRef(c)}` : ""} when the lead was given to ${agentText(c)}.`,
+);
 generic("notes", "activities", "Added a note", "Updated a note", (c) =>
   c.lead ? `to ${leadRef(c)}` : "",
 );

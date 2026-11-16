@@ -76,14 +76,22 @@ beforeAll(async () => {
       deal_tags: ["Warm lead"],
     }),
   ]);
-  // A follow-up whose lead later moved to Sara.
+  // A follow-up whose lead moved to Sara before update 067, when pending
+  // follow-ups still moved with the lead (since 067 they are cancelled).
   const moved = await lead(ali);
   await mutate(
     "followups",
     { lead_id: moved, due_at: due(24), status: "pending" },
     ali,
   );
-  await pg.query("select assign_lead($1,$2,$3,'t')", [moved, admin, sara]);
+  await pg.query("update leads set assigned_agent=$2 where id=$1", [
+    moved,
+    sara,
+  ]);
+  await pg.query("update followups set agent_id=$2 where lead_id=$1", [
+    moved,
+    sara,
+  ]);
   // A follow-up on a lead that is now unassigned, and one on a deleted lead.
   const unassigned = await lead(ali);
   await mutate(

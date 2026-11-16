@@ -347,7 +347,7 @@ describe("follow-ups promised on calls", () => {
 });
 
 describe("the Follow-ups list", () => {
-  it("follows the lead's current owner, for agents and for the administrator's agent filter", async () => {
+  it("leaves a lead's pending follow-up behind, cancelled, when the lead moves to another agent (update 067)", async () => {
     const res = await send(ali, "post", "/followups", {
       lead_id: lead,
       due_at: inHours(20),
@@ -355,18 +355,36 @@ describe("the Follow-ups list", () => {
     });
     expect(res.status, JSON.stringify(res.body)).toBe(201);
     expect(res.body.agent_id).toBe(ali);
-    expect(
-      (await send(admin, "post", `/leads/${lead}/assign`, { agent_id: sara }))
-        .status,
-    ).toBe(200);
     const ids = async (user, query = "") =>
       (await get(user, "/followups?view=pending" + query)).body.data.map(
         (f) => f.id,
       );
-    expect(await ids(sara)).toContain(res.body.id);
-    expect(await ids(ali)).not.toContain(res.body.id);
-    expect(await ids(admin, `&agent=${sara}`)).toContain(res.body.id);
-    expect(await ids(admin, `&agent=${ali}`)).not.toContain(res.body.id);
+    expect(await ids(ali)).toContain(res.body.id);
+    expect(await ids(admin, `&agent=${ali}`)).toContain(res.body.id);
+    expect(
+      (await send(admin, "post", `/leads/${lead}/assign`, { agent_id: sara }))
+        .status,
+    ).toBe(200);
+    // Sara starts fresh; Ali no longer has the lead. Nobody's pending list
+    // shows it, and the follow-up is kept, cancelled, with its comment.
+    for (const [user, query] of [
+      [sara, ""],
+      [ali, ""],
+      [admin, `&agent=${sara}`],
+      [admin, `&agent=${ali}`],
+    ])
+      expect(await ids(user, query), `${user} ${query}`).not.toContain(
+        res.body.id,
+      );
+    expect(
+      await one("select agent_id,status,notes from followups where id=$1", [
+        res.body.id,
+      ]),
+    ).toEqual({
+      agent_id: ali,
+      status: "cancelled",
+      notes: "Send the brochure",
+    });
   });
   it("lists pending follow-ups soonest first and filters completed and cancelled ones", async () => {
     const later = (

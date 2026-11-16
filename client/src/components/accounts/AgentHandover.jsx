@@ -124,10 +124,16 @@ export default function AgentHandover({
                 retain the work in the admin pool.
               </p>
             )}
-            {mode === "admin" && (
+            {mode === "admin" ? (
               <p>
                 Leads become unassigned. Their pending follow-ups, visits and
                 future unread reminders go to your administrator account.
+              </p>
+            ) : (
+              <p>
+                Each lead starts fresh for its new agent: this agent&apos;s
+                pending follow-ups and scheduled visits on it are cancelled, and
+                administrators keep the full history.
               </p>
             )}
           </fieldset>

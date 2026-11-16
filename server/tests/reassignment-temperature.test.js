@@ -266,7 +266,11 @@ describe("reassigning a classified lead (update 066)", () => {
     expect(after.lead).toEqual(before.lead);
     expect(after.calls).toBe(before.calls);
     expect(after.notes).toBe(before.notes);
-    expect(after.followups).toEqual(before.followups);
+    // The earlier agent's pending follow-up is cancelled, its date and
+    // comment kept for administrators (update 067).
+    expect(after.followups).toEqual(
+      before.followups.map((f) => ({ ...f, status: "cancelled" })),
+    );
     expect(after.statuses).toBe(before.statuses);
     // History grows; nothing in it changes.
     expect(
