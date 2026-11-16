@@ -39,7 +39,9 @@ export async function agentWorkspaces(db, user, ids) {
   return new Map(Object.entries(data || {}));
 }
 // A lead as its agent sees it: the stage of this assignment, the earlier
-// assignment's lost reason and note left out, and the indicators.
+// assignment's lost reason and note left out, and the indicators. Since
+// update 067 the earlier assignment's result is never given to the new
+// agent, even by a database that still reports it.
 export function workspaceLead(lead, ws) {
   if (!ws) return lead;
   return {
@@ -50,7 +52,6 @@ export function workspaceLead(lead, ws) {
       : {}),
     reassigned: ws.reassigned,
     reassigned_at: ws.since,
-    previous_result: ws.previous_result,
     first_call_reopened: ws.first_call_reopened,
   };
 }

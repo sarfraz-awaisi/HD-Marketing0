@@ -626,8 +626,8 @@ describe("F1 API validation and access", () => {
     ).toBe(404);
   });
 
-  it("applies a validated lost reason filter together with current assignment", async () => {
-    const client = apiDatabase();
+  it("applies a validated lost reason filter for administrators, and refuses it to agents (update 067)", async () => {
+    const client = apiDatabase("admin");
     const app = createApp(trustedMfaFixture(client));
     const response = await request(app)
       .get("/api/leads?lost_reason=budget")
@@ -636,8 +636,8 @@ describe("F1 API validation and access", () => {
     const query = client.from.mock.results.find(
       (result, index) => client.from.mock.calls[index][0] === "leads",
     ).value;
-    expect(query.eq).toHaveBeenCalledWith("assigned_agent", agent);
     expect(query.eq).toHaveBeenCalledWith("lost_reason", "budget");
+    expect(query.eq).not.toHaveBeenCalledWith("assigned_agent", agent);
     expect(
       (
         await request(app)
@@ -645,6 +645,18 @@ describe("F1 API validation and access", () => {
           .set("Authorization", "Bearer valid")
       ).status,
     ).toBe(400);
+    // On a lead reassigned to an agent, the lead's own lost reason and
+    // status are the earlier agent's: agents filter by stage in My leads.
+    const agentApp = createApp(trustedMfaFixture(apiDatabase()));
+    for (const filter of ["lost_reason=budget", "status=lost"]) {
+      const refused = await request(agentApp)
+        .get("/api/leads?" + filter)
+        .set("Authorization", "Bearer valid");
+      expect([refused.status, refused.body.error], filter).toEqual([
+        400,
+        "Filter your leads by stage in My leads.",
+      ]);
+    }
   });
 });
 

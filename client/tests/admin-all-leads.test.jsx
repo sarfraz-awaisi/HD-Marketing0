@@ -510,6 +510,10 @@ describe("administrators' All leads", () => {
     );
     dialog = await screen.findByRole("dialog", { name: "Reassign Customer 2" });
     expect(dialog).toHaveTextContent("Customer 2 is assigned to Ali Agent.");
+    // Update 067: the new agent starts fresh; Ali's commitments are cancelled.
+    expect(dialog).toHaveTextContent(
+      "The new agent starts fresh, without Ali Agent's comments or results, and Ali Agent's pending follow-ups and scheduled visits on it are cancelled.",
+    );
     // The current agent is not offered.
     expect(
       within(within(dialog).getByLabelText("Move to")).queryByRole("option", {
@@ -547,6 +551,9 @@ describe("administrators' All leads", () => {
     const dialog = await assignToAgents(user, "assignment=assigned");
     expect(dialog).toHaveTextContent(
       "2 leads selected. Leads that another agent has move too",
+    );
+    expect(dialog).toHaveTextContent(
+      "The earlier agent's pending follow-ups and scheduled visits on those leads are cancelled.",
     );
     expect(
       within(dialog).getByRole("radio", { name: "One agent" }),

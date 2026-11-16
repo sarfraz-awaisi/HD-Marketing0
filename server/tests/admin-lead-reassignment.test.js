@@ -134,13 +134,14 @@ describe("moving selected leads to one agent (update 060)", () => {
       ).n,
     ).toBe(5);
     // Calls (still filed under Ali, who made them) and notes are untouched;
-    // the pending follow-up is now Sara's.
+    // Ali's pending follow-up is cancelled, not moved: Sara starts fresh
+    // (update 067).
     expect(await history()).toEqual(before);
     expect(
       await all("select agent_id,status from followups where lead_id=$1", [
         answered,
       ]),
-    ).toEqual([{ agent_id: sara, status: "pending" }]);
+    ).toEqual([{ agent_id: ali, status: "cancelled" }]);
     // Sara's own lead is exactly as it was.
     expect(
       (await one("select to_jsonb(l) l from leads l where id=$1", [saras])).l,

@@ -1193,6 +1193,19 @@ export function crmRouter(db, options = {}) {
             ? query.or(`name.ilike.%${q.search}%,lead_no.eq.${BigInt(number)}`)
             : query.ilike("name", "%" + q.search + "%");
       }
+      // Update 067: a lead's own status and lost reason are, on a lead
+      // reassigned to the agent, the earlier agent's result, so an agent
+      // could tell them from which leads such a filter returns. Agents
+      // filter by their own stage in My leads.
+      if (
+        table === "leads" &&
+        (q.status || q.lost_reason) &&
+        (await workspaceReady(db, req.user))
+      )
+        throw Object.assign(
+          new Error("Filter your leads by stage in My leads."),
+          { status: 400 },
+        );
       if (q.status) {
         if (!["leads", "calls", "followups", "visits"].includes(table))
           throw Object.assign(new Error("Status not supported"), {
@@ -1350,6 +1363,38 @@ export function crmRouter(db, options = {}) {
           Object.hasOwn(req.body, field),
         ),
       );
+      // Update 061: an earlier assignment's work stays as it was recorded
+      // (the database refuses it too; this says why). Looked up first, on the
+      // agent's own leads only, so a refused change reveals nothing about
+      // such a record (update 067).
+      let earlier = null;
+      if (
+        ["calls", "followups", "visits", "deals"].includes(table) &&
+        (await workspaceReady(db, req.user))
+      ) {
+        const row = unwrap(
+          await db
+            .from(table)
+            .select("workspace_state,lead_id")
+            .eq("id", id)
+            .maybeSingle(),
+        );
+        const owner =
+          row &&
+          unwrap(
+            await db
+              .from("leads")
+              .select("assigned_agent")
+              .eq("id", row.lead_id)
+              .maybeSingle(),
+          )?.assigned_agent;
+        // Anyone else's record is refused below as not found.
+        if (owner === req.user.id) earlier = row.workspace_state;
+      }
+      if (earlier === "hidden")
+        throw Object.assign(new Error(earlierWorkRefusal(table, earlier, [])), {
+          status: 403,
+        });
       let followUp;
       if (table === "calls") {
         ({ follow_up_at: followUp, ...data } = callOutcome.parse(req.body));
@@ -1369,22 +1414,11 @@ export function crmRouter(db, options = {}) {
             throw needsFollowUpTime();
         }
       }
-      // Update 061: an earlier assignment's work stays as it was recorded
-      // (the database refuses it too; this says why).
-      if (
-        ["calls", "followups", "visits", "deals"].includes(table) &&
-        (await workspaceReady(db, req.user))
-      ) {
-        const row = unwrap(
-          await db
-            .from(table)
-            .select("workspace_state")
-            .eq("id", id)
-            .maybeSingle(),
-        );
+      // A carried-over commitment: only its time, status and property.
+      if (earlier) {
         const refusal = earlierWorkRefusal(
           table,
-          row?.workspace_state,
+          earlier,
           Object.keys(data).filter(
             (field) =>
               ![

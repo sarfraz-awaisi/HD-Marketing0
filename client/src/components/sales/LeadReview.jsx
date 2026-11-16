@@ -103,7 +103,10 @@ export default function LeadReview() {
           <h2 id="lead-review-title">Leads waiting for your decision</h2>
           <p className="field-hint">
             Keep each lead with its agent for a new deadline, or reassign it.
-            Nothing moves until you decide.
+            Nothing moves until you decide. A reassigned lead starts fresh for
+            its new agent: the earlier agent&apos;s pending follow-ups and
+            scheduled visits on it are cancelled, and administrators keep the
+            full history.
           </p>
         </div>
         <PhoneMissed size={20} />

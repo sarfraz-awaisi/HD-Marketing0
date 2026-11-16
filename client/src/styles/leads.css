@@ -521,10 +521,6 @@ dialog.lead-name-dialog {
   background: var(--success-soft);
   color: var(--success);
 }
-.workspace-flag.previous {
-  background: var(--danger-soft);
-  color: var(--danger);
-}
 .workspace-note {
   margin: 0 0 12px;
   padding: 10px 12px;

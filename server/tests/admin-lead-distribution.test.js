@@ -186,12 +186,17 @@ describe("sharing selected leads among agents (update 062)", () => {
       "Moved from Zed Agent to Omar Agent",
       "Moved from Zed Agent to Sara Agent",
     ]);
-    // Calls, notes and stage history stay; Zed's pending follow-up moved
-    // with the lead.
-    expect(await history(ids)).toEqual(before.history);
+    // Calls, notes and stage history stay. Zed's pending follow-up is
+    // cancelled, not moved: the new agent starts fresh (update 067).
+    const { followups: now, ...rest } = await history(ids);
+    const { followups: then, ...restBefore } = before.history;
+    expect(rest).toEqual(restBefore);
+    expect(now).toEqual(then.map((f) => ({ ...f, status: "cancelled" })));
     expect(
-      await one("select agent_id from followups where lead_id=$1", [ids[5]]),
-    ).toEqual({ agent_id: omar });
+      await one("select agent_id,status from followups where lead_id=$1", [
+        ids[5],
+      ]),
+    ).toEqual({ agent_id: zed, status: "cancelled" });
     // One audit entry for the action, one per moved lead, and notices.
     expect(
       await one(

@@ -105,14 +105,14 @@ const flags = (container) =>
   [...container.querySelectorAll(".workspace-flag")].map((f) => f.textContent);
 
 describe("the indicators", () => {
-  it("show Reassigned for the whole assignment, New and the earlier result only before the first call", () => {
+  it("show Reassigned for the whole assignment and New before the first call, never the earlier result (update 067)", () => {
     const shown = (extra) =>
       flags(render(<WorkspaceBadges lead={lead(extra)} />).container);
     expect(shown({})).toEqual(["Reassigned", "New"]);
+    // Even if an older server still sent the earlier result.
     expect(shown({ previous_result: "not_interested" })).toEqual([
       "Reassigned",
       "New",
-      "Previously not interested",
     ]);
     expect(
       shown({
@@ -181,11 +181,10 @@ describe("a reassigned lead for its new agent", () => {
     expect(
       await screen.findByRole("heading", { name: /Your current assignment/ }),
     ).toBeInTheDocument();
-    expect(flags(container)).toEqual([
-      "Reassigned",
-      "New",
-      "Previously not interested",
-    ]);
+    expect(flags(container)).toEqual(["Reassigned", "New"]);
+    expect(
+      screen.queryByText("Previously not interested"),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText("No notes added during your current assignment."),
     ).toBeInTheDocument();

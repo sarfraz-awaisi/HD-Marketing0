@@ -306,16 +306,59 @@ describe("a lead reassigned to another agent (update 061)", () => {
     const ids = await aliWorks(lead);
     const before = await history([lead]);
     expect(await moveAll([lead], sara)).toMatchObject({ reassigned: 1 });
-    // Nothing recorded changed: follow-ups and visits only moved to Sara.
-    expect(await history([lead])).toEqual(before);
+    // Update 067: Ali's pending follow-up and scheduled visit are cancelled,
+    // not moved: they stay filed under Ali, with his comments, and each
+    // cancellation is in the audit log. Nothing else recorded changed.
+    const after = await history([lead]);
+    const rest = (h) => ({ ...h, followups: null, visits: null, audit: null });
+    expect(rest(after)).toEqual(rest(before));
+    expect(after.followups.map((f) => [f.id, f.status, f.notes])).toEqual(
+      before.followups.map((f) => [
+        f.id,
+        f.id === ids.pending ? "cancelled" : f.status,
+        f.notes,
+      ]),
+    );
+    expect(after.visits.map((v) => [v.id, v.status, v.notes])).toEqual([
+      [ids.visit, "cancelled", "Ali: bring the file"],
+    ]);
+    expect(after.audit).toBe(before.audit + 2);
     expect(
       await all(
-        "select id,agent_id from followups where lead_id=$1 order by due_at",
+        "select id,agent_id,status from followups where lead_id=$1 order by due_at",
         [lead],
       ),
     ).toEqual([
-      { id: ids.done, agent_id: ali },
-      { id: ids.pending, agent_id: sara },
+      { id: ids.done, agent_id: ali, status: "completed" },
+      { id: ids.pending, agent_id: ali, status: "cancelled" },
+    ]);
+    expect(
+      await all("select id,agent_id,status from visits where lead_id=$1", [
+        lead,
+      ]),
+    ).toEqual([{ id: ids.visit, agent_id: ali, status: "cancelled" }]);
+    expect(
+      await all(
+        "select actor_id,action,entity,entity_id,metadata->>'agent_id' agent,metadata->>'previous_agent_id' previous from audit_log where entity_id=any($1) and action like '%.reassignment_cancelled' order by action",
+        [[ids.pending, ids.visit]],
+      ),
+    ).toEqual([
+      {
+        actor_id: admin,
+        action: "followup.reassignment_cancelled",
+        entity: "followups",
+        entity_id: ids.pending,
+        agent: sara,
+        previous: ali,
+      },
+      {
+        actor_id: admin,
+        action: "visit.reassignment_cancelled",
+        entity: "visits",
+        entity_id: ids.visit,
+        agent: sara,
+        previous: ali,
+      },
     ]);
 
     // Assigned leads: Reassigned and New, no earlier call, temperature,
@@ -339,57 +382,30 @@ describe("a lead reassigned to another agent (update 061)", () => {
       pipeline_counts: { pipeline: 0, personally_contacted: 0 },
     });
 
-    // Lead details: the fresh stage and the indicators.
-    expect(await ok(get(sara, `/leads/${lead}`))).toMatchObject({
-      status: "new",
-      reassigned: true,
-      previous_result: null,
-    });
-    // Timeline: the move itself, and the commitments carried over without
-    // Ali's comments; none of Ali's calls, notes or stage changes.
+    // Lead details: the fresh stage and the indicators, never the earlier
+    // assignment's result (update 067).
+    const details = await ok(get(sara, `/leads/${lead}`));
+    expect(details).toMatchObject({ status: "new", reassigned: true });
+    expect(details).not.toHaveProperty("previous_result");
+    // Timeline: only the move itself; none of Ali's calls, notes, stage
+    // changes, follow-ups or visits.
     const items = await timeline(sara, lead);
-    expect(kinds(items)).toEqual([
-      "assignments",
-      "followups (carried)",
-      "visits (carried)",
-    ]);
-    expect(items.find((i) => i.kind === "followups")).toMatchObject({
-      id: ids.pending,
-      status: "pending",
-      notes: null,
-    });
-    expect(items.find((i) => i.kind === "visits")).toMatchObject({
-      id: ids.visit,
-      property_id: property,
-      status: "scheduled",
-      notes: null,
-    });
+    expect(kinds(items)).toEqual(["assignments"]);
     expect(JSON.stringify(items)).not.toMatch(
       /Ali:|corner plot|private note|Warm/,
     );
 
-    // Direct API reads leave Ali's work out too.
-    const followups = await ok(get(sara, "/followups"));
-    expect(followups.count).toBe(1);
-    expect(followups.data[0]).toMatchObject({
-      id: ids.pending,
-      notes: null,
-      carried_over: true,
-    });
+    // Direct API reads leave Ali's work out too: no follow-up, visit or call.
+    expect((await ok(get(sara, "/followups"))).count).toBe(0);
     expect((await ok(get(sara, "/calls"))).count).toBe(0);
-    const visits = await ok(get(sara, "/visits"));
-    expect(visits.data.map((v) => [v.id, v.notes, v.carried_over])).toEqual([
-      [ids.visit, null, true],
-    ]);
+    expect((await ok(get(sara, "/visits"))).data).toEqual([]);
     const calendar = await ok(
       get(
         sara,
         `/visits/calendar?from=${encodeURIComponent(inHours(-24))}&to=${encodeURIComponent(inHours(24 * 7))}`,
       ),
     );
-    expect(calendar.map((v) => [v.id, v.notes, v.carried_over])).toEqual([
-      [ids.visit, null, true],
-    ]);
+    expect(calendar).toEqual([]);
     expect(
       JSON.stringify(await ok(get(sara, "/followups/unscheduled"))),
     ).not.toContain(lead);
@@ -407,6 +423,18 @@ describe("a lead reassigned to another agent (update 061)", () => {
     );
     expect(JSON.stringify(full)).toMatch(/Ali: call after Friday prayers/);
     expect(JSON.stringify(full)).toMatch(/Ali's private note/);
+    expect(
+      full
+        .filter((i) => ["followups", "visits"].includes(i.kind))
+        .map((i) => [i.id, i.status])
+        .sort(),
+    ).toEqual(
+      [
+        [ids.done, "completed"],
+        [ids.pending, "cancelled"],
+        [ids.visit, "cancelled"],
+      ].sort(),
+    );
     expect(await ok(get(admin, `/leads/${lead}`))).toMatchObject({
       status: "interested",
     });
@@ -427,7 +455,7 @@ describe("a lead reassigned to another agent (update 061)", () => {
       notes: "Overwritten",
     });
     expect(comment.status).toBe(403);
-    expect(comment.body.error).toMatch(/Comments from an earlier assignment/);
+    expect(comment.body.error).toMatch(/earlier assignment/);
     expect(
       (
         await send(sara, "patch", `/followups/${ids.done}`, {
@@ -447,15 +475,15 @@ describe("a lead reassigned to another agent (update 061)", () => {
         [ids.pending, sara],
       ),
     ).rejects.toMatchObject({ code: "42501" });
-    expect(await history([lead])).toEqual(before);
-    // She may reschedule a carried-over follow-up; its comments stay.
-    await ok(
-      send(sara, "patch", `/followups/${ids.pending}`, { due_at: inHours(40) }),
-    );
+    // Nor reopen or reschedule Ali's cancelled follow-up (update 067).
     expect(
-      (await one("select notes from followups where id=$1", [ids.pending]))
-        .notes,
-    ).toBe("Ali: call after Friday prayers");
+      (
+        await send(sara, "patch", `/followups/${ids.pending}`, {
+          due_at: inHours(40),
+        })
+      ).status,
+    ).toBe(403);
+    expect(await history([lead])).toEqual(after);
 
     // Her own work shows normally; Reassigned stays, New goes.
     await logCall(sara, lead, "Interested", {
@@ -480,13 +508,7 @@ describe("a lead reassigned to another agent (update 061)", () => {
       pipeline_counts: { pipeline: 1, personally_contacted: 1 },
     });
     const mine = await timeline(sara, lead);
-    expect(kinds(mine)).toEqual([
-      "assignments",
-      "calls",
-      "followups (carried)",
-      "notes",
-      "visits (carried)",
-    ]);
+    expect(kinds(mine)).toEqual(["assignments", "calls", "notes"]);
     // Choosing the stage the lead already had (Interested, set by Ali)
     // shows as hers.
     await ok(send(sara, "patch", `/leads/${lead}`, { status: "interested" }));
@@ -508,7 +530,7 @@ describe("a lead reassigned to another agent (update 061)", () => {
     );
   });
 
-  it("shows Previously not interested only when the previous assignment ended Not interested", async () => {
+  it("never gives the new agent the earlier assignment's result, Not interested included (update 067)", async () => {
     const leads = {};
     for (const outcome of [
       "No answer",
@@ -538,14 +560,14 @@ describe("a lead reassigned to another agent (update 061)", () => {
         reassigned: true,
         status: "new",
         last_call_at: null,
-        previous_result: outcome === "Not interested" ? "not_interested" : null,
+        previous_result: null,
       });
     // The Lost lead: New, in her first calls, without Ali's reason or note;
     // still Lost for the administrator and the reports.
     expect(await row(sara, lost, "&call=uncalled")).toMatchObject({
       status: "new",
       lost_reason: null,
-      previous_result: "not_interested",
+      previous_result: null,
       first_call_reopened: true,
     });
     expect(await ok(get(sara, `/leads/${lost}`))).toMatchObject({
@@ -633,7 +655,7 @@ describe("a lead reassigned to another agent (update 061)", () => {
     expect(await row(sara, lead, "&call=uncalled")).toMatchObject({
       reassigned: true,
       first_call_at: null,
-      previous_result: "not_interested",
+      previous_result: null,
       last_call_outcome: "Interested",
     });
     // Her deadline passes: a missed first call, though the administrator
@@ -697,8 +719,8 @@ describe("a lead reassigned to another agent (update 061)", () => {
     await ok(
       send(sara, "patch", `/followups/${saraDone.id}`, { status: "completed" }),
     );
-    // To Omar: nothing from Ali or Sara; Ali's pending follow-up and the
-    // visit still carried over.
+    // To Omar: nothing from Ali or Sara. Ali's pending follow-up and visit
+    // were cancelled at the first move (update 067).
     await moveOne(lead, omar);
     expect(await row(omar, lead)).toMatchObject({
       reassigned: true,
@@ -706,23 +728,17 @@ describe("a lead reassigned to another agent (update 061)", () => {
       last_call_at: null,
     });
     let items = await timeline(omar, lead);
-    expect(kinds(items)).toEqual([
-      "assignments",
-      "followups (carried)",
-      "visits (carried)",
-    ]);
-    expect(items.find((i) => i.kind === "followups").id).toBe(ids.pending);
+    expect(kinds(items)).toEqual(["assignments"]);
+    expect(
+      await one("select status from followups where id=$1", [ids.pending]),
+    ).toEqual({ status: "cancelled" });
     expect(JSON.stringify(items)).not.toMatch(
       /Sara period note|Sara: done|Ali/,
     );
     // Back to Ali (A, B, C, A): a fresh period for him too.
     await moveAll([lead], ali);
     items = await timeline(ali, lead);
-    expect(kinds(items)).toEqual([
-      "assignments",
-      "followups (carried)",
-      "visits (carried)",
-    ]);
+    expect(kinds(items)).toEqual(["assignments"]);
     expect(JSON.stringify(items)).not.toMatch(/private note|corner plot|Sara/);
     expect(await row(ali, lead)).toMatchObject({
       reassigned: true,
@@ -730,15 +746,112 @@ describe("a lead reassigned to another agent (update 061)", () => {
       temperature: null,
     });
     expect(
-      (await ok(get(ali, "/followups"))).data
-        .filter((f) => f.lead_id === lead)
-        .map((f) => [f.id, f.notes]),
-    ).toEqual([[ids.pending, null]]);
+      (await ok(get(ali, "/followups"))).data.filter((f) => f.lead_id === lead),
+    ).toEqual([]);
     // The administrator has all three periods.
     const full = await timeline(admin, lead);
     expect(full.filter((i) => i.kind === "assignments")).toHaveLength(4);
     expect(JSON.stringify(full)).toMatch(/Sara period note/);
     expect(JSON.stringify(full)).toMatch(/Ali's private note/);
+  });
+
+  it("keeps the earlier agent's work out of reach of the new agent's direct requests, IDs and filters (update 067)", async () => {
+    const lead = await customer(ali, "Probe lead");
+    const ids = await aliWorks(lead);
+    const aliCall = (await one("select id from calls where lead_id=$1", [lead]))
+      .id;
+    const deal = (
+      await one(
+        "insert into deals(lead_id,property_id,agent_id,stage,expected_value) values($1,$2,$3,'negotiation',5000000) returning id",
+        [lead, property, ali],
+      )
+    ).id;
+    // A lead that stays Ali's.
+    const other = await customer(ali, "Not Sara's lead");
+    await logCall(ali, other, "Interested", { notes: "Ali only" });
+    const otherCall = (
+      await one("select id from calls where lead_id=$1", [other])
+    ).id;
+    await moveAll([lead], sara);
+    const earlier = [aliCall, ids.pending, ids.done, ids.visit, deal];
+
+    // Changing any of Ali's records by its ID is refused the same way,
+    // whatever the change asks, so the answer says nothing about the record.
+    for (const [path, body] of [
+      [
+        `/calls/${aliCall}`,
+        { outcome: "Follow-up required", notes: "", deal_tags: [] },
+      ],
+      [`/calls/${aliCall}`, { outcome: "Busy", notes: "", deal_tags: [] }],
+      [`/followups/${ids.pending}`, { status: "pending" }],
+      [`/followups/${ids.done}`, { due_at: inHours(5) }],
+      [`/visits/${ids.visit}`, { status: "scheduled" }],
+      [`/deals/${deal}`, { expected_value: 1 }],
+    ]) {
+      const res = await send(sara, "patch", path, body);
+      expect(res.status, path + JSON.stringify(body)).toBe(403);
+      expect(res.body.error).toMatch(/earlier assignment/);
+    }
+    // A record on a lead that is not hers: not found, as before.
+    expect(
+      (
+        await send(sara, "patch", `/calls/${otherCall}`, {
+          outcome: "Follow-up required",
+          notes: "",
+          deal_tags: [],
+        })
+      ).status,
+    ).toBe(404);
+
+    // Lists and their filters never return Ali's work.
+    for (const path of [
+      "/calls",
+      "/calls?status=completed",
+      "/followups?view=cancelled",
+      "/followups?view=completed",
+      "/visits?status=cancelled",
+      "/visits?status=completed",
+      "/deals",
+    ]) {
+      const text = JSON.stringify((await ok(get(sara, path))).data);
+      for (const id of earlier) expect(text, path).not.toContain(id);
+    }
+    // The lead's own stage and lost reason, Ali's result, cannot be probed
+    // with filters; the lead itself shows her own stage.
+    for (const filter of ["status=interested", "lost_reason=not_interested"])
+      expect((await get(sara, "/leads?" + filter)).status, filter).toBe(400);
+    expect(
+      (await ok(get(sara, "/leads?limit=100"))).data.find((l) => l.id === lead),
+    ).toMatchObject({ status: "new", reassigned: true });
+    expect(kinds(await timeline(sara, lead))).toEqual(["assignments"]);
+    // Recordings are for administrators only.
+    expect((await get(sara, `/calls/${aliCall}/recording`)).status).toBe(403);
+    // Nothing was changed by any of it.
+    expect(
+      await all(
+        "select status from followups where id=any($1) order by status",
+        [[ids.pending, ids.done]],
+      ),
+    ).toEqual([{ status: "cancelled" }, { status: "completed" }]);
+
+    // The administrator keeps everything, the cancellations included.
+    expect(
+      (await ok(get(admin, "/leads?status=interested&limit=100"))).data.map(
+        (l) => l.id,
+      ),
+    ).toContain(lead);
+    expect(
+      JSON.stringify((await ok(get(admin, "/followups?view=cancelled"))).data),
+    ).toContain(ids.pending);
+    expect(kinds(await timeline(admin, lead))).toEqual(
+      expect.arrayContaining([
+        "calls",
+        "notes",
+        "followups",
+        "visits",
+        "deals",
+      ]),
+    );
   });
 
   it("leaves a lead's first agent, and a lead returned to the same agent, with the whole history", async () => {
