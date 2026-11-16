@@ -490,6 +490,31 @@ add(
   "Viewed a lead's phone number",
   (c) => `Viewed the phone number of ${leadRef(c)}.`,
 );
+// Lead pipeline export: one temperature of every agent's leads. Each number
+// in the file is also recorded as viewed (lead.phone_revealed).
+const exportedTemperature = { hot: "hot", warm: "warm", cold: "cold" };
+const exportedFormat = { csv: "a CSV file", xlsx: "an Excel file" };
+add(
+  "pipeline.exported",
+  "leads",
+  "leads",
+  "view",
+  "Exported Lead pipeline leads",
+  (c) => {
+    const temperature = exportedTemperature[c.m.temperature];
+    const leads = Number.isInteger(c.m.leads) ? c.m.leads : null;
+    const agents = Number.isInteger(c.m.agents) ? c.m.agents : null;
+    if (!temperature || leads === null)
+      return "Exported leads from the Lead pipeline.";
+    return (
+      `Exported ${count(leads, temperature + " lead")}` +
+      (agents === null ? "" : ` of ${count(agents, "agent")}`) +
+      ` from the Lead pipeline` +
+      (exportedFormat[c.m.format] ? ` as ${exportedFormat[c.m.format]}` : "") +
+      ", with their phone numbers."
+    );
+  },
+);
 add(
   "lead.review_kept",
   "leads",

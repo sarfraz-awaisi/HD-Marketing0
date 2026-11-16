@@ -666,3 +666,41 @@ dialog.lead-name-dialog {
   font-size: 13px;
   color: var(--muted);
 }
+/* Lead pipeline export: the file type, then one button per temperature with
+   its count beneath; three side by side on a laptop, one per row on a
+   phone. */
+.pipeline-export fieldset {
+  margin: 0 0 16px;
+}
+.pipeline-export-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+.pipeline-export-choices .button {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 56px;
+  text-align: left;
+}
+.pipeline-export-choices small {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.pipeline-export-note {
+  margin-top: 14px;
+  color: var(--ink-3);
+  font-size: var(--text-sm);
+}
+.pipeline-export-done {
+  color: var(--success);
+  font-size: var(--text-sm);
+}
+.pipeline-export footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 15px;
+  border-top: 1px solid var(--line);
+}

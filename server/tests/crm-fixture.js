@@ -45,17 +45,56 @@ export async function startCrmDatabase() {
     from(table) {
       let fields = "*";
       const filters = [];
+      const where = () =>
+        filters
+          .map(([k, , many], i) =>
+            many ? `${k}=any($${i + 1})` : `${k}=$${i + 1}`,
+          )
+          .join(" and ");
       const q = {
         select: (f) => ((fields = f), q),
         eq: (k, v) => (filters.push([k, v]), q),
+        in: (k, v) => (filters.push([k, v, true]), q),
         single: async () => ({
           data: await one(
-            `select ${fields} from public.${table} where ${filters.map(([k], i) => `${k}=$${i + 1}`).join(" and ")}`,
+            `select ${fields} from public.${table} where ${where()}`,
             filters.map(([, v]) => v),
           ),
         }),
         // As the Supabase client: the row, or null when there is none.
         maybeSingle: async () => ({ data: (await q.single()).data ?? null }),
+        // As the Supabase client: awaiting the query gives every matching
+        // row, or the database's error.
+        then: (resolve, reject) =>
+          all(
+            `select ${fields} from public.${table}${filters.length ? " where " + where() : ""}`,
+            filters.map(([, v]) => v),
+          )
+            .then(
+              (data) => ({ data, error: null }),
+              (e) => ({
+                data: null,
+                error: { code: e.code, message: e.message },
+              }),
+            )
+            .then(resolve, reject),
+        // As the Supabase client: one row added, or the database's error.
+        insert: async (row) => {
+          const keys = Object.keys(row);
+          try {
+            await pg.query(
+              `insert into public.${table}(${keys.join(",")}) values(${keys.map((_, i) => `$${i + 1}`).join(",")})`,
+              keys.map((k) =>
+                row[k] && typeof row[k] === "object"
+                  ? JSON.stringify(row[k])
+                  : row[k],
+              ),
+            );
+            return { error: null };
+          } catch (e) {
+            return { error: { code: e.code, message: e.message } };
+          }
+        },
       };
       return q;
     },
