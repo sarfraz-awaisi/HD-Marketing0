@@ -14,7 +14,13 @@ import { drillParams, useDrillUrl } from "../../lib/useDrillUrl";
 import { Button, Table, ErrorBox, Loader } from "../../components/common/UI";
 import ReportDrilldown from "../../components/reports/ReportDrilldown";
 import TeamPerformance from "../../components/reports/TeamPerformance";
-import { dayRange, periodDays, periodOf, periods } from "../../lib/periods";
+import {
+  dayRange,
+  periodDays,
+  periodOf,
+  periods,
+  teamPeriods,
+} from "../../lib/periods";
 import "../../styles/reports.css";
 // Administrators see everyone's numbers. Agents see the same reports with
 // only their own work, as My performance (update 051). Update 063:
@@ -448,7 +454,8 @@ export default function Reports() {
   const source = url.get("source") || "";
   // Each report uses only the filters that apply to it.
   const usesAgent = !["agents", "team"].includes(tab) && !own,
-    usesSource = !["sources", "agents", "team"].includes(tab);
+    usesSource = !["sources", "agents", "team"].includes(tab),
+    shownPeriods = tab === "team" ? teamPeriods : periods;
   const params = {
     from: new Date(from + "T00:00:00+05:00").toISOString(),
     to: new Date(
@@ -562,16 +569,17 @@ export default function Reports() {
       </div>
       <section className="panel report-panel">
         <div className="toolbar">
-          {/* Update 063: named periods, weeks Sunday to Saturday. */}
+          {/* Update 063: named periods, weeks Sunday to Saturday. Update
+              071: Team performance's own list, with Last 7 days. */}
           <select
             aria-label="Report period"
-            value={periodOf(from, to)}
+            value={periodOf(from, to, undefined, shownPeriods)}
             onChange={(e) => {
               const p = periodDays(e.target.value);
               if (p) change(p);
             }}
           >
-            {periods.map(([key, label]) => (
+            {shownPeriods.map(([key, label]) => (
               <option key={key} value={key}>
                 {label}
               </option>

@@ -1,12 +1,13 @@
 // Team report numbers (update 063): what each counts, in the words the
-// records window and the tables use.
+// records window and the tables use. Update 071: the eight columns of Team
+// performance, with Follow-ups and Time.
 export const teamMetrics = {
   received: [
     "Leads received",
-    "Different leads that reached the agent in this period.",
+    "Different leads given to the agent in this period, new or from another agent. A lead given to them more than once counts once.",
   ],
   received_first_time: [
-    "First time",
+    "New",
     "Leads received that no other agent had before.",
   ],
   received_reassigned: [
@@ -15,13 +16,24 @@ export const teamMetrics = {
   ],
   moved_away: [
     "Moved away",
-    "Times one of the agent's leads was given to someone else.",
+    "Different leads moved from the agent to another agent in this period. A lead moved back to the administrators, or deleted, is not counted.",
   ],
   assignment_events: [
     "Assignment history",
     "Every assignment to or from the agent in this period, repeated transfers included.",
   ],
-  calls: ["Calls", "Calls the agent recorded, by when they started."],
+  calls: [
+    "Total calls",
+    "Recorded calls: every call the agent saved themselves, by when it started. An administrator's calls on their leads are not counted.",
+  ],
+  followup_leads: [
+    "Follow-ups",
+    "Leads whose latest call in the agent's assignment ended Follow-up required, at the end of the period (now, for a period still running). Each lead once, for the agent who had it then.",
+  ],
+  worked_minutes: [
+    "Time",
+    "Worked time from attendance: check-in to check-out of each checked-out day. A day without a checkout adds nothing.",
+  ],
   answered: ["Answered", "Calls the agent recorded that were answered."],
   not_answered: [
     "Not answered",

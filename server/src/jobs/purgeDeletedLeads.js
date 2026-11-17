@@ -4,8 +4,9 @@ function checked(result) {
   return result.data;
 }
 // Erased leads' recordings, queued by the database: each stays queued until
-// both Storage and provider deletion have succeeded. One batch of up to 100.
-export async function cleanLeadRecordings(db) {
+// both Storage and provider deletion have succeeded. One batch of up to 100;
+// onRemoved is told of each one removed (update 071).
+export async function cleanLeadRecordings(db, onRemoved = () => {}) {
   const queue = checked(await db.rpc("lead_recording_cleanup_batch"));
   for (const row of queue) {
     if (row.storage_path)
@@ -13,6 +14,7 @@ export async function cleanLeadRecordings(db) {
     if (row.provider_ref)
       await callingProvider().deleteRecording(row.provider_ref);
     checked(await db.rpc("lead_recording_cleanup_done", { p_id: row.id }));
+    onRemoved();
   }
   return queue.length;
 }

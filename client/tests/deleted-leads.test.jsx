@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -153,14 +153,35 @@ describe("deleted lead controls", () => {
   });
   it("deletes the selected leads instantly only after DELETE is typed (update 069)", async () => {
     const user = userEvent.setup();
+    const base = mocks.api.getMockImplementation();
+    // Update 071: the database reviews the selection first.
+    mocks.api.mockImplementation(async (path, options) =>
+      path === "/leads/erase/preview"
+        ? {
+            selected: 1,
+            eligible: 1,
+            eligible_ids: ["lead"],
+            won_deal: 0,
+            not_in_bin: 0,
+            missing: 0,
+            records: { calls: 2, recordings: 1, notes: 1 },
+            sheet_leads: 0,
+            erased_today: 0,
+            alert_over: 50,
+          }
+        : base(path, options),
+    );
     mount(<DeletedLeads />);
     await user.click(
       await screen.findByRole("checkbox", { name: "Select Deleted customer" }),
     );
     await user.click(screen.getByRole("button", { name: "Delete instantly" }));
     const dialog = screen.getByRole("dialog", { name: "Delete permanently" });
-    expect(dialog).toHaveTextContent("This lead and all its records");
-    expect(dialog).toHaveTextContent("This cannot be undone.");
+    expect(
+      await within(dialog).findByText(/1 lead will be deleted permanently/),
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("2 calls");
+    expect(dialog).toHaveTextContent("This cannot be undone");
     const button = screen.getByRole("button", {
       name: "Delete lead permanently",
     });
@@ -229,9 +250,21 @@ describe("deleted lead controls", () => {
       "/lead-imports/file/erase",
       expect.objectContaining({ method: "POST", body: {} }),
     );
+    // Update 071: files not confirmed gone are shown before closing.
+    const done = await screen.findByRole("dialog", {
+      name: "Delete permanently: finished",
+    });
+    expect(done).toHaveTextContent(
+      "12 leads permanently deleted from the CRM database.",
+    );
+    expect(done).toHaveTextContent("1 lead kept (won deal or no longer here).");
+    expect(done).toHaveTextContent(
+      "Whether every file has left storage could not be confirmed.",
+    );
+    await user.click(within(done).getByRole("button", { name: "Done" }));
     expect(
       await screen.findByText(
-        "12 permanently deleted, 1 kept (won deal or no longer here). Some recordings or documents will be removed from storage later.",
+        "12 permanently deleted, 1 kept (won deal or no longer here). Storage clean-up not confirmed",
       ),
     ).toBeInTheDocument();
   });
