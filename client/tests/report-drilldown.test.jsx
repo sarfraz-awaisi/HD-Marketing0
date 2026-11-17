@@ -500,12 +500,14 @@ describe("searching, sorting and paging", () => {
 describe("other reports", () => {
   it("opens summary numbers, and explains numbers that have no lead list", async () => {
     open("/reports?from=2026-11-01&to=2026-11-04&source=Meta");
-    // The metric's name and its value both open it.
-    const named = await screen.findAllByRole("button", {
-      name: "leads contacted: 18. Show the records",
+    // Each number is a tile with its name and a note; the tile opens it.
+    const tile = await screen.findByRole("button", {
+      name: "Contacted leads: 18. Show the records",
     });
-    expect(named.map((b) => b.textContent)).toEqual(["leads contacted", "18"]);
-    fireEvent.click(named[1]);
+    expect(tile).toHaveTextContent(
+      "Contacted leads18Called at least once in this period",
+    );
+    fireEvent.click(tile);
     await waitFor(() =>
       expect(requests().at(-1)).toMatchObject({
         report: "summary",
@@ -531,11 +533,9 @@ describe("other reports", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
     const count = requests().length;
     fireEvent.click(
-      (
-        await screen.findAllByRole("button", {
-          name: "active agents: 4. Show the records",
-        })
-      )[0],
+      await screen.findByRole("button", {
+        name: "Active agents: 4. Show the records",
+      }),
     );
     const dialog = await screen.findByRole("dialog");
     expect(
@@ -545,6 +545,135 @@ describe("other reports", () => {
       within(dialog).getByRole("link", { name: "Open employee management" }),
     ).toHaveAttribute("href", "/team");
     expect(requests()).toHaveLength(count);
+  });
+  it("lays the summary out in boxes: the period, first calls, what needs attention now and totals", async () => {
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) =>
+      path.startsWith("/reports?")
+        ? {
+            leads: 30,
+            leads_contacted: 18,
+            completed_calls: 40,
+            completed_visits: 2,
+            followups_completed: 11,
+            won_deals: 1,
+            revenue: 2500000,
+            first_calls: 9,
+            on_time_first_calls: 8,
+            first_calls_with_deadline: 10,
+            missed_in_period: 1,
+            avg_first_call_minutes: 75,
+            missed_first_calls: 3,
+            uncalled_leads: 4,
+            overdue_followups: 5,
+            due_followups: 6,
+            scheduled_visits: 7,
+            today_completed_calls: 8,
+            total_leads: 1234567,
+            assigned_leads: 60,
+            active_agents: 4,
+            deleted_today: 0,
+            by_status: { new: 20, contacted: 10 },
+            by_source: { manual: 12, Meta: 18 },
+            open_by_status: { new: 50, contacted: 25 },
+          }
+        : base(path, options),
+    );
+    open("/reports?from=2026-11-01&to=2026-11-04");
+    const box = async (name) =>
+      (await screen.findByRole("heading", { name })).closest("section");
+    const period = await box("This period");
+    expect(period).toHaveTextContent(
+      "1 Nov 2026 – 4 Nov 2026 · All agents · All sources",
+    );
+    expect(
+      within(period)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual([
+      "Leads created: 30. Show the records",
+      "Contacted leads: 18. Show the records",
+      "Completed calls: 40. Show the records",
+      "Completed follow-ups: 11. Show the records",
+      "Completed visits: 2. Show the records",
+      "Won deals: 1. Show the records",
+      // The amount as the CRM formats rupees.
+      expect.stringMatching(
+        /^Won revenue: Rs\s?2,?500,000\. Show the records$/,
+      ),
+    ]);
+    const first = await box("First-call performance");
+    expect(
+      within(first).getByRole("button", {
+        name: "First calls with a deadline: 10. Show the records",
+      }),
+    ).toBeInTheDocument();
+    expect(first).toHaveTextContent("80%");
+    expect(first).toHaveTextContent("8 of 10 with a deadline");
+    expect(first).toHaveTextContent("1 h 15 min");
+    // Live numbers are apart, and say the dates do not change them.
+    const now = await box("Needs attention now");
+    expect(now).toHaveTextContent(
+      "Live: the dates above do not change these; the agent and source filters do",
+    );
+    for (const label of [
+      "Missed first calls: 3",
+      "Waiting for a first call: 4",
+      "Overdue follow-ups: 5",
+      "Follow-ups due: 6",
+      "Upcoming visits: 7",
+      "Calls completed today: 8",
+    ])
+      expect(
+        within(now).getByRole("button", {
+          name: `${label}. Show the records`,
+        }),
+      ).toBeInTheDocument();
+    // One lead total (the filtered count was the same number), with large
+    // numbers grouped; the whole-CRM numbers say so.
+    const totals = await box("Totals");
+    expect(
+      within(totals)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual([
+      "All leads: 1,234,567. Show the records",
+      "Active agents: 4. Show the records",
+      "Leads deleted today: 0. Show the records",
+    ]);
+    expect(totals).toHaveTextContent(
+      "Whole CRM: agent accounts that can sign in",
+    );
+    // The on-time tile opens its first calls.
+    fireEvent.click(
+      within(first).getByRole("button", {
+        name: "On-time first calls: 8 of 10. Show the records",
+      }),
+    );
+    await waitFor(() =>
+      expect(requests().at(-1)).toMatchObject({
+        report: "summary",
+        metric: "on_time_first_calls",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
+    // Sources, largest first, and the way to the full source report.
+    const sources = (
+      await screen.findByRole("heading", {
+        name: "Leads created in this period, by source",
+      })
+    ).closest("section");
+    expect(sources).toHaveTextContent("Meta18Manual12");
+    // The definitions are folded away until asked for.
+    expect(
+      screen.getByText("How these numbers are counted").closest("details"),
+    ).not.toHaveAttribute("open");
+    fireEvent.click(
+      within(sources).getByRole("button", {
+        name: "Open the Lead sources report",
+      }),
+    );
+    await waitFor(() => expect(where()).toContain("tab=sources"));
   });
   it("opens a source's numbers without the source filter the report ignores", async () => {
     open(
@@ -698,15 +827,19 @@ describe("an agent's own reports (update 051)", () => {
       screen.getByRole("tab", { name: "My activity" }),
     ).toBeInTheDocument();
     // Numbers that are not about the agent's work are left out.
-    expect(await screen.findByText("leads contacted")).toBeInTheDocument();
-    expect(screen.queryByText("active agents")).toBeNull();
+    expect(
+      await screen.findByRole("button", {
+        name: "Contacted leads: 18. Show the records",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Active agents/ })).toBeNull();
     expect(mocks.api.mock.calls.some(([path]) => path === "/users")).toBe(
       false,
     );
     fireEvent.click(
-      screen.getAllByRole("button", {
-        name: "leads contacted: 18. Show the records",
-      })[1],
+      screen.getByRole("button", {
+        name: "Contacted leads: 18. Show the records",
+      }),
     );
     const dialog = await screen.findByRole("dialog");
     expect(

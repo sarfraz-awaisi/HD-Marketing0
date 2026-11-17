@@ -7,7 +7,10 @@ import { lostReasonLabel, statusLabel, statuses } from "./pipeline";
 export const sourceName = (s) =>
   s === "CSV" ? "CSV / Excel" : s || "No source";
 const summary = {
-  total_leads: ["All leads", "Every lead, whenever it was created."],
+  total_leads: [
+    "All leads",
+    "Every lead that matches the agent and source filters, whenever it was created.",
+  ],
   assigned_leads: [
     "Assigned leads",
     "Every lead that matches the agent and source filters, whenever it was created.",
