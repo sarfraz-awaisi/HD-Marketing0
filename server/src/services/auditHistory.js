@@ -8,7 +8,7 @@ export const auditModules = [
   ["leads", "Leads"],
   ["calls", "Calls"],
   ["activities", "Follow-ups, visits and deals"],
-  ["targets", "Targets"],
+  ["targets", "Targets and daily KPIs"],
   ["properties", "Properties"],
   ["documents", "Documents"],
   ["accounts", "Employee accounts"],
@@ -709,6 +709,81 @@ add(
     const from = dayText(c.m.from),
       to = dayText(c.m.to);
     return `Copied ${number(c.m.copied) != null ? count(c.m.copied, "target") : "targets"}${from ? ` from the period starting ${from}` : ""}${to ? ` to the period starting ${to}` : ""}.`;
+  },
+);
+
+// Daily KPIs (update 070). Rule changes take effect from the day recorded.
+const kpiName = (c) =>
+  typeof c.m.title === "string" && c.m.title ? `“${c.m.title}”` : "a KPI";
+const fromDay = (c) =>
+  dayText(c.m.rules_from)
+    ? ` Its rules change from ${dayText(c.m.rules_from)}.`
+    : "";
+const kpiAnswer = (value) =>
+  value === true
+    ? "Yes"
+    : value === false
+      ? "No"
+      : value == null
+        ? "no answer"
+        : String(value);
+add(
+  "kpi.created",
+  "kpis",
+  "targets",
+  "create",
+  "Created a daily KPI",
+  (c) =>
+    `Created the KPI ${kpiName(c)}${dayText(c.m.effective_from) ? `, from ${dayText(c.m.effective_from)}` : ""}.`,
+);
+add(
+  "kpi.updated",
+  "kpis",
+  "targets",
+  "update",
+  "Changed a daily KPI",
+  (c) =>
+    `Changed the KPI ${kpiName(c)}${typeof c.m.previous_title === "string" ? ` (was “${c.m.previous_title}”)` : ""}.${fromDay(c)}`,
+);
+add(
+  "kpi.archived",
+  "kpis",
+  "targets",
+  "delete",
+  "Archived a daily KPI",
+  (c) => `Archived the KPI ${kpiName(c)}; its answers are kept.${fromDay(c)}`,
+);
+add(
+  "kpi.restored",
+  "kpis",
+  "targets",
+  "update",
+  "Restored a daily KPI",
+  (c) => `Restored the KPI ${kpiName(c)}.${fromDay(c)}`,
+);
+add(
+  "kpi.deleted",
+  "kpis",
+  "targets",
+  "delete",
+  "Deleted a daily KPI",
+  (c) => `Deleted the KPI ${kpiName(c)}, which had no answers.`,
+);
+add(
+  "kpi.answers_saved",
+  "kpi_submissions",
+  "targets",
+  "update",
+  "Saved daily KPI answers",
+  (c) => {
+    const answers = Array.isArray(c.m.answers) ? c.m.answers : [];
+    const list = answers
+      .filter((a) => a && typeof a.title === "string")
+      .map(
+        (a) =>
+          `${a.title}: ${a.before === null || a.before === undefined ? "" : `${kpiAnswer(a.before)} → `}${kpiAnswer(a.after)}`,
+      );
+    return `Saved daily KPI answers${dayText(c.m.day) ? ` for ${dayText(c.m.day)}` : ""}${list.length ? `: ${listText(list)}` : ""}.`;
   },
 );
 
@@ -2123,6 +2198,8 @@ const moduleByEntity = {
   deals: "activities",
   notes: "activities",
   targets: "targets",
+  kpis: "targets",
+  kpi_submissions: "targets",
   properties: "properties",
   knowledge_documents: "documents",
   profiles: "accounts",

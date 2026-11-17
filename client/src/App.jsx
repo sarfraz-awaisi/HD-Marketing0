@@ -17,6 +17,7 @@ const AgentPipeline = lazy(routeLoaders.AgentPipeline);
 const Inventory = lazy(routeLoaders.Inventory);
 const Dealers = lazy(routeLoaders.Dealers);
 const Targets = lazy(routeLoaders.Targets);
+const DailyKpis = lazy(routeLoaders.DailyKpis);
 const CallReview = lazy(routeLoaders.CallReview);
 const Team = lazy(routeLoaders.Team);
 const Reports = lazy(routeLoaders.Reports);
@@ -109,6 +110,9 @@ export default function App() {
                 />
                 <Route path="documents" element={<Documentation />} />
                 <Route path="documents/:id" element={<Documentation />} />
+                {/* Daily KPIs (update 070) replace Team and My targets in
+                    the menu; earlier sales targets stay at /targets. */}
+                <Route path="kpis" element={<DailyKpis />} />
                 <Route path="targets" element={<Targets />} />
                 {/* Agents see their own numbers as My performance (051). */}
                 <Route path="reports" element={<Reports />} />

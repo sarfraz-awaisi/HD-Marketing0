@@ -1,0 +1,245 @@
+/* Daily KPIs (update 070): the agent's form, the administrators' list and
+   report. Words always say the state; colour only supports them. */
+.kpi-days .review-tabs {
+  flex-wrap: wrap;
+}
+.kpi-status-line {
+  margin: 10px 0 0;
+  color: var(--ink-3);
+  font-size: var(--text-sm, 13px);
+}
+.kpi-day-status {
+  color: var(--warning);
+}
+.kpi-form {
+  display: grid;
+  gap: 16px;
+}
+.kpi-group h2 {
+  margin-bottom: 2px;
+}
+.kpi-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 280px);
+  gap: 12px 20px;
+  align-items: start;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+.kpi-item:first-of-type {
+  border-top: 0;
+}
+.kpi-question,
+.kpi-answer {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.kpi-question span {
+  color: var(--ink);
+}
+.kpi-question small,
+.kpi-sub {
+  display: block;
+  color: var(--ink-3);
+  font-size: var(--text-xs, 12px);
+}
+.kpi-choice {
+  display: inline-flex;
+  gap: 8px;
+}
+.kpi-choice button {
+  min-width: 84px;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+.kpi-choice button.selected {
+  border-color: var(--brand-navy);
+  background: var(--brand-navy);
+  color: #fff;
+}
+.kpi-choice button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+.kpi-answer input {
+  max-width: 140px;
+  min-height: 44px;
+  font-size: 16px;
+}
+.kpi-answer input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+.kpi-error {
+  color: var(--danger);
+}
+.kpi-progress {
+  display: inline-block;
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--neutral-soft);
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+}
+.kpi-progress.met {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.kpi-progress.below,
+.kpi-progress.missed {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.kpi-week {
+  display: grid;
+  gap: 4px;
+}
+.kpi-week small {
+  color: var(--ink-3);
+}
+.kpi-save {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 -6px 18px rgba(20, 34, 56, 0.08);
+}
+.kpi-manage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.kpi-manage-table td {
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.kpi-manage-table td:nth-child(n + 3):nth-child(-n + 6) {
+  white-space: nowrap;
+}
+.kpi-manage-table td:nth-child(7) {
+  min-width: 140px;
+}
+.kpi-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kpi-agents {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.kpi-agent-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 4px 12px;
+  max-height: 220px;
+  overflow: auto;
+}
+.kpi-filters .review-tabs {
+  flex-wrap: wrap;
+}
+.kpi-filter-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+.kpi-filter-fields label {
+  display: grid;
+  gap: 4px;
+  min-width: 160px;
+}
+.kpi-report-table td {
+  min-width: 110px;
+}
+.kpi-report-table td:first-child {
+  white-space: nowrap;
+}
+.kpi-history-table td {
+  white-space: nowrap;
+}
+.kpi-report-table td.met,
+.kpi-history-table td.met {
+  color: var(--success);
+}
+.kpi-report-table td.below,
+.kpi-report-table td.missed,
+.kpi-history-table td.below,
+.kpi-history-table td.missed {
+  color: var(--warning);
+}
+.kpi-sub.missed {
+  color: var(--warning);
+}
+.kpi-overall {
+  font-weight: 600;
+}
+.kpi-overall.complete,
+.kpi-overall.on_track {
+  color: var(--success);
+}
+.kpi-overall.below {
+  color: var(--warning);
+}
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--info);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.kpi-weeks {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kpi-weeks li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.kpi-history-modal {
+  width: min(960px, calc(100vw - 32px));
+}
+.kpi-today-card p {
+  margin: 4px 0 12px;
+}
+@media (max-width: 720px) {
+  .kpi-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kpi-choice button {
+    flex: 1;
+  }
+  .kpi-choice {
+    display: flex;
+  }
+  .kpi-answer input {
+    max-width: none;
+  }
+}

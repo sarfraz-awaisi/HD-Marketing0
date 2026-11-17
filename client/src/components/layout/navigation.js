@@ -76,7 +76,7 @@ export const adminNavigation = [
   {
     label: "Team",
     links: [
-      ["/targets", "Team targets", Target],
+      ["/kpis", "Daily KPIs", Target],
       ["/reports", "Reports", BarChart3],
       ["/team", "Employee management", UsersRound],
       ["/attendance", "My attendance", CalendarCheck],
@@ -138,7 +138,7 @@ export const agentNavigation = [
     label: "My work",
     links: [
       ["/my-tasks", "My tasks", ListChecks],
-      ["/targets", "My targets", Target],
+      ["/kpis", "Daily KPIs", Target],
       ["/reports", "My performance", BarChart3],
       ["/attendance", "My attendance", CalendarCheck],
     ],

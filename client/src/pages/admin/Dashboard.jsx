@@ -18,7 +18,6 @@ import {
 import { api, pkr, monthRange, reportSearch, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { statuses } from "../../lib/pipeline";
-import TargetCard from "../../components/targets/TargetCard";
 import { Loader, ErrorBox, Badge } from "../../components/common/UI";
 import { useSecurityAlertSummary } from "../../lib/securityAlerts";
 import { useMetaSummary } from "../../lib/meta";
@@ -77,30 +76,35 @@ const todayLabel = (now = new Date()) =>
     year: "numeric",
     timeZone: "Asia/Karachi",
   }).format(now);
-// An agent's targets running today: the day's, this week's and this month's.
-function CurrentTargets() {
+// An agent's Daily KPIs for today (update 070), in place of their targets.
+function TodayKpis() {
   const q = useQuery({
-    queryKey: ["targets", "current"],
-    queryFn: ({ signal }) => api("/targets?current=true&limit=10", { signal }),
+    queryKey: ["kpis", "my", "today"],
+    queryFn: ({ signal }) => api("/kpis/my", { signal }),
   });
-  const rows = Array.isArray(q.data?.data) ? q.data.data : [];
+  // An unexpected answer shows nothing rather than breaking the overview.
+  const kpis = Array.isArray(q.data?.kpis) ? q.data.kpis : [];
+  const left = kpis.filter((k) => k.editable && k.answer === null);
   return (
-    <section className="panel" aria-labelledby="current-targets-title">
+    <section
+      className="panel kpi-today-card"
+      aria-labelledby="today-kpis-title"
+    >
       <div className="panel-heading">
-        <h2 id="current-targets-title">My targets now</h2>
-        <Link to="/targets">View all targets ↗</Link>
+        <h2 id="today-kpis-title">Daily KPIs today</h2>
+        <Link to="/kpis">Open Daily KPIs ↗</Link>
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
         <Loader />
-      ) : rows.length ? (
-        <div className="target-grid">
-          {rows.map((t) => (
-            <TargetCard key={t.id} target={t} admin={false} />
-          ))}
-        </div>
       ) : (
-        !q.error && <div className="empty">No targets are running today.</div>
+        !q.error && (
+          <p>
+            {kpis.length
+              ? `${kpis.length - left.length} of ${kpis.length} answered${left.length ? ` · still to answer: ${left.map((k) => k.title).join(", ")}` : " · all done for today"}`
+              : "No KPIs are set for you today."}
+          </p>
+        )
       )}
     </section>
   );
@@ -522,7 +526,7 @@ export default function Dashboard() {
         <section className="panel fx-card" aria-labelledby="leaders-title">
           <div className="panel-heading">
             <h2 id="leaders-title">Team leaderboard</h2>
-            <Link to="/targets">Targets ↗</Link>
+            <Link to="/kpis">Daily KPIs ↗</Link>
           </div>
           {leaders.length ? (
             leaders.map((a, i) => (
@@ -562,7 +566,7 @@ export default function Dashboard() {
           <div className="empty">No scheduled visits.</div>
         )}
       </section>
-      {!admin && <CurrentTargets />}
+      {!admin && <TodayKpis />}
       {teamOpen && activity.data?.from && (
         <TeamRecords
           metric={teamOpen.metric}

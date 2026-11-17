@@ -59,6 +59,7 @@ import {
 import { employeesAdminRouter } from "./employees.routes.js";
 import { shiftsAdminRouter } from "./shifts.routes.js";
 import { tasksRouter, tasksAdminRouter } from "./tasks.routes.js";
+import { kpisRouter } from "./kpis.routes.js";
 import { dealersRouter } from "./dealers.routes.js";
 import { reportDrilldownRouter } from "./reportDrilldown.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
@@ -128,6 +129,8 @@ export function crmRouter(db, options = {}) {
   router.use("/admin/attendance/shifts", adminOnly, shiftsAdminRouter(db));
   router.use("/admin/attendance", adminOnly, attendanceAdminRouter(db));
   router.use("/tasks", tasksRouter(db));
+  // Daily KPIs (update 070), in place of Team targets and My targets.
+  router.use("/kpis", kpisRouter(db));
   router.use("/admin/tasks", adminOnly, tasksAdminRouter(db));
   router.use("/dealers", dealersRouter(db));
   router.use("/admin", adminOnly, employeesAdminRouter(db));
