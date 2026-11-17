@@ -1,0 +1,9 @@
+[
+  {
+    "id": "GHSA-fc5q-39xc-vjpf",
+    "package": "picomatch",
+    "reason": "ReDoS in glob matching (picomatch <= 4.0.7) with no fixed version yet. It reaches only vite and vitest, the build and test tools (client and server devDependencies), which never run on the production server and only match the project's own fixed globs. `npm audit --omit=dev` finds nothing. Remove this entry once picomatch is fixed and the lockfile is updated.",
+    "added": "2026-11-17",
+    "expires": "2026-12-17"
+  }
+]
