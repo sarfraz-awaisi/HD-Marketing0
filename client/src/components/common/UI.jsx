@@ -143,7 +143,8 @@ export function Table({
             aria-label={`Select ${row.name || row.id}`}
             checked={selection.ids.includes(row.id)}
             disabled={
-              !selection.ids.includes(row.id) && selection.ids.length >= 500
+              !selection.ids.includes(row.id) &&
+              selection.ids.length >= (selection.max ?? 500)
             }
             onChange={(event) => selection.toggle(row.id, event.target.checked)}
           />

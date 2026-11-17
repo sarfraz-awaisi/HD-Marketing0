@@ -34,6 +34,10 @@ describe("bounded lead selection", () => {
     );
     expect(screen.getByText("2 selected")).toBeInTheDocument();
     view.rerender(<List filter="new" page={1} />);
+    // Update 071: back to the first filter, the old selection stays gone.
+    view.rerender(<List filter="same" page={1} />);
+    expect(screen.getByText("0 selected")).toBeInTheDocument();
+    view.rerender(<List filter="new" page={1} />);
     expect(screen.getByText("0 selected")).toBeInTheDocument();
     expect(
       screen.getByRole("checkbox", { name: "Select Customer 1" }),

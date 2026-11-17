@@ -1,5 +1,10 @@
 import { leadManagementRpc } from "../services/leadManagement.js";
-import { eraseRpc, removeErasedFiles } from "../services/leadErasure.js";
+import {
+  eraseAnswer,
+  eraseRpc,
+  eraseReviewRpc,
+  pendingErasedFiles,
+} from "../services/leadErasure.js";
 import { Router } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -34,6 +39,7 @@ import {
   selectedAssignment,
   leadDistribution,
   leadIds,
+  erasePreviewIds,
   auditQuery,
   leadName,
 } from "../utils/validators.js";
@@ -330,6 +336,45 @@ export function crmRouter(db, options = {}) {
       }),
     );
   });
+  // Update 071: every deleted lead the search matches (up to 2,000), for
+  // "Select all matching deleted leads".
+  router.get(
+    "/leads/deleted/selection",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const q = z
+        .object({ search: z.string().max(100).default("") })
+        .strict()
+        .parse(req.query);
+      res.set("Cache-Control", "no-store").json(
+        await eraseReviewRpc(db, "deleted_lead_ids", {
+          p_actor: req.user.id,
+          p_search: q.search,
+        }),
+      );
+    },
+  );
+  // Update 071: what Delete instantly would erase now, checked fresh before
+  // the administrator confirms. Erasing checks every lead again.
+  router.post(
+    "/leads/erase/preview",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      z.object({}).strict().parse(req.query);
+      const body = z
+        .object({ lead_ids: erasePreviewIds })
+        .strict()
+        .parse(req.body);
+      res.set("Cache-Control", "no-store").json(
+        await eraseReviewRpc(db, "erase_deleted_leads_preview", {
+          p_actor: req.user.id,
+          p_lead_ids: body.lead_ids,
+        }),
+      );
+    },
+  );
   router.post("/leads/delete", adminOnly, sensitiveLimit, async (req, res) => {
     z.object({}).strict().parse(req.query);
     const body = z
@@ -366,11 +411,25 @@ export function crmRouter(db, options = {}) {
       p_actor: req.user.id,
       p_request: req.id,
     });
-    res.json({
-      ...result,
-      files_removed: result.erased ? await removeErasedFiles(db) : true,
-    });
+    res.json(await eraseAnswer(db, result));
   });
+  // Update 071: how many erased leads' files still wait to be removed from
+  // Storage (counts only), for checking after an answer was lost.
+  router.get(
+    "/leads/erase/storage",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      z.object({}).strict().parse(req.query);
+      const pending = await pendingErasedFiles(db);
+      if (!pending)
+        throw Object.assign(
+          new Error("The storage clean-up queue could not be checked."),
+          { status: 503 },
+        );
+      res.set("Cache-Control", "no-store").json({ pending });
+    },
+  );
   router.delete(
     "/lead-imports/:id",
     adminOnly,
@@ -438,10 +497,7 @@ export function crmRouter(db, options = {}) {
         p_actor: req.user.id,
         p_request: req.id,
       });
-      res.json({
-        ...result,
-        files_removed: result.erased ? await removeErasedFiles(db) : true,
-      });
+      res.json(await eraseAnswer(db, result));
     },
   );
   router.post(

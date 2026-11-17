@@ -21,9 +21,11 @@ import {
   teamReportQuery,
   teamDaysQuery,
   teamRecordsQuery,
+  teamExportQuery,
   uuid,
 } from "../utils/validators.js";
 import { csvCell } from "../utils/phoneMask.js";
+import { teamCsv } from "../services/teamPerformance.js";
 // Sales workflow: first-call review, call activity, working hours and the
 // notification bell (update 038); visit calendar, targets and reports (039).
 export async function salesRpc(db, name, args, update = "038 after 037") {
@@ -402,6 +404,30 @@ export function salesRouter(db) {
             { p_actor: req.user.id, p_query: q },
             "063 after 062",
           ),
+        );
+    },
+  );
+  // Update 071: the Team performance table as a CSV file, for the same
+  // period, agent and name search as the page.
+  router.get(
+    "/reports/team/export",
+    adminOnly,
+    exportLimit,
+    async (req, res) => {
+      const { agent, search, ...range } = teamExportQuery.parse(req.query);
+      const report = await salesRpc(
+        db,
+        "report_team",
+        { p_actor: req.user.id, p_from: range.from, p_to: range.to },
+        "063 after 062",
+      );
+      res
+        .type("text/csv")
+        .attachment("hd-marketing-team-performance.csv")
+        .send(
+          teamCsv(report, { agent, search })
+            .map((row) => row.map(csvCell).join(","))
+            .join("\r\n"),
         );
     },
   );

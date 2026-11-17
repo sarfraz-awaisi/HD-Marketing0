@@ -1,5 +1,6 @@
 // Report periods in Pakistan time (update 063). Pakistan keeps one offset
 // all year, so a Pakistan day is UTC+5. Weeks run Sunday to Saturday.
+// Team performance (update 071) offers its own list, with Last 7 days.
 const DAY = 86400000;
 export const pkDay = (ms = Date.now()) =>
   new Date(ms + 5 * 3600000).toISOString().slice(0, 10);
@@ -13,6 +14,12 @@ export const periods = [
   ["this_month", "This month"],
   ["last_month", "Last month"],
 ];
+export const teamPeriods = [
+  ["today", "Today"],
+  ["yesterday", "Yesterday"],
+  ["last_7_days", "Last 7 days"],
+  ["this_month", "This month"],
+];
 // The first and last day (inclusive) of a named period.
 export function periodDays(period, now = Date.now()) {
   const today = pkDay(now);
@@ -23,6 +30,9 @@ export function periodDays(period, now = Date.now()) {
       return { from: today, to: today };
     case "yesterday":
       return { from: addDays(today, -1), to: addDays(today, -1) };
+    case "last_7_days":
+      // Today and the six days before it.
+      return { from: addDays(today, -6), to: today };
     case "this_week":
       return { from: sunday, to: today };
     case "last_week":
@@ -37,9 +47,9 @@ export function periodDays(period, now = Date.now()) {
       return null;
   }
 }
-// Which named period two days make, or "custom".
-export function periodOf(from, to, now = Date.now()) {
-  const match = periods.find(([key]) => {
+// Which named period of a list two days make, or "custom".
+export function periodOf(from, to, now = Date.now(), list = periods) {
+  const match = list.find(([key]) => {
     const p = periodDays(key, now);
     return p.from === from && p.to === to;
   });

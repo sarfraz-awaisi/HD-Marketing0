@@ -534,6 +534,19 @@ export const teamDaysQuery = z
     message: "Date range must be increasing",
     path: ["to"],
   });
+// Team performance export (update 071): the table as shown, for all agents
+// or one, and the agent-name search.
+export const teamExportQuery = z
+  .object({
+    ...teamRange,
+    agent: uuid.optional(),
+    search: z.string().trim().max(100).optional(),
+  })
+  .strict()
+  .refine(increasing, {
+    message: "Date range must be increasing",
+    path: ["to"],
+  });
 export const teamRecordsQuery = z
   .object({
     ...teamRange,
@@ -682,6 +695,13 @@ export const leadIds = z
   .array(uuid)
   .min(1)
   .max(500)
+  .refine((ids) => new Set(ids).size === ids.length, "Choose distinct leads");
+// Delete instantly's review (update 071): up to 2,000 leads selected in
+// Deleted leads; they are then erased 250 at a time.
+export const erasePreviewIds = z
+  .array(uuid)
+  .min(1)
+  .max(2000)
   .refine((ids) => new Set(ids).size === ids.length, "Choose distinct leads");
 export const bulkAssignment = z
   .object({

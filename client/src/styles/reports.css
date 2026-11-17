@@ -166,26 +166,112 @@ dialog.report-drill-dialog {
     font-weight: 600;
   }
 }
-/* Update 063: Team performance. */
-.team-overview .table-scroll {
-  overflow-x: auto;
+/* Update 063: Team performance. Update 071: one compact table of eight
+   columns; its headings and the agent's name stay in view while it
+   scrolls, on phones too, and numbers line up on the right. */
+.team-toolbar input[type="search"] {
+  flex: 1 1 200px;
 }
-@media (min-width: 801px) {
-  .team-overview [data-field="name"],
-  .team-overview td[data-field="talk"] {
-    white-space: nowrap;
+.team-table .table-scroll {
+  max-height: min(70vh, 680px);
+}
+.team-table th,
+.team-table td {
+  padding: 9px 12px;
+  white-space: nowrap;
+}
+.team-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8f9fb;
+}
+.team-table [data-field="name"] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--line);
+}
+/* The agent cell is opaque to cover the scrolled numbers, so it takes the
+   row's hover and focus colours itself. */
+.team-table tbody tr:focus-within [data-field="name"] {
+  background: linear-gradient(#b68c4512, #b68c4512), var(--surface);
+}
+@media (hover: hover) {
+  .team-table tbody tr:hover [data-field="name"] {
+    background: #f8f6f1;
   }
 }
-.team-col {
-  display: flex;
-  flex-direction: column;
-  white-space: normal;
+.team-table thead th[data-field="name"] {
+  z-index: 3;
+  background: #f8f9fb;
 }
-.team-col small {
-  color: var(--ink-3);
+.team-table tbody th {
+  border-bottom: 1px solid #edf0f4;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.team-table td,
+.team-table thead th:not([data-field="name"]) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.team-table .team-total th,
+.team-table .team-total td {
+  border-top: 2px solid var(--line);
   font-weight: 600;
-  text-transform: uppercase;
-  font-size: var(--text-xs);
+}
+.team-sort {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.team-sort:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}
+.team-time small {
+  display: block;
+  color: var(--warning);
+  font-size: 11px;
+}
+@media (max-width: 800px) {
+  .report-panel .team-table table {
+    display: table;
+    width: max-content;
+    min-width: 100%;
+  }
+  .report-panel .team-table thead {
+    display: table-header-group;
+  }
+  .report-panel .team-table tbody {
+    display: table-row-group;
+  }
+  .report-panel .team-table tr {
+    display: table-row;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .report-panel .team-table th,
+  .report-panel .team-table td {
+    display: table-cell;
+    padding: 8px 10px;
+  }
+  .report-panel .team-table td::before {
+    content: none;
+  }
 }
 .team-record {
   display: flex;
@@ -195,14 +281,8 @@ dialog.report-drill-dialog {
 .team-record small {
   color: var(--ink-3);
 }
-.team-groups {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--space-4);
-  margin-bottom: var(--space-4);
-}
-.agent-performance h2 {
-  margin: var(--space-2) 0 var(--space-3);
+.agent-performance {
+  margin-top: var(--space-4);
 }
 .call-counts {
   display: flex;

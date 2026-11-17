@@ -1,21 +1,24 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api, date } from "../../lib/api";
+import { api, date, download } from "../../lib/api";
 import { statusLabel } from "../../lib/pipeline";
 import { assignmentHow, metricHint, metricLabel } from "../../lib/teamReport";
-import { ErrorBox, Loader, Modal, Pagination, Table } from "../common/UI";
+import {
+  Button,
+  ErrorBox,
+  Loader,
+  Modal,
+  Pagination,
+  Table,
+} from "../common/UI";
 import "../../styles/reports.css";
 // Team performance (update 063): every agent's numbers for a period, one
 // agent's day by day with their assignment history, and the records behind
 // any number. The database counts every number from the same records it
-// lists, so a number and its list always agree.
-const minutes = (m) =>
-  m == null
-    ? "—"
-    : m < 60
-      ? `${m} min`
-      : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}`;
+// lists, so a number and its list always agree. Update 071: eight columns
+// (Agent, Leads received, New, From another agent, Moved away, Total calls,
+// Follow-ups, Time), sorting, a name search and the CSV export.
 // A Pakistan day (YYYY-MM-DD) with its weekday, as "Fri, 13 Nov".
 const dayName = new Intl.DateTimeFormat("en-GB", {
   weekday: "short",
@@ -182,181 +185,187 @@ export function TeamRecords({
     </Modal>
   );
 }
-// Numbers grouped as the admin reads them; [metric, column label].
-const groups = [
-  [
-    "Leads received",
-    [
-      ["received", "Leads"],
-      ["received_first_time", "First time"],
-      ["received_reassigned", "From another agent"],
-      ["moved_away", "Moved away"],
-    ],
-  ],
-  [
-    "Calls the agent recorded",
-    [
-      ["calls", "Calls"],
-      ["answered", "Answered"],
-      ["not_answered", "Not answered"],
-      ["leads_called", "Leads called"],
-      ["leads_answered", "Leads answered"],
-    ],
-  ],
-  [
-    "Outcomes",
-    [
-      ["interested", "Interested"],
-      ["not_interested", "Not interested"],
-      ["followup_required", "Follow-up required"],
-    ],
-  ],
-  [
-    "First calls",
-    [
-      ["first_calls", "First calls"],
-      ["on_time", "On time"],
-      ["deadlines_missed", "Deadlines missed"],
-    ],
-  ],
-  [
-    "Follow-ups and notes",
-    [
-      ["followups_created", "Follow-ups created"],
-      ["followups_completed", "Follow-ups completed"],
-      ["notes", "Notes"],
-    ],
-  ],
-  ["Administrators", [["admin_calls", "Admin calls on their leads"]]],
-  [
-    "Now",
-    [
-      ["waiting_now", "Waiting for first call"],
-      ["missed_now", "Missed first call"],
-      ["not_connected_now", "Not connected"],
-      ["followups_overdue_now", "Overdue follow-ups"],
-    ],
-  ],
+// The eight columns (update 071): [metric, heading, sortable]. Agent comes
+// first and Time last; every number opens the records behind it.
+const columns = [
+  ["received", "Leads received", true],
+  ["received_first_time", "New", false],
+  ["received_reassigned", "From another agent", false],
+  ["moved_away", "Moved away", false],
+  ["calls", "Total calls", true],
+  ["followup_leads", "Follow-ups", true],
 ];
-// The all-agents table: one row per agent, then all agents together.
-function Overview({ data, onOpen, onAgent }) {
-  const rows = [
-    ...data.agents.map((a) => ({ ...a, id: a.agent_id })),
-    { ...data.total, id: "total", name: "All agents", agent_id: null },
-  ];
-  const cell = (metric) => (r) => (
-    <Count
-      value={r[metric]}
-      metric={metric}
-      agentName={r.name}
-      onOpen={() => onOpen(metric, r.agent_id, r.name)}
-    />
+const sortable = {
+  name: "Agent",
+  ...Object.fromEntries(columns.filter((c) => c[2]).map((c) => [c[0], c[1]])),
+};
+// Worked minutes as "7h 45m".
+const workTime = (m) => `${Math.floor((m || 0) / 60)}h ${(m || 0) % 60}m`;
+// Days the agent checked in and has not checked out (still open, or never).
+function TimeCell({ row }) {
+  if (row.attendance_tracked === false)
+    return <span title="Attendance is not tracked for this agent">—</span>;
+  if (row.worked_minutes == null) return "—";
+  const open = (row.open_days || 0) + (row.incomplete_days || 0);
+  return (
+    <span className="team-time">
+      {workTime(row.worked_minutes)}
+      {open > 0 && (
+        <small>
+          {open} {open === 1 ? "day" : "days"} without checkout
+        </small>
+      )}
+    </span>
+  );
+}
+// The rows shown, added up: a lead two agents each received counts for both.
+function sum(rows) {
+  const total = {};
+  for (const key of [
+    ...columns.map(([k]) => k),
+    "worked_minutes",
+    "open_days",
+    "incomplete_days",
+  ])
+    total[key] = rows.reduce((n, r) => n + (Number(r[key]) || 0), 0);
+  return total;
+}
+function Overview({ rows, total, totalName, sort, onSort, onOpen, onAgent }) {
+  const header = (key, label) =>
+    sortable[key] ? (
+      <button
+        type="button"
+        className="team-sort"
+        onClick={() => onSort(key)}
+        aria-label={`Sort by ${label}`}
+      >
+        {label}
+        <span aria-hidden="true">
+          {sort.key === key ? (sort.desc ? " ↓" : " ↑") : ""}
+        </span>
+      </button>
+    ) : (
+      label
+    );
+  const ariaSort = (key) =>
+    sort.key === key ? (sort.desc ? "descending" : "ascending") : undefined;
+  const line = (r, isTotal) => (
+    <tr
+      key={isTotal ? "total" : r.agent_id}
+      className={isTotal ? "team-total" : undefined}
+    >
+      <th scope="row" data-field="name">
+        {isTotal ? (
+          <b>{totalName}</b>
+        ) : (
+          <button
+            type="button"
+            className="report-link"
+            aria-label={`Open ${r.name}'s performance`}
+            onClick={() => onAgent(r.agent_id)}
+          >
+            <b>{r.name}</b>
+            {!r.active && <small> (inactive)</small>}
+          </button>
+        )}
+      </th>
+      {columns.map(([metric, label]) => (
+        <td key={metric} data-field={metric} data-label={label}>
+          {r[metric] == null ? (
+            "—"
+          ) : isTotal && !total.open ? (
+            r[metric]
+          ) : (
+            <Count
+              value={r[metric]}
+              metric={metric}
+              agentName={isTotal ? "All agents" : r.name}
+              onOpen={() =>
+                onOpen(
+                  metric,
+                  isTotal ? null : r.agent_id,
+                  isTotal ? null : r.name,
+                )
+              }
+            />
+          )}
+        </td>
+      ))}
+      <td data-field="time" data-label="Time">
+        <TimeCell row={r} />
+      </td>
+    </tr>
   );
   return (
-    <div className="team-overview">
-      <Table
-        rows={rows}
-        columns={[
-          {
-            key: "name",
-            label: "Agent",
-            render: (r) =>
-              r.agent_id ? (
-                <button
-                  type="button"
-                  className="report-link"
-                  aria-label={`Open ${r.name}'s performance`}
-                  onClick={() => onAgent(r.agent_id)}
+    <div className="team-table">
+      <div
+        className="table-scroll"
+        role="region"
+        aria-label="Team performance"
+        tabIndex={0}
+      >
+        <table className="fx-table">
+          <thead>
+            <tr>
+              <th scope="col" data-field="name" aria-sort={ariaSort("name")}>
+                {header("name", "Agent")}
+              </th>
+              {columns.map(([metric, label]) => (
+                <th
+                  key={metric}
+                  scope="col"
+                  data-field={metric}
+                  aria-sort={ariaSort(metric)}
+                  title={metricHint(metric)}
                 >
-                  <b>
-                    {r.name}
-                    {!r.active && " (inactive)"}
-                  </b>
-                </button>
-              ) : (
-                <b>All agents</b>
-              ),
-          },
-          ...groups.flatMap(([group, metrics]) =>
-            metrics.map(([metric, label], i) => ({
-              key: metric,
-              // Phones show each row as a card, labelled with this.
-              cardLabel: metricLabel(metric),
-              label: (
-                <span className="team-col" title={metricHint(metric)}>
-                  {i === 0 && <small>{group}</small>}
-                  {label}
-                </span>
-              ),
-              render: cell(metric),
-            })),
-          ),
-          {
-            key: "talk",
-            label: "Talk time",
-            render: (r) => minutes(r.talk_minutes),
-          },
-        ]}
-      />
+                  {header(metric, label)}
+                </th>
+              ))}
+              <th
+                scope="col"
+                data-field="time"
+                title={metricHint("worked_minutes")}
+              >
+                Time
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => line(r, false))}
+            {total.row && line(total.row, true)}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
-// One agent: their numbers by group, day by day, and every assignment.
-function AgentView({ data, agent, dayParams, onOpen, onBack }) {
-  const row = data.agents.find((a) => a.agent_id === agent);
+// One agent below the table: day by day, and every assignment.
+function AgentDays({ row, dayParams, onOpen }) {
   const days = useQuery({
-    queryKey: ["team-days", agent, dayParams.toString()],
+    queryKey: ["team-days", row.agent_id, dayParams.toString()],
     queryFn: ({ signal }) =>
-      api(`/reports/team/days?${dayParams}&agent=${agent}`, { signal }),
-    enabled: !!row && dayParams.has("from"),
+      api(`/reports/team/days?${dayParams}&agent=${row.agent_id}`, { signal }),
+    enabled: dayParams.has("from"),
   });
-  if (!row)
-    return (
-      <p className="empty">
-        This agent has nothing in this period.{" "}
-        <button type="button" className="report-link" onClick={onBack}>
-          Back to all agents
-        </button>
-      </p>
-    );
   return (
     <div className="agent-performance">
-      <button type="button" className="back-link report-link" onClick={onBack}>
-        ← All agents
-      </button>
-      <h2>{row.name}</h2>
-      <div className="team-groups">
-        {groups.map(([group, metrics]) => (
-          <section key={group} className="report-block">
-            <h3>{group}</h3>
-            {metrics.map(([metric, label]) => (
-              <button
-                type="button"
-                key={metric}
-                className="report-row report-row-button"
-                aria-label={`${label}: ${row[metric]}. Show the records`}
-                onClick={() => onOpen(metric, agent, row.name)}
-              >
-                <span>{label}</span>
-                <b>{row[metric]}</b>
-              </button>
-            ))}
-          </section>
-        ))}
-      </div>
       <p>
         <button
           type="button"
           className="report-link"
-          onClick={() => onOpen("assignment_events", agent, row.name)}
+          onClick={() => onOpen("assignment_events", row.agent_id, row.name)}
         >
           Assignment history: every lead given to or taken from {row.name} in
           this period
         </button>
       </p>
-      <h3>Day by day</h3>
+      <h3>{row.name}: day by day</h3>
       <ErrorBox error={days.error} />
-      {days.isPending ? (
+      {!dayParams.has("from") ? (
+        <p className="field-hint">
+          Choose 62 days or fewer to see this agent day by day.
+        </p>
+      ) : days.isPending ? (
         <Loader />
       ) : days.data ? (
         <Table
@@ -384,40 +393,151 @@ export default function TeamPerformance({
   agent,
   onAgent,
 }) {
-  const [open, setOpen] = useState(null);
+  const [open, setOpen] = useState(null),
+    [search, setSearch] = useState(""),
+    [sort, setSort] = useState({ key: "name", desc: false }),
+    [exporting, setExporting] = useState(false),
+    [error, setError] = useState("");
   const params = new URLSearchParams(range);
   const q = useQuery({
     queryKey: ["team-report", params.toString()],
     queryFn: ({ signal }) => api("/reports/team?" + params, { signal }),
   });
   const openRecords = (metric, id, name) => setOpen({ metric, id, name });
+  const agents = Array.isArray(q.data?.agents) ? q.data.agents : [];
+  const words = search.trim().toLowerCase();
+  // The filters choose rows; the database counted every number.
+  const shown = agents.filter(
+    (a) =>
+      (!agent || a.agent_id === agent) &&
+      (!words || (a.name || "").toLowerCase().includes(words)),
+  );
+  const rows =
+    sort.key === "name"
+      ? sort.desc
+        ? [...shown].reverse()
+        : shown
+      : [...shown].sort(
+          (a, b) =>
+            (sort.desc ? -1 : 1) * ((a[sort.key] || 0) - (b[sort.key] || 0)) ||
+            a.name.localeCompare(b.name),
+        );
+  const selected = agent ? agents.find((a) => a.agent_id === agent) : null;
+  // Before update 071 the report has no Follow-ups or Time.
+  const needs071 = agents.length > 0 && !("followup_leads" in agents[0]);
+  // All agents' total opens their records; a searched total only adds up.
+  const total =
+    agent || !rows.length
+      ? {}
+      : words
+        ? { row: sum(rows), open: false }
+        : { row: { ...sum(rows), ...(q.data?.total || {}) }, open: true };
+  async function exportCsv() {
+    if (exporting) return;
+    setExporting(true);
+    setError("");
+    try {
+      download(
+        await api(
+          "/reports/team/export?" +
+            new URLSearchParams({
+              ...range,
+              ...(agent ? { agent } : {}),
+              ...(words ? { search: search.trim() } : {}),
+            }),
+          { download: true },
+        ),
+        "hd-marketing-team-performance.csv",
+      );
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setExporting(false);
+    }
+  }
   return (
     <>
       <p className="field-hint">
-        {periodText}. Calls count for whoever recorded them; an administrator's
-        calls are shown apart. Select a name for one agent, or any number to see
-        its records.
+        {periodText}. Each number counts different leads, except Total calls,
+        which counts every recorded call. Calls count for whoever recorded them;
+        an administrator's calls are never an agent's. Select a name or any
+        number to see the records behind it.
       </p>
-      <ErrorBox error={q.error} />
+      <div className="toolbar team-toolbar">
+        <input
+          type="search"
+          aria-label="Search agents"
+          placeholder="Search agent name…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <select
+          aria-label="Team performance agent"
+          value={agent || ""}
+          onChange={(e) => onAgent(e.target.value || null)}
+        >
+          <option value="">All agents</option>
+          {agent && !selected && <option value={agent}>Selected agent</option>}
+          {agents.map((a) => (
+            <option key={a.agent_id} value={a.agent_id}>
+              {a.name}
+              {a.active ? "" : " (inactive)"}
+            </option>
+          ))}
+        </select>
+        <Button
+          variant="secondary"
+          disabled={!q.data || exporting}
+          onClick={exportCsv}
+        >
+          {exporting ? "Preparing…" : "Export CSV"}
+        </Button>
+      </div>
+      <ErrorBox error={q.error || error} />
+      {needs071 && (
+        <p className="field-hint">
+          Follow-ups and Time need CRM database update 071.
+        </p>
+      )}
       {q.isPending ? (
         <Loader />
-      ) : q.data ? (
-        agent ? (
-          <AgentView
-            data={q.data}
-            agent={agent}
-            dayParams={dayCount <= 62 ? params : new URLSearchParams()}
-            onOpen={openRecords}
-            onBack={() => onAgent(null)}
-          />
-        ) : (
-          <Overview data={q.data} onOpen={openRecords} onAgent={onAgent} />
-        )
-      ) : null}
-      {agent && dayCount > 62 && (
-        <p className="field-hint">
-          Choose 62 days or fewer to see this agent day by day.
+      ) : !q.data ? null : agent && !selected ? (
+        <p className="empty">
+          This agent has nothing in this period.{" "}
+          <button
+            type="button"
+            className="report-link"
+            onClick={() => onAgent(null)}
+          >
+            Back to all agents
+          </button>
         </p>
+      ) : !rows.length ? (
+        <p className="empty">No agents match “{search.trim()}”.</p>
+      ) : (
+        <>
+          <Overview
+            rows={rows}
+            total={total}
+            totalName={words ? "Agents shown" : "All agents"}
+            sort={sort}
+            onSort={(key) =>
+              setSort((s) => ({
+                key,
+                desc: s.key === key ? !s.desc : key !== "name",
+              }))
+            }
+            onOpen={openRecords}
+            onAgent={onAgent}
+          />
+          {selected && (
+            <AgentDays
+              row={selected}
+              dayParams={dayCount <= 62 ? params : new URLSearchParams()}
+              onOpen={openRecords}
+            />
+          )}
+        </>
       )}
       {open && (
         <TeamRecords

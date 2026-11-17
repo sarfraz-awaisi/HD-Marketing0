@@ -628,11 +628,11 @@ describe("other reports", () => {
     ).toBeInTheDocument();
     fireEvent.click(
       await screen.findByRole("button", {
-        name: "Ali Agent: Calls 30. Show the records",
+        name: "Ali Agent: Total calls 30. Show the records",
       }),
     );
     const dialog = await screen.findByRole("dialog", {
-      name: "Calls · Ali Agent",
+      name: "Total calls · Ali Agent",
     });
     expect(
       await within(dialog).findByText("HD-000101 · Hamza"),
@@ -650,13 +650,14 @@ describe("other reports", () => {
       to: "2026-11-04T19:00:00.000Z",
     });
     fireEvent.click(within(dialog).getByRole("button", { name: /close/i }));
-    // One agent: their numbers and day by day.
+    // One agent: their row and day by day (update 071).
     fireEvent.click(
       screen.getByRole("button", { name: "Open Ali Agent's performance" }),
     );
     expect(
-      await screen.findByRole("heading", { name: "Ali Agent" }),
+      await screen.findByRole("heading", { name: "Ali Agent: day by day" }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("Team performance agent")).toHaveValue(ali.id);
     // Day by day, each Pakistan day with its weekday.
     expect(await screen.findByText("Sun 1 Nov")).toBeInTheDocument();
   });
