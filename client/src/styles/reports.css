@@ -291,3 +291,153 @@ dialog.report-drill-dialog {
 dialog.team-records {
   width: min(920px, calc(100% - 32px));
 }
+
+/* Report summary in boxes: each group of numbers is its own box, with the
+   dashboard's tiles; the breakdowns are cards beside each other. */
+.report-summary {
+  display: grid;
+  gap: var(--space-5);
+}
+.summary-section {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-muted);
+}
+.summary-section .panel-heading {
+  margin-bottom: var(--space-3);
+}
+/* The focus ring in the darker brand gold: it sits on the tinted boxes, where
+   the usual gold falls below 3:1. */
+.report-summary :focus-visible {
+  outline-color: var(--brand-gold-700);
+}
+/* Darker than elsewhere: these sit on the tinted box (4.5:1 at least). */
+.report-summary .panel-meta {
+  color: var(--ink-2);
+}
+.summary-section .panel-heading h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+/* Four to a row; a group of six is three to a row, or six on a wide
+   screen; two to a row on a phone. */
+.summary-grid.kpi-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.summary-grid.kpi-grid.six,
+.summary-grid.kpi-grid.five,
+.summary-grid.kpi-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@container dash-section (min-width: 900px) {
+  .summary-grid.kpi-grid.five {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@container dash-section (min-width: 1150px) {
+  .summary-grid.kpi-grid.six {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+@container dash-section (max-width: 680px) {
+  .summary-grid.kpi-grid,
+  .summary-grid.kpi-grid.six,
+  .summary-grid.kpi-grid.five,
+  .summary-grid.kpi-grid.three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+@container dash-section (max-width: 240px) {
+  .summary-grid.kpi-grid,
+  .summary-grid.kpi-grid.six,
+  .summary-grid.kpi-grid.five,
+  .summary-grid.kpi-grid.three {
+    grid-template-columns: 1fr;
+  }
+}
+.summary-section .kpi-ring-body {
+  flex-wrap: wrap;
+}
+.summary-section .kpi-ring .kpi-value {
+  white-space: nowrap;
+}
+.summary-now {
+  border-color: var(--warning-soft);
+  background:
+    linear-gradient(var(--warning-soft), var(--warning-soft)) top / 100% 3px
+      no-repeat,
+    var(--surface-muted);
+}
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.summary-card header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: var(--space-2);
+}
+.summary-card h3 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.summary-card .report-row {
+  padding: 6px 0;
+}
+.summary-more {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+}
+.summary-help {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.summary-help summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.summary-help p {
+  margin: var(--space-3) 0;
+  color: var(--ink-3);
+}
+.summary-help dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+}
+.summary-help dt {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.summary-help dd {
+  margin: 2px 0 0;
+  font-size: var(--text-xs);
+  color: var(--ink-3);
+}
+@media (max-width: 480px) {
+  .summary-section {
+    padding: var(--space-3);
+  }
+}

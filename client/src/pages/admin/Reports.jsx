@@ -4,16 +4,39 @@ import { useAuth } from "../../context/AuthContext";
 import { api, download, pkr, reportSearch } from "../../lib/api";
 import { lostReasonLabel, statusLabel, statuses } from "../../lib/pipeline";
 import {
+  AlarmClock,
+  Banknote,
+  Calendar,
+  CalendarClock,
+  CalendarDays,
+  Handshake,
+  Hourglass,
+  Info,
+  Layers,
+  ListChecks,
+  Phone,
+  PhoneCall,
+  PhoneMissed,
+  PhoneOutgoing,
+  Timer,
+  Trash2,
+  TriangleAlert,
+  UserCheck,
+  Users,
+} from "lucide-react";
+import {
   canOpenSummary,
   drillInfo,
   relatedNumbers,
   reportNumber,
   sourceName,
+  summaryNotes,
 } from "../../lib/reportDrilldown";
 import { drillParams, useDrillUrl } from "../../lib/useDrillUrl";
 import { Button, Table, ErrorBox, Loader } from "../../components/common/UI";
 import ReportDrilldown from "../../components/reports/ReportDrilldown";
 import TeamPerformance from "../../components/reports/TeamPerformance";
+import { KpiTile, RingProgress } from "../../components/dashboard/Widgets";
 import {
   dayRange,
   periodDays,
@@ -21,6 +44,7 @@ import {
   periods,
   teamPeriods,
 } from "../../lib/periods";
+import "../../styles/dashboard.css";
 import "../../styles/reports.css";
 // Administrators see everyone's numbers. Agents see the same reports with
 // only their own work, as My performance (update 051). Update 063:
@@ -93,74 +117,329 @@ function BarList({ title, rows, empty, onOpen }) {
     </section>
   );
 }
-function Summary({ data, onOpen, own }) {
-  const byStatus = data?.by_status || {};
-  const rows = Object.entries(data || {})
-    .filter(
-      ([k, v]) => typeof v === "number" && (!own || canOpenSummary(k, own)),
-    )
-    .map(([key, value]) => ({
-      id: key,
-      metric: key.replaceAll("_", " "),
-      value: key === "revenue" ? pkr(value) : value,
-    }));
+// The summary in boxes: what happened in the chosen period, first-call
+// performance, what needs attention right now (whatever the dates), where the
+// period's leads stand, and the totals. Every number opens the records behind
+// it, as before; agents see only their own numbers (update 051).
+const tiles = {
+  leads: ["Created in this period", Users, "navy"],
+  leads_contacted: ["Called at least once in this period", PhoneCall, "blue"],
+  completed_calls: ["Calls that ended in this period", Phone, "green"],
+  completed_visits: ["Site visits held in this period", CalendarDays, "blue"],
+  won_deals: ["Deals closed as won in this period", Handshake, "gold"],
+  revenue: ["Value of the won deals", Banknote, "gold"],
+  followups_completed: [
+    "Follow-ups completed in this period",
+    ListChecks,
+    "green",
+  ],
+  first_calls: ["One for each assignment", PhoneOutgoing, "navy"],
+  first_calls_with_deadline: [
+    "First calls that had a deadline",
+    AlarmClock,
+    "navy",
+  ],
+  missed_in_period: [
+    "Deadlines that passed in this period",
+    PhoneMissed,
+    "red",
+  ],
+  avg_first_call_minutes: [
+    "Working time from assignment to first call",
+    Timer,
+    "blue",
+  ],
+  missed_first_calls: ["Deadline passed, not called yet", PhoneMissed, "red"],
+  uncalled_leads: ["Not called yet, deadline still ahead", Hourglass, "blue"],
+  overdue_followups: ["Pending, past their due time", TriangleAlert, "red"],
+  due_followups: ["Due today or in the next 24 hours", CalendarClock, "gold"],
+  scheduled_visits: ["Scheduled from now on", Calendar, "blue"],
+  today_completed_calls: ["Completed today, Pakistan time", Phone, "green"],
+  // The same leads as "assigned_leads": both follow the agent and source
+  // filters, so only this one is shown.
+  total_leads: ["Any date; the agent and source filters apply", Layers, "navy"],
+  active_agents: [
+    "Whole CRM: agent accounts that can sign in",
+    UserCheck,
+    "green",
+  ],
+  deleted_today: ["Whole CRM: moved to Deleted leads today", Trash2, "red"],
+};
+// An agent's totals are their own leads.
+const ownNotes = {
+  total_leads: "Every lead assigned to you, whatever its date",
+};
+const groups = [
+  [
+    "leads",
+    "leads_contacted",
+    "completed_calls",
+    "followups_completed",
+    "completed_visits",
+    "won_deals",
+    "revenue",
+  ],
+  [
+    "first_calls",
+    "first_calls_with_deadline",
+    "missed_in_period",
+    "avg_first_call_minutes",
+  ],
+  [
+    "missed_first_calls",
+    "uncalled_leads",
+    "overdue_followups",
+    "due_followups",
+    "scheduled_visits",
+    "today_completed_calls",
+  ],
+  ["total_leads", "active_agents", "deleted_today"],
+];
+// Bars for a breakdown; rows open their leads only when onOpen is given.
+function Breakdown({ title, meta, rows, onOpen, empty, footer }) {
+  const max = Math.max(1, ...rows.map((r) => r.count));
   return (
-    <>
-      <Table
-        rows={rows}
-        columns={[
-          {
-            key: "metric",
-            label: "Metric",
-            render: (r) =>
-              canOpenSummary(r.id) ? (
-                <Open
-                  label={r.metric}
-                  value={r.value}
-                  onOpen={() => onOpen(r.id)}
-                >
-                  {r.metric}
-                </Open>
-              ) : (
-                r.metric
-              ),
-          },
-          {
-            key: "value",
-            label: "Value",
-            render: (r) =>
-              canOpenSummary(r.id) ? (
-                <Open
-                  label={r.metric}
-                  value={r.value}
-                  onOpen={() => onOpen(r.id)}
-                />
-              ) : (
-                r.value
-              ),
-          },
-        ]}
-      />
-      {data?.by_status && (
-        <BarList
-          title="Leads created in this range, by current status"
-          rows={statuses.map((s) => ({
-            key: s,
-            label: statusLabel(s),
-            count: byStatus[s] || 0,
-          }))}
-          onOpen={(s) => onOpen("by_status", s)}
-        />
+    <section className="summary-card">
+      <header>
+        <h3>{title}</h3>
+        {meta && <span className="panel-meta">{meta}</span>}
+      </header>
+      {rows.some((r) => r.count) ? (
+        rows.map((r) => {
+          const inner = (
+            <>
+              <span>{r.label}</span>
+              <Bar value={r.count} max={max} label={`${r.label}: ${r.count}`} />
+              <b>{r.count}</b>
+            </>
+          );
+          return onOpen ? (
+            <button
+              type="button"
+              className="report-row report-row-button"
+              key={r.key}
+              aria-label={`${r.label}: ${r.count}. Show the leads`}
+              onClick={() => onOpen(r.key)}
+            >
+              {inner}
+            </button>
+          ) : (
+            <div className="report-row" key={r.key}>
+              {inner}
+            </div>
+          );
+        })
+      ) : (
+        <p className="empty">{empty}</p>
       )}
-      <h2>Metric definitions</h2>
-      <p>
-        Calls count when completed, using end time. Visits count when completed,
-        using scheduled time. Won deals count once per lead, using close date;
-        revenue sums their recorded value. Lead totals use creation time.
-        Operational reminders and visits show current due or scheduled records.
-        Select any number to see the records behind it.
-      </p>
-    </>
+      {footer}
+    </section>
+  );
+}
+function Summary({ data, onOpen, own, period, onTab }) {
+  const d = data || {};
+  // Numbers this summary has, that this reader may open.
+  // First-call speed has no number in a period without first calls: "—".
+  const shown = (metric) =>
+    (typeof d[metric] === "number" ||
+      (metric === "avg_first_call_minutes" && metric in d)) &&
+    canOpenSummary(metric, own);
+  const words = (metric) => drillInfo("summary", metric, null, {}, own);
+  const value = (metric) =>
+    metric === "revenue"
+      ? pkr(d.revenue)
+      : metric === "avg_first_call_minutes"
+        ? minutes(d.avg_first_call_minutes)
+        : d[metric].toLocaleString("en-US");
+  const tile = (metric) => {
+    const [note, icon, tone] = tiles[metric];
+    return (
+      <KpiTile
+        key={metric}
+        label={words(metric).title}
+        value={value(metric)}
+        note={(own && ownNotes[metric]) || note}
+        icon={icon}
+        tone={tone}
+        onOpen={() => onOpen(metric)}
+      />
+    );
+  };
+  const row = (metrics) => metrics.filter(shown).map(tile);
+  const [period_, first, now, totals] = groups.map(row);
+  const withDeadline = d.first_calls_with_deadline ?? 0;
+  const onTime = withDeadline
+    ? Math.round(((d.on_time_first_calls ?? 0) / withDeadline) * 100)
+    : null;
+  const byStatus = d.by_status || {};
+  const open = d.open_by_status || {};
+  const bySource = Object.entries(d.by_source || {}).sort(
+    (a, b) => b[1] - a[1],
+  );
+  // What each number shown counts, in the drill-down's words.
+  const defined = groups
+    .flat()
+    .filter(shown)
+    .concat(shown("on_time_first_calls") ? ["on_time_first_calls"] : [])
+    .map((metric) => [metric, words(metric)]);
+  return (
+    <div className="report-summary">
+      <section
+        className="dash-section summary-section"
+        aria-labelledby="sum-period"
+      >
+        <div className="panel-heading">
+          <h2 id="sum-period">This period</h2>
+          <span className="panel-meta">{period}</span>
+        </div>
+        <div className="kpi-grid summary-grid">{period_}</div>
+      </section>
+      {(first.length > 0 || shown("on_time_first_calls")) && (
+        <section
+          className="dash-section summary-section"
+          aria-labelledby="sum-first"
+        >
+          <div className="panel-heading">
+            <h2 id="sum-first">First-call performance</h2>
+            <span className="panel-meta">This period</span>
+          </div>
+          <div className="kpi-grid summary-grid five">
+            {first.slice(0, 2)}
+            {shown("on_time_first_calls") && (
+              <button
+                type="button"
+                className="kpi kpi-ring fx-card"
+                aria-label={`${words("on_time_first_calls").title}: ${d.on_time_first_calls ?? 0} of ${withDeadline}. Show the records`}
+                onClick={() => onOpen("on_time_first_calls")}
+              >
+                <span className="kpi-top">
+                  <span className="kpi-label">
+                    {words("on_time_first_calls").title}
+                  </span>
+                </span>
+                <span className="kpi-ring-body">
+                  <RingProgress
+                    value={onTime ?? 0}
+                    label={
+                      onTime == null
+                        ? "No first calls with a deadline"
+                        : `${onTime}% on time`
+                    }
+                  />
+                  <span>
+                    <strong className="kpi-value">
+                      {onTime == null ? "—" : `${onTime}%`}
+                    </strong>
+                    <small className="kpi-note">
+                      {d.on_time_first_calls ?? 0} of {withDeadline} with a
+                      deadline
+                    </small>
+                  </span>
+                </span>
+              </button>
+            )}
+            {first.slice(2)}
+          </div>
+        </section>
+      )}
+      {now.length > 0 && (
+        <section
+          className="dash-section summary-section summary-now"
+          aria-labelledby="sum-now"
+        >
+          <div className="panel-heading">
+            <h2 id="sum-now">Needs attention now</h2>
+            <span className="panel-meta">
+              Live: the dates above do not change these; the agent and source
+              filters do
+            </span>
+          </div>
+          <div className="kpi-grid summary-grid six">{now}</div>
+        </section>
+      )}
+      <div className="summary-cards">
+        {d.by_status && (
+          <Breakdown
+            title="Leads created in this period, by status now"
+            meta="Select a status to see its leads"
+            rows={statuses.map((s) => ({
+              key: s,
+              label: statusLabel(s),
+              count: byStatus[s] || 0,
+            }))}
+            onOpen={(s) => onOpen("by_status", s)}
+            empty="No leads were created in this period."
+          />
+        )}
+        {d.by_source && (
+          <Breakdown
+            title="Leads created in this period, by source"
+            rows={bySource.map(([key, count]) => ({
+              key,
+              // "manual" reads as "Manual".
+              label: sourceName(key).replace(/^./, (c) => c.toUpperCase()),
+              count,
+            }))}
+            empty="No leads were created in this period."
+            footer={
+              <button
+                type="button"
+                className="report-link summary-more"
+                onClick={() => onTab("sources")}
+              >
+                Open the Lead sources report
+              </button>
+            }
+          />
+        )}
+        {d.open_by_status && (
+          <Breakdown
+            title={own ? "My open pipeline now" : "Open pipeline now"}
+            meta="Live: open leads matching the filters, whatever their date"
+            rows={statuses
+              .filter((s) => s !== "won" && s !== "lost")
+              .map((s) => ({
+                key: s,
+                label: statusLabel(s),
+                count: open[s] || 0,
+              }))}
+            empty="No open leads."
+          />
+        )}
+      </div>
+      {totals.length > 0 && (
+        <section
+          className="dash-section summary-section"
+          aria-labelledby="sum-totals"
+        >
+          <div className="panel-heading">
+            <h2 id="sum-totals">Totals</h2>
+            <span className="panel-meta">Whatever the dates</span>
+          </div>
+          <div className="kpi-grid summary-grid three">{totals}</div>
+        </section>
+      )}
+      <details className="summary-help">
+        <summary>
+          <Info size={16} aria-hidden="true" /> How these numbers are counted
+        </summary>
+        <p>
+          Calls count when completed, by their end time. Visits count when
+          completed, by their scheduled time. Won deals count once per lead, by
+          close date; revenue adds up their value. Leads count by when they were
+          created. Deleted leads are left out of every number. Select any number
+          to see the records behind it.
+        </p>
+        <dl>
+          {defined.map(([metric, w]) => (
+            <div key={metric}>
+              <dt>{w.title}</dt>
+              <dd>{w.about || summaryNotes[metric]?.about}</dd>
+            </div>
+          ))}
+        </dl>
+      </details>
+    </div>
   );
 }
 function Sources({ rows, onOpen }) {
@@ -649,7 +928,18 @@ export default function Reports() {
         ) : q.isPending ? (
           <Loader />
         ) : q.error ? null : tab === "summary" ? (
-          <Summary data={q.data} onOpen={openDrill} own={own} />
+          <Summary
+            data={q.data}
+            onOpen={openDrill}
+            own={own}
+            period={filterText}
+            onTab={(value) =>
+              change({
+                tab: value,
+                ...Object.fromEntries(drillParams.map((k) => [k, null])),
+              })
+            }
+          />
         ) : tab === "sources" ? (
           <Sources rows={rows} onOpen={openDrill} />
         ) : tab === "agents" ? (
