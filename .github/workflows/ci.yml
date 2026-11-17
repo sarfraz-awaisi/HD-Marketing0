@@ -35,4 +35,7 @@ jobs:
           python3 deploy/production/check-nginx.py
       - name: Parse workflow YAML
         run: ruby -ryaml -e 'Dir[".github/workflows/*.yml"].each { |f| YAML.load_file(f) }'
-      - run: npm audit --audit-level=high
+      # High or critical advisories fail, except those listed with a reason
+      # and an expiry date in scripts/audit-exceptions.json (never for
+      # production dependencies).
+      - run: node scripts/audit-gate.mjs

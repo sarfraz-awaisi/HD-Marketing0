@@ -59,7 +59,10 @@ jobs:
       - run: npm test
       - run: python3 deploy/production/check.py
       - run: python3 -m unittest discover -s deploy/production/tests -v
-      - run: npm audit --audit-level=high
+      # High or critical advisories fail, except those listed with a reason
+      # and an expiry date in scripts/audit-exceptions.json (never for
+      # production dependencies).
+      - run: node scripts/audit-gate.mjs
       - name: Build public frontend for this environment
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
