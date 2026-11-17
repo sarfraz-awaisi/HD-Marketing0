@@ -163,6 +163,8 @@ export const leadCreate = lead
   .extend({
     phone: z.string().min(10).max(30),
     assigned_agent: uuid.nullable().optional(),
+    // Update 068: the advertisement the lead came from, set once.
+    ad_name: z.string().trim().max(500).optional(),
   })
   .strict()
   .refine((v) => v.budget_max == null || v.budget_max >= v.budget_min, {

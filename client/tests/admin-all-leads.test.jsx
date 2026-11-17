@@ -136,7 +136,7 @@ beforeEach(() => {
   previews = [];
   staleOnce = false;
   rows = [
-    lead(1),
+    lead(1, { ad_name: "Gulberg flats November" }),
     lead(2, {
       assigned_agent: ali.id,
       assigned_name: "Ali Agent",
@@ -284,6 +284,11 @@ describe("administrators' All leads", () => {
     ).toBeInTheDocument();
     expect(second).toHaveTextContent("Ali Agent");
     expect(second).toHaveTextContent("Interested");
+    // Update 068: the advertisement the lead came from, when it has one.
+    expect(
+      within(first).getByText("Ad: Gulberg flats November"),
+    ).toHaveAttribute("title", "Gulberg flats November");
+    expect(second).not.toHaveTextContent("Ad:");
     expect(
       within(second).getByRole("button", { name: "Reassign Customer 2" }),
     ).toBeInTheDocument();

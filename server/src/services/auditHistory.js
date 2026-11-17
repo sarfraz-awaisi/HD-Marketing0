@@ -462,6 +462,39 @@ add(
       : "Permanently removed leads whose recovery period in Deleted leads had ended.",
   { system: true },
 );
+// Update 069: Delete instantly. Only the HD numbers are kept; the
+// customers' details are gone.
+const erasedText = (c, from) => {
+  const numbers = (Array.isArray(c.m.lead_nos) ? c.m.lead_nos : [])
+    .filter((n) => /^[1-9]\d*$/.test(String(n)))
+    .map((n) => `HD-${String(n).padStart(6, "0")}`);
+  const shown =
+    numbers.length > 10
+      ? [...numbers.slice(0, 10), `${numbers.length - 10} more`]
+      : numbers;
+  const failed = number(c.m.failed);
+  return (
+    `Permanently deleted ${count(number(c.m.erased) ?? 0, "lead")} ${from}, with all their records` +
+    `${shown.length ? `: ${listText(shown)}` : ""}. They cannot be restored.` +
+    `${failed ? ` ${count(failed, "lead")} could not be deleted.` : ""}`
+  );
+};
+add(
+  "lead.erased",
+  "leads",
+  "leads",
+  "delete",
+  "Permanently deleted leads",
+  (c) => erasedText(c, "from Deleted leads"),
+);
+add(
+  "lead.file_erased",
+  "lead_imports",
+  "leads",
+  "delete",
+  "Permanently deleted a deleted file's leads",
+  (c) => erasedText(c, `of ${fileText(c)}`),
+);
 add(
   "lead.phone_changed",
   "leads",

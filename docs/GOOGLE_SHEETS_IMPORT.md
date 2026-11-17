@@ -72,7 +72,8 @@ Columns are found by heading, ignoring case and spacing, in any order. Extra col
 | `created_time`                                                         | Submitted, kept apart from the CRM's import time.                                 |
 | `what_are_you_interested_in?_` (any column mentioning "interest")      | Property interest, on the inquiry.                                                |
 | `what_is_your_preferred_investment_budget?_` (any mentioning "budget") | Preferred budget, as text, on the inquiry. The numeric budget fields stay empty.  |
-| `ad_name`, `adset_name`, `campaign_name`, `form_name` and their IDs    | Advertisement details, on the inquiry.                                            |
+| `ad_name` (or `Ad`, `Advertisement`)                                   | The lead's advertisement, shown in lead lists (update 068), and on the inquiry.   |
+| `adset_name`, `campaign_name`, `form_name` and the IDs                 | Advertisement details, on the inquiry.                                            |
 | `platform`, `is_organic`                                               | Facebook, Instagram, Messenger or Audience Network; organic or paid.              |
 | `lead_status`                                                          | Kept as Meta's own status. It is never the CRM's sales status.                    |
 | any other column                                                       | Kept and shown on the inquiry as another answer.                                  |

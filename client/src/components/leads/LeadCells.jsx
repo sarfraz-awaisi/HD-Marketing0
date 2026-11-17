@@ -6,6 +6,7 @@ import { temperatureOf } from "../../lib/temperature";
 // (updates 052 and 053). `back` is the list's address, so Back to leads
 // returns to the same search, filters and page.
 // email={false}: the name only (administrators' All leads, update 057).
+// Update 068: the advertisement the lead came from, when it has one.
 export function CustomerCell({ lead, back, email = true }) {
   return (
     <Link className="customer-link" to={"/leads/" + lead.id} state={{ back }}>
@@ -13,6 +14,11 @@ export function CustomerCell({ lead, back, email = true }) {
       <div>
         <b>{lead.name}</b>
         {email && <small>{lead.email || "No email"}</small>}
+        {lead.ad_name && (
+          <small className="lead-ad" title={lead.ad_name}>
+            Ad: {lead.ad_name}
+          </small>
+        )}
         <WorkspaceBadges lead={lead} />
       </div>
     </Link>

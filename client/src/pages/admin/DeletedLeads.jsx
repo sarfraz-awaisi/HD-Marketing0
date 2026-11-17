@@ -5,6 +5,7 @@ import { formatLeadNo } from "../../lib/formatLeadNo";
 import { useLeadSelection } from "../../lib/useLeadSelection";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
+import EraseLeadsDialog from "../../components/leads/EraseLeadsDialog";
 import {
   Button,
   Table,
@@ -17,7 +18,9 @@ export default function DeletedLeads() {
   const [page, setPage] = useState(1),
     [search, setSearch] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    // Delete instantly (update 069): { ids } or { file }.
+    [erasing, setErasing] = useState(null);
   const selection = useLeadSelection(search),
     qc = useQueryClient(),
     toast = useToast(),
@@ -54,6 +57,17 @@ export default function DeletedLeads() {
       setBusy(false);
     }
   }
+  function erased(result) {
+    setErasing(null);
+    selection.clear();
+    invalidateWorkspace(qc);
+    toast(
+      `${result.erased} permanently deleted${result.failed ? `, ${result.failed} kept (won deal or no longer here)` : ""}` +
+        (result.files_removed === false
+          ? ". Some recordings or documents will be removed from storage later."
+          : ""),
+    );
+  }
   return (
     <>
       <div className="page-heading">
@@ -61,8 +75,9 @@ export default function DeletedLeads() {
           <span className="eyebrow">RECOVER CUSTOMER WORK</span>
           <h1>Deleted leads</h1>
           <p>
-            Restore within 30 days. Leads keep their HD number and return
-            unassigned. Erasure runs automatically after retention.
+            Restore within 14 days. Leads keep their HD number and return
+            unassigned. After 14 days they are erased automatically; Delete
+            instantly erases the selected leads now.
           </p>
         </div>
       </div>
@@ -85,6 +100,13 @@ export default function DeletedLeads() {
             <b>{selection.ids.length} selected</b>
             <Button disabled={busy} onClick={() => restore(selection.ids)}>
               Restore selected
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => setErasing({ ids: selection.ids })}
+            >
+              Delete instantly
             </Button>
             <Button
               variant="secondary"
@@ -149,19 +171,36 @@ export default function DeletedLeads() {
                   {date(file.deleted_at)} · {file.delete_reason}
                 </small>
               </div>
-              <Button
-                variant="secondary"
-                disabled={busy}
-                onClick={() => restore(null, file)}
-              >
-                Restore file and leads
-              </Button>
+              <div className="actions">
+                <Button
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => restore(null, file)}
+                >
+                  Restore file and leads
+                </Button>
+                <Button
+                  variant="danger"
+                  disabled={busy}
+                  onClick={() => setErasing({ file })}
+                >
+                  Delete instantly
+                </Button>
+              </div>
             </div>
           ))
         ) : (
           <p>No recoverable deleted files.</p>
         )}
       </section>
+      {erasing && (
+        <EraseLeadsDialog
+          ids={erasing.ids}
+          file={erasing.file}
+          onClose={() => setErasing(null)}
+          onErased={erased}
+        />
+      )}
     </>
   );
 }

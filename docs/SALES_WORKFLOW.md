@@ -61,9 +61,9 @@ These existing jobs ran only with `npm run jobs` before. They now start with `np
 - alerts for inactive accounts that still own leads
 - retries of file clean-up
 - Meta lead processing (idle until Meta is connected)
-- permanent erasure of leads that have been in **Deleted leads** for 30 days
+- permanent erasure of leads that have been in **Deleted leads** for 14 days
 
-To restore something from Deleted leads, do it within 30 days. In production, keep running the jobs as their own process (`npm run jobs`).
+To restore something from Deleted leads, do it within 14 days. **Delete instantly** in Deleted leads erases the selected leads at once. In production, keep running the jobs as their own process (`npm run jobs`).
 
 ## Limits
 

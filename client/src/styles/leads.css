@@ -496,6 +496,15 @@ dialog.lead-name-dialog {
 .assignment-results td:first-child {
   width: 40%;
 }
+/* Update 068: the advertisement under the customer's name, on one line;
+   the full name shows on hover. */
+.customer-link .lead-ad {
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Update 061: a lead reassigned from another agent. Words, never colour
    alone. */
 .workspace-flags {

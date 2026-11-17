@@ -5,7 +5,7 @@ export async function leadManagementRpc(db, name, args) {
     error.code,
   );
   const safe =
-    /^(This number (already belongs to HD-\d+|is in Deleted leads \(HD-\d+\)\. Restore it instead\.)|Choose |Lead not found|Restore period|Has a won deal|Use a valid|Delete reason)/.test(
+    /^(This number (already belongs to HD-\d+|is in Deleted leads \(HD-\d+\)\. Restore it instead\.)|Choose |Lead not found|Restore period|Has a won deal|Use a valid|Delete reason|File not found in Deleted leads)/.test(
       error.message || "",
     );
   throw Object.assign(

@@ -14,6 +14,7 @@ const columns = new Set([
   "property_id",
   "assigned_agent",
   "source",
+  "ad_name",
 ]);
 const headerKey = (value) =>
   String(value ?? "")
@@ -79,6 +80,14 @@ const headerAliases = new Map(
       "assigned agent name",
     ],
     source: ["source", "lead source"],
+    // Update 068: Meta's lead files call it ad_name.
+    ad_name: [
+      "ad name",
+      "ad",
+      "advertisement",
+      "advertisement name",
+      "ad title",
+    ],
   }).flatMap(([field, names]) => names.map((name) => [headerKey(name), field])),
 );
 const mappingSchema = z
@@ -270,6 +279,9 @@ function leadRows(records, mapping) {
         key === "budget_min" || key === "budget_max"
           ? value
           : String(value).trim();
+      // As from a Google Sheet, a long advertisement name is shortened
+      // rather than the lead rejected.
+      if (key === "ad_name") data[key] = data[key].slice(0, 500).trim();
     }
     // The existing database source category covers all spreadsheet imports.
     return { row, data: { ...data, source: "CSV" } };
@@ -388,6 +400,7 @@ export function importValidationMessage(error) {
     assigned_agent: "Agent must match an active team member's name or CRM ID.",
     preferred_location:
       "Preferred location must contain no more than 4,000 characters.",
+    ad_name: "Ad name must contain no more than 500 characters.",
   };
   return [
     ...new Set(
