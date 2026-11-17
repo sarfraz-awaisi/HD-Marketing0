@@ -1618,3 +1618,82 @@ export const dealerListQuery = z
 export const dealerPhoneQuery = z
   .object({ phone: z.string().trim().min(1).max(40), except: uuid.optional() })
   .strict();
+// Daily KPIs (update 070). The database checks everything again.
+const kpiRuleFields = {
+  frequency: z.enum(["day", "week"]),
+  answer_type: z.enum(["yes_no", "number"]),
+  target: z.number().int().min(1).max(10000),
+  active: z.boolean(),
+  agent_ids: z.array(uuid).min(1).max(500).nullable(),
+};
+const kpiFields = {
+  title: z.string().trim().min(1).max(80),
+  question: z.string().trim().min(1).max(300),
+  description: z
+    .string()
+    .trim()
+    .max(500)
+    .nullable()
+    .transform((v) => v || null),
+  position: z.number().int().min(0).max(1000),
+  ...kpiRuleFields,
+};
+const yesNoTarget = (v) =>
+  v.answer_type !== "yes_no" || v.target === undefined || v.target === 1;
+export const kpiCreate = z
+  .object(kpiFields)
+  .partial({
+    description: true,
+    position: true,
+    target: true,
+    active: true,
+    agent_ids: true,
+  })
+  .strict()
+  .refine(yesNoTarget, {
+    message: "A Yes/No KPI's target is Yes",
+    path: ["target"],
+  })
+  .refine((v) => v.answer_type !== "number" || v.target !== undefined, {
+    message: "Choose a target from 1 to 10,000",
+    path: ["target"],
+  });
+export const kpiUpdate = z
+  .object(kpiFields)
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: "Change something" })
+  .refine(yesNoTarget, {
+    message: "A Yes/No KPI's target is Yes",
+    path: ["target"],
+  });
+export const kpiArchive = z.object({ archived: z.boolean() }).strict();
+export const kpiAnswers = z
+  .object({
+    answers: z
+      .array(
+        z
+          .object({
+            kpi_id: uuid,
+            answer: z.union([z.boolean(), z.number().int().min(0).max(1000)]),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(50)
+      .refine((a) => new Set(a.map((x) => x.kpi_id)).size === a.length, {
+        message: "Answer each KPI once",
+      }),
+  })
+  .strict();
+const kpiRange = {
+  from: z.iso.date(),
+  to: z.iso.date(),
+  agent: uuid.optional(),
+};
+const inOrder = (v) => v.from <= v.to;
+export const kpiReportQuery = z
+  .object(kpiRange)
+  .strict()
+  .refine(inOrder, { message: "Choose a start before the end" });
+export const kpiMyQuery = z.object({ day: z.iso.date().optional() }).strict();

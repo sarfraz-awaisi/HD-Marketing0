@@ -317,16 +317,20 @@ describe("period targets", () => {
       revenue: 0,
     });
   });
-  it("shows an agent the targets running today on the overview", async () => {
+  it("shows an agent today's Daily KPIs on the overview in place of targets (update 070)", async () => {
     mocks.user = { ...ali };
     open("/");
     const panel = (
-      await screen.findByRole("heading", { name: "My targets now" })
+      await screen.findByRole("heading", { name: "Daily KPIs today" })
     ).closest("section");
     expect(
-      await within(panel).findByText("Leads contacted"),
+      await within(panel).findByText("No KPIs are set for you today."),
     ).toBeInTheDocument();
-    expect(calls("/targets?")[0][0]).toContain("current=true");
+    expect(calls("/kpis/my")).toHaveLength(1);
+    expect(calls("/targets?")).toHaveLength(0);
+    expect(
+      screen.queryByRole("heading", { name: "My targets now" }),
+    ).not.toBeInTheDocument();
   });
 });
 
