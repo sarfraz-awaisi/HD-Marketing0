@@ -759,6 +759,106 @@ describe("documentation and policy database/API", () => {
       ).status,
     ).toBe(404);
   });
+  it("lets anyone who may read an entry view its PDFs in the browser, records each view, and keeps Word files to download", async () => {
+    const entry = await save(),
+      db = database(),
+      app = createApp(trustedMfaFixture(db));
+    const pdfFile = (await upload(app, entry.id)).body;
+    const wordFile = (await upload(app, entry.id, word("docx"), "rules.docx"))
+      .body;
+    const view = (file, actor, id = entry.id) =>
+      request(app)
+        .get(`/api/documents/${id}/files/${file}/view`)
+        .set("Authorization", "Bearer " + actor);
+    const count = async (action) =>
+      (
+        await one(
+          "select count(*)::int n from audit_log where action=$1 and entity_id=$2",
+          [action, entry.id],
+        )
+      ).n;
+    const downloads = await count("download_file");
+    // Administrators and agents alike: the PDF itself, shown in place.
+    for (const actor of [agent, admin]) {
+      const shown = await view(pdfFile.id, actor);
+      expect(shown.status).toBe(200);
+      expect(shown.body).toEqual(pdf);
+      expect(shown.headers["content-type"]).toBe("application/pdf");
+      expect(shown.headers["content-disposition"]).toMatch(/^inline;/);
+      expect(shown.headers["cache-control"]).toBe("no-store");
+      expect(shown.headers["x-content-type-options"]).toBe("nosniff");
+      // Only the file: no Storage path or key in any header.
+      expect(JSON.stringify(shown.headers)).not.toContain(`${entry.id}/`);
+      expect(JSON.stringify(shown.headers)).not.toMatch(/storage|token|key=/i);
+    }
+    expect(
+      await one(
+        "select count(*)::int n,min(metadata->>'file_id') file,bool_or(actor_id=$2) agent from audit_log where action='view_file' and entity_id=$1",
+        [entry.id, agent],
+      ),
+    ).toEqual({ n: 2, file: pdfFile.id, agent: true });
+    // A view is not a download.
+    expect(await count("download_file")).toBe(downloads);
+    // Word files are downloaded, not shown; nothing is recorded or sent.
+    const refused = await view(wordFile.id, agent);
+    expect([refused.status, refused.body.error]).toEqual([
+      415,
+      "Only PDF files can be viewed here. Download this file.",
+    ]);
+    expect(await count("view_file")).toBe(2);
+    // Only for entries the account may read: a client's KYC file is shown
+    // to the agent who has that client, never to another agent, and not
+    // for a client no agent has.
+    const otherAgent = randomUUID();
+    await pg.query("insert into auth.users(id) values($1)", [otherAgent]);
+    await pg.query(
+      "update profiles set active=true,role='agent',name='Other agent' where id=$1",
+      [otherAgent],
+    );
+    const client = (name, phone, owner) =>
+      one("select (create_lead($1::jsonb,$2,$3,'fixture:kyc-view')).id", [
+        JSON.stringify({ name, ...(owner ? { assigned_agent: owner } : {}) }),
+        phone,
+        admin,
+      ]).then((r) => r.id);
+    const kycFor = async (lead) => {
+      const doc = await save({
+        title: "Client CNIC",
+        category: "client_kyc",
+        content: "CNIC copy",
+        lead_id: lead,
+      });
+      return { doc: doc.id, file: (await upload(app, doc.id)).body.id };
+    };
+    const others = await kycFor(
+      await client("Other agent's client", "+923007650001", otherAgent),
+    );
+    const nobody = await kycFor(
+      await client("Unassigned client", "+923007650002"),
+    );
+    const own = await kycFor(clientLead);
+    for (const kyc of [others, nobody]) {
+      const hidden = await view(kyc.file, agent, kyc.doc);
+      expect([403, 404]).toContain(hidden.status);
+      expect(Buffer.isBuffer(hidden.body) ? hidden.body.length : 0).toBe(0);
+    }
+    expect((await view(own.file, agent, own.doc)).status).toBe(200);
+    const kyc = { id: others.doc },
+      kycFile = { id: others.file };
+    expect((await view(kycFile.id, admin, kyc.id)).status).toBe(200);
+    // No session, no file; and no file when the view cannot be recorded.
+    expect(
+      (
+        await request(app).get(
+          `/api/documents/${entry.id}/files/${pdfFile.id}/view`,
+        )
+      ).status,
+    ).toBe(401);
+    db.setAuditFailure(true);
+    const unrecorded = await view(pdfFile.id, agent);
+    expect(unrecorded.status).toBe(503);
+    expect(unrecorded.body).not.toEqual(pdf);
+  });
   it("rejects renamed, unsupported, oversized, encrypted or macro DOCX files before storage", async () => {
     const entry = await save(),
       db = database(),

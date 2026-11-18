@@ -1363,6 +1363,14 @@ add(
   "Downloaded a document file",
   (c) => `Downloaded a file from ${documentText(c)}.`,
 );
+add(
+  "view_file",
+  "knowledge_documents",
+  "documents",
+  "view",
+  "Viewed a document file",
+  (c) => `Viewed a file of ${documentText(c)} in the browser.`,
+);
 
 // Employee accounts
 add(

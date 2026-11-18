@@ -9,6 +9,7 @@ import {
   vi,
 } from "vitest";
 import {
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -474,6 +475,80 @@ describe("documentation and policies workspace", () => {
         screen.queryByRole("button", { name: "Download Handbook.pdf" }),
       ).not.toBeInTheDocument(),
     );
+  });
+  it("lets administrators and agents view a PDF in the page, and keeps Word files to download", async () => {
+    const docx = {
+      id: "72000000-0000-4000-8000-000000000002",
+      file_name: "Rules.docx",
+      mime_type:
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      size_bytes: 200,
+    };
+    records[0].files.push(docx);
+    const base = mocks.api.getMockImplementation();
+    const pdfBlob = new Blob(["%PDF-1.4"]);
+    mocks.api.mockImplementation(async (path, options) =>
+      path.endsWith("/view") ? pdfBlob : base(path, options),
+    );
+    const created = vi.fn(() => "blob:test/handbook"),
+      revoked = vi.fn();
+    const urls = [URL.createObjectURL, URL.revokeObjectURL];
+    URL.createObjectURL = created;
+    URL.revokeObjectURL = revoked;
+    try {
+      for (const role of ["admin", "agent"]) {
+        mocks.auth.user = { ...mocks.auth.user, id: role, role };
+        const user = userEvent.setup();
+        workspace("/documents/" + first.id);
+        await user.click(
+          await screen.findByRole("button", { name: "View Handbook.pdf" }),
+        );
+        // Word files: Download only.
+        expect(
+          screen.queryByRole("button", { name: "View Rules.docx" }),
+        ).not.toBeInTheDocument();
+        expect(
+          screen.getByRole("button", { name: "Download Rules.docx" }),
+        ).toBeInTheDocument();
+        const viewer = await screen.findByRole("dialog", {
+          name: "Handbook.pdf",
+        });
+        const frame = await within(viewer).findByTitle("Handbook.pdf (PDF)");
+        expect(frame).toHaveAttribute("src", "blob:test/handbook");
+        expect(mocks.api).toHaveBeenCalledWith(
+          `/documents/${first.id}/files/${first.files[0].id}/view`,
+          expect.objectContaining({ download: true }),
+        );
+        const tab = within(viewer).getByRole("link", {
+          name: /Open in a new tab/,
+        });
+        expect(tab).toHaveAttribute("target", "_blank");
+        expect(tab).toHaveAttribute("rel", "noopener noreferrer");
+        // Download from the viewer is an ordinary, recorded download.
+        await user.click(
+          within(viewer).getByRole("button", { name: "Download" }),
+        );
+        await waitFor(() =>
+          expect(mocks.download).toHaveBeenLastCalledWith(
+            expect.any(Blob),
+            "Handbook.pdf",
+          ),
+        );
+        expect(mocks.api).toHaveBeenCalledWith(
+          `/documents/${first.id}/files/${first.files[0].id}/download`,
+          { download: true },
+        );
+        await user.click(
+          within(viewer).getByRole("button", { name: "Close dialog" }),
+        );
+        await waitFor(() =>
+          expect(revoked).toHaveBeenCalledWith("blob:test/handbook"),
+        );
+        cleanup();
+      }
+    } finally {
+      [URL.createObjectURL, URL.revokeObjectURL] = urls;
+    }
   });
   it("blocks dismissal, repeated saves and file changes while uploads are pending", async () => {
     let release;

@@ -4042,3 +4042,35 @@ dialog.property-dialog {
     width: 100%;
   }
 }
+/* Viewing a PDF attachment in the browser (Documentation & policies). */
+dialog.document-viewer {
+  width: min(1100px, calc(100% - 32px));
+}
+.document-viewer-frame {
+  display: block;
+  width: 100%;
+  height: min(66vh, 860px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.document-viewer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.document-viewer-actions .button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+@media (max-width: 720px) {
+  .document-viewer-frame {
+    height: 60vh;
+  }
+  .document-viewer-actions .button {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+}
