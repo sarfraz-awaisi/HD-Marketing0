@@ -108,7 +108,7 @@ export async function withDetails(db, req, leads) {
 const inquiryTime = (item) =>
   new Date(item.submitted_at || item.imported_at || 0).getTime();
 
-const statusLabels = {
+export const statusLabels = {
   new: "New",
   contacted: "Contacted",
   interested: "Interested",
@@ -135,7 +135,7 @@ export function pkDateTime(value) {
   );
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
-const lostReasons = {
+export const lostReasons = {
   price: "Price",
   location: "Location",
   budget: "Budget",
@@ -145,7 +145,7 @@ const lostReasons = {
   wrong_number: "Wrong number",
   other: "Other",
 };
-const platforms = {
+export const platforms = {
   facebook: "Facebook",
   instagram: "Instagram",
   messenger: "Messenger",
@@ -161,9 +161,9 @@ const otherAnswers = (extra) =>
   Object.entries(extra && typeof extra === "object" ? extra : {})
     .map(([q, v]) => `${answer(q.replace(/[?_]+$/, ""))}: ${answer(v)}`)
     .join("; ");
-const amount = (value) =>
+export const amount = (value) =>
   value === null || value === undefined || value === "" ? "" : Number(value);
-const leadNo = (value) =>
+export const leadNo = (value) =>
   /^[1-9]\d*$/.test(String(value ?? ""))
     ? `HD-${String(value).padStart(6, "0")}`
     : "";

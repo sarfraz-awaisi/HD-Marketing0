@@ -523,6 +523,32 @@ add(
   "Viewed a lead's phone number",
   (c) => `Viewed the phone number of ${leadRef(c)}.`,
 );
+// Lead export file by file (update 073): the filters and counts, never a
+// customer's details. With a Lead summary, each number is also recorded as
+// viewed (lead.phone_revealed).
+const exportedSheets = {
+  summary: "Lead summary",
+  calls: "Call history",
+  notes: "Notes",
+  assignments: "Assignment history",
+  ad_quality: "Ad quality",
+  files: "Files",
+};
+add("leads.exported", "leads", "leads", "view", "Exported leads", (c) => {
+  const leads = Number.isInteger(c.m.leads) ? c.m.leads : null;
+  const files = Number.isInteger(c.m.files) ? c.m.files : null;
+  const sheets = (Array.isArray(c.m.sheets) ? c.m.sheets : [])
+    .map((s) => exportedSheets[s])
+    .filter(Boolean);
+  if (leads === null) return "Exported leads.";
+  return (
+    `Exported ${count(leads, "lead")}` +
+    (files === null ? "" : ` from ${count(files, "file")}`) +
+    (exportedFormat[c.m.format] ? ` as ${exportedFormat[c.m.format]}` : "") +
+    (sheets.length ? `: ${listText(sheets)}` : "") +
+    "."
+  );
+});
 // Lead pipeline export: one temperature of every agent's leads. Each number
 // in the file is also recorded as viewed (lead.phone_revealed).
 const exportedTemperature = { hot: "hot", warm: "warm", cold: "cold" };
