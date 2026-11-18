@@ -6,7 +6,9 @@ import { resetPeople, startCrmDatabase } from "./crm-fixture.js";
 // before the lead existed, with its work, once deleted, once restored, and
 // after a second restore. Deleted, nothing of it counts (Deleted today
 // apart); restored, its records count again, once. Attendance and KPI answers
-// never change. Against every migration; nothing here changes the rules.
+// never change; what the CRM measures for KPIs (update 072: first calls by
+// their deadline) counts like every other number. Against every migration;
+// nothing here changes the rules.
 const admin = "71200000-0000-4000-8000-000000000001",
   ali = "71200000-0000-4000-8000-000000000002",
   sara = "71200000-0000-4000-8000-000000000003";
@@ -159,7 +161,11 @@ async function numbers() {
       [ali],
     ),
     "KPI answers": await read(
-      "select (select count(*) from kpi_submissions)||':'||kpi_facts($1,current_date,current_date,null)::text v",
+      "select (select count(*) from kpi_submissions)||':'||(kpi_facts($1,current_date,current_date,null)-'measures')::text v",
+      [admin],
+    ),
+    "KPI measures": await read(
+      "select (kpi_facts($1,current_date,current_date,null)->'measures')::text v",
       [admin],
     ),
   };

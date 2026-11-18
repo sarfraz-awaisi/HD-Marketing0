@@ -3,12 +3,14 @@ import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { fullDayLabel } from "../../lib/calendar";
+import { measured, measureLabels } from "../../lib/kpiPeriods";
 import { Button, ErrorBox, Loader, Modal, useToast } from "../common/UI";
 import "../../styles/kpis.css";
 // Administrators' KPI list (update 070). Wording and order change at once;
 // rules (frequency, answer type, target, on/off and agents) change from the
 // next period, so earlier results keep the rules they were measured by. A
-// KPI with answers is archived, not deleted.
+// KPI with answers is archived, not deleted. A KPI the CRM fills in (update
+// 072) keeps its frequency and answer type.
 const frequencyLabel = { day: "Daily", week: "Weekly" };
 const typeLabel = { yes_no: "Yes / No", number: "Number" };
 const targetText = (r) =>
@@ -50,6 +52,7 @@ function KpiForm({ kpi, agents, onClose, onSaved }) {
     [error, setError] = useState("");
   const set = (patch) => setForm((f) => ({ ...f, ...patch }));
   const number = form.answer_type === "number";
+  const locked = measured(rules);
   const validTarget = !number || /^[1-9]\d{0,4}$/.test(form.target);
   async function submit(e) {
     e.preventDefault();
@@ -113,6 +116,7 @@ function KpiForm({ kpi, agents, onClose, onSaved }) {
           Frequency
           <select
             value={form.frequency}
+            disabled={locked}
             onChange={(e) => set({ frequency: e.target.value })}
           >
             <option value="day">Daily</option>
@@ -123,6 +127,7 @@ function KpiForm({ kpi, agents, onClose, onSaved }) {
           Answer type
           <select
             value={form.answer_type}
+            disabled={locked}
             onChange={(e) =>
               set({
                 answer_type: e.target.value,
@@ -206,6 +211,12 @@ function KpiForm({ kpi, agents, onClose, onSaved }) {
             earlier results are never recalculated.
           </p>
         )}
+        {locked && (
+          <p className="field-hint">
+            Filled in by the CRM ({measureLabels[rules.measure]}): its frequency
+            and answer type stay as they are.
+          </p>
+        )}
         <ErrorBox error={error} />
         <footer>
           <Button
@@ -270,7 +281,7 @@ export default function KpiManage() {
     const parts = [k.rules?.active ? "Enabled" : "Off"];
     if (k.scheduled)
       parts.push(
-        `Change waiting${from(k.scheduled.effective_from)}: ${frequencyLabel[k.scheduled.frequency]}, ${targetText(k.scheduled)}${k.scheduled.active ? "" : ", off"}`,
+        `Change waiting${from(k.scheduled.effective_from)}: ${frequencyLabel[k.scheduled.frequency]}, ${targetText(k.scheduled)}${k.scheduled.active ? "" : ", off"}${measured(k.scheduled) && !measured(k.rules) ? ", filled in by the CRM" : ""}`,
       );
     return parts.join(" · ");
   };
@@ -329,7 +340,14 @@ export default function KpiManage() {
                       <small className="kpi-sub">{k.question}</small>
                     </td>
                     <td>{frequencyLabel[k.rules?.frequency] ?? "—"}</td>
-                    <td>{typeLabel[k.rules?.answer_type] ?? "—"}</td>
+                    <td>
+                      {typeLabel[k.rules?.answer_type] ?? "—"}
+                      {measured(k.rules ?? k.scheduled) && (
+                        <small className="kpi-sub">
+                          {measureLabels[(k.rules ?? k.scheduled).measure]}
+                        </small>
+                      )}
+                    </td>
                     <td>{targetText(k.rules)}</td>
                     <td>
                       {!k.rules?.agent_ids

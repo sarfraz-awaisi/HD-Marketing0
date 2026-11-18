@@ -243,3 +243,175 @@
     max-width: none;
   }
 }
+/* Update 072: KPIs the CRM fills in, their evidence and the review list. */
+.kpi-item-measured {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+}
+.kpi-measured {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.kpi-counts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.kpi-counts div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.kpi-counts dt {
+  color: var(--ink-2);
+  font-size: var(--text-xs, 12px);
+}
+.kpi-counts dd {
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+.kpi-evidence-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+.kpi-evidence-add > input {
+  flex: 1 1 220px;
+  min-height: 44px;
+  min-width: 0;
+  font-size: 16px;
+}
+.kpi-evidence-add .field-hint,
+.kpi-evidence-add .kpi-error {
+  flex-basis: 100%;
+}
+.kpi-photo-add label {
+  display: grid;
+  flex: 1 1 180px;
+  gap: 4px;
+  min-width: 0;
+}
+.kpi-photo-add input,
+.kpi-photo-add select {
+  min-height: 44px;
+  font-size: 16px;
+}
+.kpi-evidence-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kpi-evidence-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: start;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.kpi-evidence-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.kpi-evidence-main small,
+.kpi-evidence-review {
+  color: var(--ink-2);
+  font-size: var(--text-xs, 12px);
+}
+.kpi-evidence-review {
+  grid-column: 1 / -1;
+}
+.kpi-evidence-url {
+  overflow-wrap: anywhere;
+}
+.kpi-evidence-status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--neutral-soft);
+  color: var(--ink);
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.kpi-evidence-status.approved,
+.kpi-evidence-status.verified {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.kpi-evidence-status.rejected {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.kpi-add-listing {
+  width: fit-content;
+}
+.kpi-waiting-count {
+  font-weight: 700;
+}
+.kpi-photo-modal {
+  width: min(900px, calc(100vw - 32px));
+}
+.kpi-photo-modal img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  margin: 0 auto;
+  border-radius: 10px;
+  object-fit: contain;
+}
+@media (max-width: 720px) {
+  .kpi-item-measured {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .kpi-evidence-add .button {
+    flex: 1 1 100%;
+  }
+}
+.kpi-photo-add label:has(input[type="file"]) {
+  flex-basis: 240px;
+}
+/* Reviews on a phone: one card per item, each field with its label. */
+@media (max-width: 800px) {
+  .kpi-review-list table,
+  .kpi-review-list tbody,
+  .kpi-review-list tr {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .kpi-review-list thead {
+    display: none;
+  }
+  .kpi-review-list tr {
+    margin: 12px 0;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .kpi-review-list td {
+    display: grid;
+    grid-template-columns: minmax(0, 92px) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 8px 0;
+    white-space: normal;
+  }
+  .kpi-review-list td::before {
+    content: attr(data-label);
+    color: var(--ink-2);
+    font-weight: 600;
+  }
+  .kpi-review-list .table-scroll {
+    overflow: visible;
+  }
+}

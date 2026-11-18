@@ -786,6 +786,66 @@ add(
     return `Saved daily KPI answers${dayText(c.m.day) ? ` for ${dayText(c.m.day)}` : ""}${list.length ? `: ${listText(list)}` : ""}.`;
   },
 );
+// KPIs filled in by the CRM, their evidence and listing verification
+// (update 072). agent_id is the agent whose evidence or listing it was.
+const evidenceText = (c) =>
+  ({
+    social: "a social media link",
+    video: "a video link",
+    visit: "a project visit photo",
+  })[c.m.kind] || "KPI evidence";
+const evidenceFor = (c) =>
+  `${typeof c.m.project === "string" && c.m.project ? ` of ${c.m.project}` : ""}${dayText(c.m.day) ? ` for ${dayText(c.m.day)}` : ""}`;
+const reviewReason = (c) =>
+  typeof c.m.reason === "string" && c.m.reason ? ` Reason: ${c.m.reason}` : "";
+const wasText = (before) =>
+  ({ pending: "waiting", approved: "approved", rejected: "rejected" })[
+    before
+  ] ?? null;
+add(
+  "kpi.measured_by_crm",
+  "kpis",
+  "targets",
+  "automatic",
+  "A daily KPI is filled in by the CRM",
+  (c) =>
+    `The KPI ${kpiName(c)} is now filled in by the CRM; earlier answers are kept.`,
+);
+add(
+  "kpi.evidence_added",
+  "kpi_evidence",
+  "targets",
+  "create",
+  "Added KPI evidence",
+  (c) => `Added ${evidenceText(c)}${evidenceFor(c)}, waiting for review.`,
+);
+for (const [status, word] of [
+  ["approved", "Approved"],
+  ["rejected", "Rejected"],
+])
+  add(
+    `kpi.evidence_${status}`,
+    "kpi_evidence",
+    "targets",
+    "review",
+    `${word} KPI evidence`,
+    (c) =>
+      `${word} ${evidenceText(c)}${evidenceFor(c)}${c.agent ? ` from ${agentText(c)}` : ""}${wasText(c.m.before) && c.m.before !== "pending" ? ` (was ${wasText(c.m.before)})` : ""}.${reviewReason(c)}`,
+  );
+for (const [action, word, text] of [
+  ["inventory.verified", "Verified", "Verified"],
+  ["inventory.rejected", "Rejected", "Rejected"],
+  ["inventory.verification_cleared", "Cleared", "Cleared the verification of"],
+])
+  add(
+    action,
+    "properties",
+    "properties",
+    "review",
+    `${word} a listing for daily KPIs`,
+    (c) =>
+      `${text} ${propertyText(c)}${c.agent ? ` from ${agentText(c)}` : ""} for the verified inventory KPI${c.m.before ? ` (was ${c.m.before})` : ""}.${reviewReason(c)}`,
+  );
 
 // Daily tasks, reports and checkout requests (update 045)
 const taskTitle = (c) => (c.m.title ? `“${c.m.title}”` : "a task");

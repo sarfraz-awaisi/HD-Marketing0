@@ -2,14 +2,17 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
 import { addDays, dayLabel, fullDayLabel, todayPk } from "../../lib/calendar";
-import { answerText, dayStates } from "../../lib/kpiPeriods";
+import { answerText, dayStates, measured } from "../../lib/kpiPeriods";
 import { Button, ErrorBox, Loader, useToast } from "../common/UI";
+import { MeasuredKpi } from "./KpiEvidence";
 import "../../styles/kpis.css";
 // An agent's Daily KPIs (update 070): every KPI that applies to them for the
 // chosen day. Yes/No has no default and a number may be 0, so nothing is
 // answered until the agent answers it. Daily KPIs are answered on their
 // day; weekly ones on any day of this week up to today, adding up to the
-// week's target. Saving again replaces that day's answer.
+// week's target. Saving again replaces that day's answer. Since update 072
+// the CRM fills some KPIs in (calls, inventory) or counts the evidence
+// administrators approve (links, visit photos): no answer to give there.
 const isCount = (text) => /^\d{1,4}$/.test(text) && Number(text) <= 1000;
 
 function YesNo({ item, value, onChange }) {
@@ -68,6 +71,11 @@ export default function AgentKpis() {
   });
   const data = q.data;
   const items = data?.kpis || [];
+  const own = items.filter((i) => !measured(i));
+  const refresh = (message) => {
+    qc.invalidateQueries({ queryKey: ["kpis", "my"] });
+    toast(message);
+  };
   const saved = (item) => item.answer;
   const current = (item) =>
     Object.hasOwn(draft, item.id) ? draft[item.id] : saved(item);
@@ -137,6 +145,10 @@ export default function AgentKpis() {
       "Enter what you did each day; the week adds up to the target.",
     ],
   ];
+  const crmHint = {
+    day: "The CRM fills these in from your work and the evidence an administrator approves.",
+    week: "The week adds up what an administrator approves; add your evidence as you go.",
+  };
   const history = data?.history;
   return (
     <>
@@ -173,7 +185,12 @@ export default function AgentKpis() {
         </div>
         {data && (
           <p className="kpi-status-line" aria-live="polite">
-            {data.answered} of {data.kpis.length} answered for this day
+            {own.length
+              ? `${data.answered} of ${own.length} answered for this day`
+              : `All ${items.length} KPIs are filled in by the CRM`}
+            {own.length > 0 &&
+              own.length < items.length &&
+              ` · ${items.length - own.length} filled in by the CRM`}
           </p>
         )}
       </section>
@@ -196,92 +213,111 @@ export default function AgentKpis() {
             return (
               <section className="panel kpi-group" key={frequency}>
                 <h2>{heading}</h2>
-                <p className="field-hint">{hint}</p>
-                {list.map((item) => (
-                  <div className="kpi-item" key={item.id}>
-                    <div className="kpi-question">
-                      <b>{item.title}</b>
-                      <span>{item.question}</span>
-                      {item.description && <small>{item.description}</small>}
-                      {item.answer_type === "number" &&
-                        item.frequency === "day" && (
-                          <small>Target: {item.target} a day</small>
-                        )}
+                <p className="field-hint">
+                  {list.every(measured) ? crmHint[frequency] : hint}
+                </p>
+                {list.map((item) =>
+                  measured(item) ? (
+                    <div className="kpi-item kpi-item-measured" key={item.id}>
+                      <div className="kpi-question">
+                        <b>{item.title}</b>
+                        <span>{item.question}</span>
+                        {item.description && <small>{item.description}</small>}
+                      </div>
+                      <MeasuredKpi
+                        item={item}
+                        data={data}
+                        onChanged={refresh}
+                      />
                     </div>
-                    <div className="kpi-answer">
-                      {item.answer_type === "yes_no" ? (
-                        <YesNo
-                          item={item}
-                          value={current(item)}
-                          onChange={(v) =>
-                            setDraft((d) => ({ ...d, [item.id]: v }))
-                          }
-                        />
-                      ) : (
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          pattern="[0-9]*"
-                          aria-label={item.question}
-                          placeholder="Number"
-                          value={text(item)}
-                          disabled={!item.editable}
-                          aria-invalid={invalid.includes(item)}
-                          onChange={(e) =>
-                            setDraft((d) => ({
-                              ...d,
-                              [item.id]: e.target.value.trim(),
-                            }))
-                          }
-                        />
-                      )}
-                      {invalid.includes(item) && (
-                        <small className="kpi-error">
-                          Enter a whole number from 0 to 1,000.
-                        </small>
-                      )}
-                      {item.frequency === "day" &&
-                        item.answer_type === "number" &&
-                        item.answer !== null && (
-                          <small
-                            className={`kpi-progress ${item.met ? "met" : "below"}`}
-                          >
-                            {item.answer}/{item.target}
+                  ) : (
+                    <div className="kpi-item" key={item.id}>
+                      <div className="kpi-question">
+                        <b>{item.title}</b>
+                        <span>{item.question}</span>
+                        {item.description && <small>{item.description}</small>}
+                        {item.answer_type === "number" &&
+                          item.frequency === "day" && (
+                            <small>Target: {item.target} a day</small>
+                          )}
+                      </div>
+                      <div className="kpi-answer">
+                        {item.answer_type === "yes_no" ? (
+                          <YesNo
+                            item={item}
+                            value={current(item)}
+                            onChange={(v) =>
+                              setDraft((d) => ({ ...d, [item.id]: v }))
+                            }
+                          />
+                        ) : (
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            aria-label={item.question}
+                            placeholder="Number"
+                            value={text(item)}
+                            disabled={!item.editable}
+                            aria-invalid={invalid.includes(item)}
+                            onChange={(e) =>
+                              setDraft((d) => ({
+                                ...d,
+                                [item.id]: e.target.value.trim(),
+                              }))
+                            }
+                          />
+                        )}
+                        {invalid.includes(item) && (
+                          <small className="kpi-error">
+                            Enter a whole number from 0 to 1,000.
                           </small>
                         )}
-                      {item.frequency === "week" && (
-                        <WeekProgress
-                          week={item.week}
-                          type={item.answer_type}
-                        />
-                      )}
-                      {!item.editable && (
-                        <small className="field-hint">
-                          {item.frequency === "day"
-                            ? "Daily KPIs are answered on the day."
-                            : "This week is closed."}
-                        </small>
-                      )}
-                      {item.updated_at && (
-                        <small className="field-hint">
-                          Saved {date(item.updated_at)}
-                        </small>
-                      )}
+                        {item.frequency === "day" &&
+                          item.answer_type === "number" &&
+                          item.answer !== null && (
+                            <small
+                              className={`kpi-progress ${item.met ? "met" : "below"}`}
+                            >
+                              {item.answer}/{item.target}
+                            </small>
+                          )}
+                        {item.frequency === "week" && (
+                          <WeekProgress
+                            week={item.week}
+                            type={item.answer_type}
+                          />
+                        )}
+                        {!item.editable && (
+                          <small className="field-hint">
+                            {item.frequency === "day"
+                              ? "Daily KPIs are answered on the day."
+                              : "This week is closed."}
+                          </small>
+                        )}
+                        {item.updated_at && (
+                          <small className="field-hint">
+                            Saved {date(item.updated_at)}
+                          </small>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ),
+                )}
               </section>
             );
           })}
-          <div className="kpi-save">
-            <Button disabled={busy || !changes.length || invalid.length > 0}>
-              {busy
-                ? "Saving…"
-                : changes.length
-                  ? `Save ${changes.length} answer${changes.length === 1 ? "" : "s"}`
-                  : "Saved"}
-            </Button>
-          </div>
+          {own.length > 0 && (
+            <div className="kpi-save">
+              <Button disabled={busy || !changes.length || invalid.length > 0}>
+                {busy
+                  ? "Saving…"
+                  : changes.length
+                    ? `Save ${changes.length} answer${changes.length === 1 ? "" : "s"}`
+                    : "Saved"}
+              </Button>
+            </div>
+          )}
         </form>
       )}
       {history?.days?.length > 0 && (
@@ -305,7 +341,8 @@ export default function AgentKpis() {
                       const a = d.answers[k.id];
                       return (
                         <td key={k.id}>
-                          {!a
+                          {!a ||
+                          (a.state === "not_due" && k.frequency === "week")
                             ? "—"
                             : a.state === "answered"
                               ? answerText(k.answer_type, a.value)
