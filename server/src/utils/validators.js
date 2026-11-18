@@ -1771,3 +1771,71 @@ export const kpiInventoryReview = z
     reason: reviewReason,
   })
   .strict();
+// Update 073: lead export, file by file. The database checks everything
+// again. Filters on the lead now, and on its history (days in Pakistan).
+const exportDay = z.iso.date();
+export const leadExportFilters = z
+  .object({
+    files: z.array(uuid).min(1).max(200).optional(),
+    no_file: z.boolean().optional(),
+    agent: uuid.optional(),
+    assignment: z.enum(["assigned", "unassigned"]).optional(),
+    source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
+    status: z.enum(statuses).optional(),
+    temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
+    outcome: z.enum(outcomes).optional(),
+    contacted: z.enum(["yes", "no"]).optional(),
+    followup: z.enum(["pending", "overdue", "completed", "none"]).optional(),
+    visit: z.enum(["scheduled", "completed", "cancelled", "none"]).optional(),
+    deal: z
+      .enum(["discussion", "negotiation", "won", "lost", "none"])
+      .optional(),
+    created_from: exportDay.optional(),
+    created_to: exportDay.optional(),
+    calls_from: exportDay.optional(),
+    calls_to: exportDay.optional(),
+    had_outcome: z.enum(outcomes).optional(),
+  })
+  .strict()
+  .refine((f) => !(f.agent && f.assignment === "unassigned"), {
+    message: "An agent's leads are assigned leads",
+  })
+  .refine(
+    (f) =>
+      !(f.created_from && f.created_to && f.created_from > f.created_to) &&
+      !(f.calls_from && f.calls_to && f.calls_from > f.calls_to),
+    { message: "Choose a start on or before the end" },
+  );
+const exportSheet = z.enum([
+  "summary",
+  "calls",
+  "notes",
+  "assignments",
+  "ad_quality",
+  "files",
+]);
+export const leadExportRequest = z
+  .object({
+    filters: leadExportFilters,
+    format: z.enum(["xlsx", "csv"]),
+    // Excel: the worksheets to include; CSV: the one worksheet.
+    sheets: z.array(exportSheet).min(1).max(6).optional(),
+    sheet: exportSheet.optional(),
+    preset: z
+      .enum([
+        "file",
+        "contacted",
+        "not_contacted",
+        "interested",
+        "hot",
+        "warm",
+        "followup",
+        "visit",
+        "won",
+      ])
+      .optional(),
+  })
+  .strict()
+  .refine((b) => (b.format === "csv" ? !!b.sheet : !!b.sheets), {
+    message: "Choose the worksheets to export",
+  });
