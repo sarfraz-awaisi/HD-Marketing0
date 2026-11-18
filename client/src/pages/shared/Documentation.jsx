@@ -7,12 +7,16 @@ import {
   FileText,
   Paperclip,
   Download,
+  Eye,
   Search,
   Building2,
 } from "lucide-react";
 import { api, date, download } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import KycClientPicker from "../../components/documents/KycClientPicker";
+import DocumentViewer, {
+  viewable,
+} from "../../components/documents/DocumentViewer";
 import {
   Button,
   Modal,
@@ -307,7 +311,8 @@ export default function Documentation() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [downloading, setDownloading] = useState(null),
-    [downloadError, setDownloadError] = useState("");
+    [downloadError, setDownloadError] = useState(""),
+    [viewing, setViewing] = useState(null);
   const pending = useRef(false);
   const debouncedSearch = useDebouncedValue(search);
   const params = new URLSearchParams({
@@ -458,6 +463,16 @@ export default function Documentation() {
                             <small>{fileSize(file.size_bytes)}</small>
                           </span>
                           <div className="actions">
+                            {viewable(file) && (
+                              <Button
+                                variant="secondary"
+                                aria-label={`View ${file.file_name}`}
+                                onClick={() => setViewing(file)}
+                              >
+                                <Eye size={16} aria-hidden="true" />
+                                View
+                              </Button>
+                            )}
                             <Button
                               variant="secondary"
                               disabled={!!downloading}
@@ -506,6 +521,13 @@ export default function Documentation() {
                         </li>
                       ))}
                     </ul>
+                    {viewing && (
+                      <DocumentViewer
+                        documentId={id}
+                        file={viewing}
+                        onClose={() => setViewing(null)}
+                      />
+                    )}
                   </section>
                 )}
               </article>

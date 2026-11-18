@@ -7,6 +7,7 @@ import { sensitiveLimit } from "../middleware/rateLimit.js";
 import { maskAgentResponse } from "../middleware/phoneProtection.js";
 import { validateDocumentFile } from "../services/documentFiles.js";
 import { cleanupKnowledgeFiles } from "../jobs/cleanupKnowledgeFiles.js";
+import { audit } from "../middleware/auditLogger.js";
 import { listQuery, uuid } from "../utils/validators.js";
 
 const category = z.enum([
@@ -193,16 +194,22 @@ export function documentsRouter(db) {
       }
     },
   );
-  router.get("/:id/files/:file/download", sensitiveLimit, async (req, res) => {
+  // A file of an entry, to download or, for a PDF, to view in the browser.
+  // The database checks the account may read the entry each time; a
+  // download is recorded by authorize_knowledge_download, a view here.
+  const viewable = new Set(["application/pdf"]);
+  async function sendFile(req, res, view) {
     const access = {
       p_document: uuid.parse(req.params.id),
       p_file: uuid.parse(req.params.file),
       p_actor: req.user.id,
     };
-    const authorization = await db.rpc("authorize_knowledge_download", {
-      ...access,
-      p_request: req.id,
-    });
+    const authorization = view
+      ? await db.rpc("read_knowledge_file", access)
+      : await db.rpc("authorize_knowledge_download", {
+          ...access,
+          p_request: req.id,
+        });
     if (
       authorization.error &&
       ![
@@ -217,23 +224,46 @@ export function documentsRouter(db) {
     )
       throw Object.assign(
         new Error(
-          "Download authorization could not be completed. Please try again.",
+          `${view ? "Viewing" : "Download"} authorization could not be completed. Please try again.`,
         ),
         { status: 503 },
       );
     const file = result(authorization);
+    if (view && !viewable.has(file.mime_type))
+      throw Object.assign(
+        new Error("Only PDF files can be viewed here. Download this file."),
+        { status: 415 },
+      );
+    if (view)
+      await audit(
+        db,
+        req,
+        "view_file",
+        "knowledge_documents",
+        access.p_document,
+        {
+          file_id: access.p_file,
+        },
+      );
     const blob = result(
       await db.storage.from("knowledge-files").download(file.storage_path),
     );
     // A lead may change owners while Storage responds. Recheck before sending bytes.
     result(await db.rpc("read_knowledge_file", access));
     res.set("Content-Type", file.mime_type);
+    res.set("Cache-Control", "no-store");
     res.set(
       "Content-Disposition",
-      `attachment; filename="document.${file.file_name.split(".").at(-1)}"; filename*=UTF-8''${encodeURIComponent(file.file_name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16))}`,
+      `${view ? "inline" : "attachment"}; filename="document.${file.file_name.split(".").at(-1)}"; filename*=UTF-8''${encodeURIComponent(file.file_name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16))}`,
     );
     res.send(Buffer.from(await blob.arrayBuffer()));
-  });
+  }
+  router.get("/:id/files/:file/download", sensitiveLimit, (req, res) =>
+    sendFile(req, res, false),
+  );
+  router.get("/:id/files/:file/view", sensitiveLimit, (req, res) =>
+    sendFile(req, res, true),
+  );
   router.delete("/:id/files/:file", adminOnly, async (req, res) => {
     const id = uuid.parse(req.params.id);
     result(
