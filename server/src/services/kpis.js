@@ -17,6 +17,14 @@
 //   week spanning two months counts in the month holding most of its days.
 //   A single day, or a range without a Thursday, shows the weeks it touches.
 //   A week still running is "in progress" until met, never "missed".
+// - Update 072: a KPI's rules also say how it is measured. "self": the agent
+//   answers, as above. The others are filled in by the CRM (kpi_facts
+//   measures) and read as the day's answer (autoAnswer): calls, social,
+//   inventory (daily) and visits, video (weekly totals of what was
+//   approved). Such an answer is settled once it can no longer change; until
+//   then the day is pending, or "review" while evidence waits for an
+//   administrator. A day on which no first call was due is "not_due", never
+//   missed, and so is a day without evidence for a weekly KPI.
 const DAY = 86400000;
 export const addDays = (day, n) =>
   new Date(Date.parse(day + "T00:00:00Z") + n * DAY).toISOString().slice(0, 10);
@@ -30,6 +38,7 @@ function* daysOf(from, to) {
 }
 
 export async function kpiRpc(db, name, args) {
+  const update = /^kpi_(evidence|inventory)/.test(name) ? "072" : "070";
   const { data, error } = await db.rpc(name, args);
   if (!error) return data;
   const missing = ["PGRST202", "PGRST205", "42883", "42P01", "42703"].includes(
@@ -46,19 +55,111 @@ export async function kpiRpc(db, name, args) {
           : ["23505", "40001", "40P01"].includes(error.code)
             ? 409
             : 503;
+  // Evidence already added (update 072) says so: the function's own words,
+  // or, when two arrive at once, the unique index's.
+  const duplicate = update === "072" && error.code === "23505";
   throw Object.assign(
     new Error(
       missing
-        ? "Daily KPIs need CRM database update 070."
-        : status === 409
-          ? "This was changed at the same moment. Refresh and try again."
-          : status === 503
-            ? "Daily KPIs could not be loaded. Please try again."
-            : error.message,
+        ? `Daily KPIs need CRM database update ${update}.`
+        : duplicate
+          ? /already/.test(error.message || "")
+            ? error.message
+            : "This was already added."
+          : status === 409
+            ? "This was changed at the same moment. Refresh and try again."
+            : status === 503
+              ? "Daily KPIs could not be loaded. Please try again."
+              : error.message,
     ),
     { status },
   );
 }
+
+const measureOf = (v) => v?.measure ?? "self";
+const measured = (v) => !!v && measureOf(v) !== "self";
+// Adds up the numbers of two measured details.
+const addUp = (sum, detail) => {
+  const out = { ...sum };
+  for (const [key, n] of Object.entries(detail || {}))
+    if (typeof n === "number") out[key] = (out[key] || 0) + n;
+  return out;
+};
+// What the CRM measured for an agent's day (m), as the answer to a KPI it
+// fills in: { yes | count, auto, settled, detail }; { none } when no first
+// call was due; null when there is nothing to show yet.
+// - calls: Yes when every lead due that day got the agent's first call by
+//   its deadline, whatever the outcome; No once one deadline passed without
+//   it; unsettled while a deadline is still ahead.
+// - social: Yes once one of the day's links is approved; unsettled while one
+//   waits for review, or on the day itself; No when all were rejected.
+// - inventory: the listings added that day that are verified with the
+//   owner's name and phone; unsettled while one waits for verification, or
+//   on the day itself below the target.
+// - visits, video: what was approved that day (distinct projects, links);
+//   unsettled while one waits for review.
+function autoAnswer(v, m, day, today) {
+  const answer = (value, settled, detail) => ({
+    ...value,
+    auto: true,
+    settled,
+    detail,
+  });
+  switch (v.measure) {
+    case "calls": {
+      const c = m?.calls;
+      if (!c?.due) return { auto: true, none: true, detail: null };
+      if (c.late + c.not_called - c.waiting > 0)
+        return answer({ yes: false }, true, c);
+      return c.waiting
+        ? answer({ yes: null }, false, c)
+        : answer({ yes: true }, true, c);
+    }
+    case "social": {
+      const e = m?.social;
+      if (!e) return null;
+      if (e.approved) return answer({ yes: true }, true, e);
+      if (e.pending || day >= today) return answer({ yes: null }, false, e);
+      return answer({ yes: false }, true, e);
+    }
+    case "inventory": {
+      const e = m?.inventory;
+      if (!e) return null;
+      return answer(
+        { count: e.verified },
+        e.verified >= v.target || (!e.pending && day < today),
+        e,
+      );
+    }
+    case "visits":
+    case "video": {
+      const e = m?.[v.measure];
+      if (!e) return null;
+      return answer(
+        { count: v.measure === "visits" ? e.visits : e.approved },
+        !e.pending,
+        e,
+      );
+    }
+  }
+  return null;
+}
+// An answer that counts: the agent's own, or a settled measured one.
+const settled = (a) => !!a && !a.none && (!a.auto || a.settled);
+// The state of a measured KPI's day when its numbers decide it (see the
+// rules at the top); null when the day reads like any answer.
+const autoState = (v, a, d, today) =>
+  !measured(v)
+    ? null
+    : a?.none || (!a && v.frequency === "week")
+      ? d > today
+        ? "upcoming"
+        : "not_due"
+      : a && !a.settled
+        ? a.detail?.pending
+          ? "review"
+          : "pending"
+        : null;
 
 // Lookups over one kpi_facts or kpi_admin_list result.
 function lookup(facts) {
@@ -75,25 +176,35 @@ function lookup(facts) {
   const answers = new Map(
     (facts.answers || []).map((a) => [`${a.kpi_id}|${a.agent_id}|${a.day}`, a]),
   );
+  const measures = new Map(
+    (facts.measures || []).map((m) => [m.agent_id + "|" + m.day, m]),
+  );
+  const versionOn = (kpi, day) => {
+    let found = null;
+    for (const v of versions.get(kpi) || []) {
+      if (v.effective_from > day) break;
+      found = v;
+    }
+    return found;
+  };
   return {
-    versionOn(kpi, day) {
-      let found = null;
-      for (const v of versions.get(kpi) || []) {
-        if (v.effective_from > day) break;
-        found = v;
-      }
-      return found;
-    },
+    versionOn,
     versionsOf: (kpi) => versions.get(kpi) || [],
     // An agent with no attendance days for it counts the day as working.
     dayStatus: (agent, day) => status.get(agent + "|" + day) ?? "work",
-    answer: (kpi, agent, day) => answers.get(`${kpi}|${agent}|${day}`) ?? null,
+    // The agent's answer, or what the CRM measured for a KPI it fills in.
+    answer(kpi, agent, day) {
+      const v = versionOn(kpi, day);
+      return measured(v)
+        ? autoAnswer(v, measures.get(agent + "|" + day), day, facts.today)
+        : (answers.get(`${kpi}|${agent}|${day}`) ?? null);
+    },
   };
 }
 const applies = (v, agent) =>
   !!v && v.active && (!v.agent_ids || v.agent_ids.includes(agent));
 const valueOf = (v, a) =>
-  !a ? null : v.answer_type === "yes_no" ? a.yes : a.count;
+  (!a ? null : v.answer_type === "yes_no" ? a.yes : a.count) ?? null;
 // What a day's answer adds to a weekly total: the count, or 1 for Yes.
 const amountOf = (a) => (!a ? 0 : a.count != null ? a.count : a.yes ? 1 : 0);
 // Can a missing answer for this day still be given? Today always; for a
@@ -111,6 +222,7 @@ const rules = (v) =>
     agent_ids: v.agent_ids,
     effective_from: v.effective_from,
     version: v.version,
+    measure: measureOf(v),
   };
 // A weekly KPI's week for one agent: its total of daily entries and status.
 function week(look, kpi, agent, start, today) {
@@ -118,23 +230,37 @@ function week(look, kpi, agent, start, today) {
   if (!applies(v, agent) || v.frequency !== "week") return null;
   const end = addDays(start, 6);
   let total = 0,
-    working = false;
+    working = false,
+    detail = null;
   const days = [];
   for (const d of daysOf(start, end)) {
     const a = look.answer(kpi, agent, d);
     total += amountOf(a);
     if (look.dayStatus(agent, d) === "work") working = true;
+    if (a?.detail) detail = addUp(detail, a.detail);
     days.push({ day: d, value: valueOf(v, a) });
   }
+  // A measured week that ended below its target while evidence still waits
+  // for review is "review": an approval can still meet it.
   const status =
     total >= v.target
       ? "met"
-      : !working && total === 0
+      : !working && total === 0 && !detail
         ? "not_expected"
         : end < today
-          ? "missed"
+          ? detail?.pending
+            ? "review"
+            : "missed"
           : "in_progress";
-  return { start, end, total, target: v.target, status, days };
+  return {
+    start,
+    end,
+    total,
+    target: v.target,
+    status,
+    days,
+    ...(measured(v) && { measure: v.measure, detail }),
+  };
 }
 // The weeks a range reports: those whose Thursday falls in it; a single
 // day, or a range without a Thursday, reports the weeks it touches.
@@ -179,27 +305,42 @@ export function agentDay(facts, agentId, day) {
   for (const k of facts.kpis) {
     const v = look.versionOn(k.id, day);
     const a = look.answer(k.id, agentId, day);
-    if (!v || (!applies(v, agentId) && !a)) continue;
+    if (!v || (!applies(v, agentId) && (!a || a.auto))) continue;
     const rule = v;
     const item = {
       id: k.id,
       title: k.title,
-      question: a && !applies(v, agentId) ? a.question : k.question,
+      question: a && !applies(v, agentId) && !a.auto ? a.question : k.question,
       description: k.description,
       frequency: rule.frequency,
       answer_type: rule.answer_type,
       target: rule.target,
+      measure: measureOf(rule),
       answer: valueOf(rule, a),
       answered_question: a?.question ?? null,
       submitted_at: a?.submitted_at ?? null,
       updated_at: a?.updated_at ?? null,
       editable:
+        !measured(rule) &&
         applies(v, agentId) &&
         day <= today &&
         (rule.frequency === "day" ? day === today : day >= weekStart(today)),
     };
-    if (rule.frequency === "day") item.met = a ? dayMet(rule, a) : null;
+    if (rule.frequency === "day")
+      item.met = settled(a) ? dayMet(rule, a) : null;
     else item.week = week(look, k.id, agentId, weekStart(day), today);
+    if (measured(rule)) {
+      item.state =
+        autoState(rule, a, day, today) ??
+        (a
+          ? "answered"
+          : look.dayStatus(agentId, day) !== "work"
+            ? look.dayStatus(agentId, day)
+            : day >= today
+              ? "pending"
+              : "missed");
+      item.detail = a?.detail ?? null;
+    }
     items.push(item);
   }
   return {
@@ -210,8 +351,12 @@ export function agentDay(facts, agentId, day) {
     week: { start: weekStart(day), end: addDays(weekStart(day), 6) },
     editable_from: weekStart(today),
     kpis: items,
-    answered: items.filter((i) => i.answer != null).length,
-    expected: items.filter((i) => i.editable || i.answer != null).length,
+    // The KPIs the agent answers themselves; the CRM fills in the others.
+    answered: items.filter((i) => i.measure === "self" && i.answer != null)
+      .length,
+    expected: items.filter(
+      (i) => i.measure === "self" && (i.editable || i.answer != null),
+    ).length,
   };
 }
 
@@ -227,23 +372,26 @@ export function agentHistory(facts, agentId, from, to) {
     for (const k of facts.kpis) {
       const v = look.versionOn(k.id, d);
       const a = look.answer(k.id, agentId, d);
-      if (!v || (!applies(v, agentId) && !a)) continue;
+      if (!v || (!applies(v, agentId) && (!a || a.auto))) continue;
       used.add(k.id);
       const status = look.dayStatus(agentId, d);
       answers[k.id] = {
         value: valueOf(v, a),
-        met: v.frequency === "day" && a ? dayMet(v, a) : null,
-        state: a
-          ? "answered"
-          : d > today
-            ? "upcoming"
-            : status !== "work"
-              ? status
-              : stillOpen(v, d, today)
-                ? "pending"
-                : "missed",
+        met: v.frequency === "day" && settled(a) ? dayMet(v, a) : null,
+        state:
+          autoState(v, a, d, today) ??
+          (a
+            ? "answered"
+            : d > today
+              ? "upcoming"
+              : status !== "work"
+                ? status
+                : stillOpen(v, d, today)
+                  ? "pending"
+                  : "missed"),
         question: a?.question ?? null,
         updated_at: a?.updated_at ?? null,
+        ...(measured(v) && { measure: v.measure, detail: a?.detail ?? null }),
       };
     }
     days.push({ day: d, status: look.dayStatus(agentId, d), answers });
@@ -285,6 +433,7 @@ function columns(facts, look, used, to) {
         frequency: v?.frequency,
         answer_type: v?.answer_type,
         target: v?.target,
+        measure: measureOf(v),
         archived: !!k.archived_at,
       };
     });
@@ -315,13 +464,19 @@ export function kpiReport(facts, from, to) {
         const v = look.versionOn(k.id, d);
         if (!applies(v, agent.id)) continue;
         const a = look.answer(k.id, agent.id, d);
-        if (a) present = true;
-        if (status !== "work" && !a) continue;
+        const auto = measured(v);
+        // Measured weekly KPIs count by the week, below; the CRM's answers
+        // are not entries the agent makes.
+        if (auto && v.frequency === "week") continue;
+        if (a && !a.none) present = true;
+        if (status !== "work" && !(a && !a.none)) continue;
         relevant = true;
-        cell.entries.expected++;
-        if (a) cell.entries.answered++;
-        else if (stillOpen(v, d, today)) cell.entries.pending++;
-        else cell.entries.missing++;
+        if (!auto) {
+          cell.entries.expected++;
+          if (a) cell.entries.answered++;
+          else if (stillOpen(v, d, today)) cell.entries.pending++;
+          else cell.entries.missing++;
+        }
         if (v.frequency !== "day") continue;
         cell.daily ??= {
           days: 0,
@@ -332,13 +487,25 @@ export function kpiReport(facts, from, to) {
           total: 0,
           answer_type: v.answer_type,
           target: v.target,
+          ...(auto && {
+            measure: v.measure,
+            review: 0,
+            not_due: 0,
+            detail: null,
+          }),
         };
+        if (a?.detail) cell.daily.detail = addUp(cell.daily.detail, a.detail);
+        if (a?.none) {
+          cell.daily.not_due++;
+          continue;
+        }
         cell.daily.days++;
-        if (a) {
+        if (settled(a)) {
           if (dayMet(v, a)) cell.daily.met++;
           else cell.daily.below++;
           cell.daily.total += amountOf(a);
-        } else if (d < today) cell.daily.missed++;
+        } else if (a) cell.daily[a.detail?.pending ? "review" : "pending"]++;
+        else if (d < today) cell.daily.missed++;
         else cell.daily.pending++;
       }
       // Weekly KPIs: each reported week's total against its target.
@@ -352,6 +519,11 @@ export function kpiReport(facts, from, to) {
           missed: 0,
           in_progress: 0,
           total: 0,
+          ...(result.measure && {
+            measure: result.measure,
+            review: 0,
+            detail: null,
+          }),
         };
         cell.weekly.weeks.push({
           start: result.start,
@@ -359,28 +531,34 @@ export function kpiReport(facts, from, to) {
           total: result.total,
           target: result.target,
           status: result.status,
+          ...(result.measure && { detail: result.detail }),
         });
         cell.weekly[result.status]++;
         cell.weekly.total += result.total;
+        if (result.detail)
+          cell.weekly.detail = addUp(cell.weekly.detail, result.detail);
       }
       // A single day: that day's answer, and its week for weekly KPIs.
       if (from === to) {
         const v = look.versionOn(k.id, from);
         const a = look.answer(k.id, agent.id, from);
-        if (applies(v, agent.id) || a) {
+        if (applies(v, agent.id) || (a && !a.auto)) {
           relevant = true;
           cell.day = {
             value: v ? valueOf(v, a) : null,
-            met: v?.frequency === "day" && a ? dayMet(v, a) : null,
-            state: a
-              ? "answered"
-              : look.dayStatus(agent.id, from) !== "work"
-                ? look.dayStatus(agent.id, from)
-                : from > today
-                  ? "upcoming"
-                  : v && stillOpen(v, from, today)
-                    ? "pending"
-                    : "missed",
+            met: v?.frequency === "day" && settled(a) ? dayMet(v, a) : null,
+            state:
+              (v && autoState(v, a, from, today)) ??
+              (a
+                ? "answered"
+                : look.dayStatus(agent.id, from) !== "work"
+                  ? look.dayStatus(agent.id, from)
+                  : from > today
+                    ? "upcoming"
+                    : v && stillOpen(v, from, today)
+                      ? "pending"
+                      : "missed"),
+            ...(measured(v) && { detail: a?.detail ?? null }),
           };
         }
       }
@@ -391,13 +569,13 @@ export function kpiReport(facts, from, to) {
       if (cell.daily) {
         overall.met += cell.daily.met;
         overall.due += cell.daily.met + cell.daily.below + cell.daily.missed;
-        overall.pending += cell.daily.pending;
+        overall.pending += cell.daily.pending + (cell.daily.review || 0);
         overall.missing += cell.daily.missed;
       }
       if (cell.weekly) {
         overall.met += cell.weekly.met;
         overall.due += cell.weekly.met + cell.weekly.missed;
-        overall.pending += cell.weekly.in_progress;
+        overall.pending += cell.weekly.in_progress + (cell.weekly.review || 0);
       }
     }
     if (!present && !Object.keys(cells).length) continue;

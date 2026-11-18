@@ -45,9 +45,36 @@ export const dayStates = {
   holiday: "Holiday",
   leave: "Leave",
   not_employed: "—",
+  // Update 072: KPIs the CRM fills in.
+  not_due: "Nothing due",
+  review: "Awaiting review",
 };
 export const weekStates = {
   met: "Met",
   missed: "Missed",
   in_progress: "In progress",
+  review: "Awaiting review",
+};
+// How a KPI is measured (update 072): the agent answers, or the CRM fills
+// it in from its own records and the evidence administrators approve.
+export const measureLabels = {
+  self: "Agent answers",
+  calls: "CRM: first calls by their deadline",
+  social: "CRM: approved social media links",
+  inventory: "CRM: verified listings with owner details",
+  visits: "CRM: approved project visit photos",
+  video: "CRM: approved video links",
+};
+export const measured = (k) => !!k?.measure && k.measure !== "self";
+export const evidenceStates = {
+  pending: "Waiting for review",
+  approved: "Approved",
+  rejected: "Rejected",
+  verified: "Verified",
+};
+export const platformLabels = {
+  facebook: "Facebook",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  youtube: "YouTube",
 };

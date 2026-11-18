@@ -1,4 +1,5 @@
 import { Router } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { adminOnly } from "../middleware/role.js";
 import { reportLimit, sensitiveLimit } from "../middleware/rateLimit.js";
@@ -10,7 +11,18 @@ import {
   kpiAnswers,
   kpiReportQuery,
   kpiMyQuery,
+  kpiEvidenceLink,
+  kpiVisitPhoto,
+  kpiEvidenceQuery,
+  kpiInventoryQuery,
+  kpiEvidenceReview,
+  kpiInventoryReview,
 } from "../utils/validators.js";
+import {
+  evidenceLink,
+  fileHash,
+  signatureType,
+} from "../services/kpiEvidence.js";
 import {
   kpiRpc,
   kpiList,
@@ -25,7 +37,13 @@ import {
 // manage KPIs and see everyone; an agent answers and sees only their own
 // (req.user). The SQL functions check the person, the day and every answer
 // again, so a request cannot act for someone else.
+// Update 072: evidence for the KPIs the CRM fills in. Agents add links and
+// visit photos and see only their own; administrators review everyone's.
+// Photos stay in the private kpi-evidence bucket and are shown through
+// short-lived signed links.
 const noBody = z.object({}).strict();
+const evidenceBucket = (db) => db.storage.from("kpi-evidence");
+const PHOTO_LIMIT = 5 * 1024 * 1024;
 const agentOnly = (req, res, next) =>
   req.user.role === "agent"
     ? next()
@@ -35,7 +53,25 @@ export function kpisRouter(db) {
   const router = Router();
   const rpc = (req, name, args) =>
     kpiRpc(db, name, { p_actor: req.user.id, ...args });
-  // An agent's day, with the 14 days before it for their history.
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: PHOTO_LIMIT, files: 1, fields: 4 },
+  });
+  // multer's own "File too large" becomes the limit in words.
+  const photoUpload = (req, res, next) =>
+    upload.single("file")(req, res, (error) =>
+      next(
+        error?.code === "LIMIT_FILE_SIZE"
+          ? Object.assign(
+              new Error("Upload a JPEG, PNG or WebP photo up to 5 MB"),
+              { status: 413 },
+            )
+          : error,
+      ),
+    );
+  // An agent's day, with the 14 days before it for their history, and the
+  // evidence and listings behind the KPIs the CRM fills in: the week's
+  // links and photos, and the day's listings.
   const myDay = async (req, day) => {
     const from = [weekStart(day), addDays(day, -13)].sort()[0];
     const facts = await rpc(req, "kpi_facts", {
@@ -43,10 +79,28 @@ export function kpisRouter(db) {
       p_to: day,
       p_agent: req.user.id,
     });
-    return {
+    const result = {
       ...agentDay(facts, req.user.id, day),
       history: agentHistory(facts, req.user.id, addDays(day, -13), day),
     };
+    const uses = new Set(result.kpis.map((k) => k.measure));
+    if (["social", "visits", "video"].some((m) => uses.has(m)))
+      result.evidence = (
+        await rpc(req, "kpi_evidence_list", {
+          p_query: {
+            from: weekStart(day),
+            to: addDays(weekStart(day), 6),
+            limit: 100,
+          },
+        })
+      ).data;
+    if (uses.has("inventory"))
+      result.inventory = (
+        await rpc(req, "kpi_inventory_list", {
+          p_query: { from: day, to: day, limit: 50 },
+        })
+      ).data;
+    return result;
   };
 
   router.get("/manage", adminOnly, async (req, res) =>
@@ -106,6 +160,129 @@ export function kpisRouter(db) {
     });
     res.json({ ...(await myDay(req, day)), saved: saved.saved });
   });
+
+  // Evidence: an agent adds links and visit photos (always their own).
+  router.post("/evidence", agentOnly, sensitiveLimit, async (req, res) => {
+    const { kind, url } = kpiEvidenceLink.parse(req.body);
+    const link = evidenceLink(url);
+    if (!link)
+      return res.status(400).json({
+        error:
+          "Add a link to a Facebook, Instagram, TikTok or YouTube post or video",
+      });
+    res.status(201).json(
+      await rpc(req, "kpi_evidence_add", {
+        p_data: { kind, ...link },
+        p_request: req.id,
+      }),
+    );
+  });
+  router.post(
+    "/evidence/photo",
+    agentOnly,
+    sensitiveLimit,
+    photoUpload,
+    async (req, res) => {
+      const { project, visit_date } = kpiVisitPhoto.parse(req.body ?? {});
+      const type = signatureType(req.file?.buffer);
+      if (!req.file || !type || type !== req.file.mimetype)
+        return res
+          .status(400)
+          .json({ error: "Upload a JPEG, PNG or WebP photo up to 5 MB" });
+      // Stored under the agent's own folder; the database checks the path.
+      const path = `${req.user.id}/${crypto.randomUUID()}`;
+      const stored = await evidenceBucket(db).upload(path, req.file.buffer, {
+        contentType: type,
+      });
+      if (stored.error)
+        throw Object.assign(
+          new Error("The photo could not be uploaded. Please try again."),
+          { status: 503 },
+        );
+      try {
+        res.status(201).json(
+          await rpc(req, "kpi_evidence_add", {
+            p_data: {
+              kind: "visit",
+              project,
+              visit_date,
+              storage_path: path,
+              file_hash: fileHash(req.file.buffer),
+              mime_type: type,
+              size_bytes: req.file.size,
+            },
+            p_request: req.id,
+          }),
+        );
+      } catch (error) {
+        await evidenceBucket(db).remove([path]);
+        throw error;
+      }
+    },
+  );
+  // Lists: an agent's own (the database refuses anyone else's); an
+  // administrator's, anyone's, by agent, kind, status and days.
+  router.get("/evidence", reportLimit, async (req, res) => {
+    const q = kpiEvidenceQuery.parse(req.query);
+    res
+      .set("Cache-Control", "no-store")
+      .json(await rpc(req, "kpi_evidence_list", { p_query: q }));
+  });
+  router.get("/evidence/:id/photo", async (req, res) => {
+    const photo = await rpc(req, "kpi_evidence_photo", {
+      p_id: uuid.parse(req.params.id),
+    });
+    const signed = await evidenceBucket(db).createSignedUrl(
+      photo.storage_path,
+      60,
+    );
+    if (signed.error || !signed.data?.signedUrl)
+      throw Object.assign(new Error("The photo could not be loaded."), {
+        status: 503,
+      });
+    // Only a signed link: nothing to mask, and masking could break it.
+    req.phoneRevealResponse = true;
+    res.set("Cache-Control", "no-store").json({ url: signed.data.signedUrl });
+  });
+  router.post(
+    "/evidence/:id/review",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const { status, reason } = kpiEvidenceReview.parse(req.body);
+      res.json(
+        await rpc(req, "kpi_evidence_review", {
+          p_id: uuid.parse(req.params.id),
+          p_status: status,
+          p_reason: reason,
+          p_request: req.id,
+        }),
+      );
+    },
+  );
+  // Agents' listings and their verification (never the owner's contact).
+  router.get("/inventory", reportLimit, async (req, res) => {
+    const q = kpiInventoryQuery.parse(req.query);
+    res
+      .set("Cache-Control", "no-store")
+      .json(await rpc(req, "kpi_inventory_list", { p_query: q }));
+  });
+  router.post(
+    "/inventory/:id/review",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const { status, reason } = kpiInventoryReview.parse(req.body);
+      res.json(
+        await rpc(req, "kpi_inventory_review", {
+          p_property: uuid.parse(req.params.id),
+          p_status: status,
+          p_reason: reason,
+          p_request: req.id,
+        }),
+      );
+    },
+  );
 
   // Administrators: every agent's results, and one agent's history.
   router.get("/report", adminOnly, reportLimit, async (req, res) => {

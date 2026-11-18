@@ -18,6 +18,7 @@ import {
 import { api, pkr, monthRange, reportSearch, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { statuses } from "../../lib/pipeline";
+import { measured } from "../../lib/kpiPeriods";
 import { Loader, ErrorBox, Badge } from "../../components/common/UI";
 import { useSecurityAlertSummary } from "../../lib/securityAlerts";
 import { useMetaSummary } from "../../lib/meta";
@@ -84,7 +85,19 @@ function TodayKpis() {
   });
   // An unexpected answer shows nothing rather than breaking the overview.
   const kpis = Array.isArray(q.data?.kpis) ? q.data.kpis : [];
-  const left = kpis.filter((k) => k.editable && k.answer === null);
+  // Update 072: the CRM fills some in; those are met or not, not answered.
+  const own = kpis.filter((k) => !measured(k)),
+    auto = kpis.filter(measured);
+  const left = own.filter((k) => k.editable && k.answer === null);
+  const met = auto.filter((k) =>
+    k.frequency === "week" ? k.week?.status === "met" : k.met === true,
+  );
+  const parts = [
+    own.length &&
+      `${own.length - left.length} of ${own.length} answered${left.length ? ` · still to answer: ${left.map((k) => k.title).join(", ")}` : " · all done for today"}`,
+    auto.length &&
+      `${met.length} of ${auto.length} filled in by the CRM met so far`,
+  ].filter(Boolean);
   return (
     <section
       className="panel kpi-today-card"
@@ -100,9 +113,7 @@ function TodayKpis() {
       ) : (
         !q.error && (
           <p>
-            {kpis.length
-              ? `${kpis.length - left.length} of ${kpis.length} answered${left.length ? ` · still to answer: ${left.map((k) => k.title).join(", ")}` : " · all done for today"}`
-              : "No KPIs are set for you today."}
+            {kpis.length ? parts.join(" · ") : "No KPIs are set for you today."}
           </p>
         )
       )}

@@ -720,11 +720,12 @@ describe("import file database and API", () => {
           imported_count: 2,
         }),
       ]);
-      // Update 036 records one summary row when existing accounts receive UIDs.
+      // Update 036 records one summary row when existing accounts receive
+      // UIDs, and update 072 one row for each KPI the CRM now fills in.
       expect(
         (
           await legacy.query(
-            "select count(*)::integer n from audit_log where action<>'migration.account_uids_assigned'",
+            "select count(*)::integer n from audit_log where action not in ('migration.account_uids_assigned','kpi.measured_by_crm')",
           )
         ).rows[0].n,
       ).toBe(audits);

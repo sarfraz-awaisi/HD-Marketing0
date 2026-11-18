@@ -1717,3 +1717,57 @@ export const kpiReportQuery = z
   .strict()
   .refine(inOrder, { message: "Choose a start before the end" });
 export const kpiMyQuery = z.object({ day: z.iso.date().optional() }).strict();
+// Update 072: evidence for KPIs the CRM fills in, and its review. Links are
+// checked again by evidenceLink, and everything by the database.
+const reviewReason = z
+  .string()
+  .trim()
+  .max(300)
+  .nullable()
+  .optional()
+  .transform((v) => v || null);
+export const kpiEvidenceLink = z
+  .object({
+    kind: z.enum(["social", "video"]),
+    url: z.string().trim().min(1).max(600),
+  })
+  .strict();
+export const kpiVisitPhoto = z
+  .object({
+    project: z.string().trim().min(2).max(120),
+    visit_date: z.iso.date(),
+  })
+  .strict();
+const kpiListFields = {
+  agent: uuid.optional(),
+  from: z.iso.date().optional(),
+  to: z.iso.date().optional(),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+};
+const listInOrder = (v) => !v.from || !v.to || v.from <= v.to;
+export const kpiEvidenceQuery = z
+  .object({
+    ...kpiListFields,
+    kind: z.enum(["social", "video", "visit"]).optional(),
+    status: z.enum(["pending", "approved", "rejected"]).optional(),
+  })
+  .strict()
+  .refine(listInOrder, { message: "Choose a start before the end" });
+export const kpiInventoryQuery = z
+  .object({
+    ...kpiListFields,
+    status: z.enum(["pending", "verified", "rejected"]).optional(),
+  })
+  .strict()
+  .refine(listInOrder, { message: "Choose a start before the end" });
+export const kpiEvidenceReview = z
+  .object({ status: z.enum(["approved", "rejected"]), reason: reviewReason })
+  .strict();
+// "pending" clears an earlier decision.
+export const kpiInventoryReview = z
+  .object({
+    status: z.enum(["verified", "rejected", "pending"]),
+    reason: reviewReason,
+  })
+  .strict();

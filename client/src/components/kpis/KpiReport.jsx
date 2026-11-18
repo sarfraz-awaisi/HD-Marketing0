@@ -8,6 +8,7 @@ import {
   dayStates,
   kpiPeriods,
   kpiRange,
+  measured,
   weekStates,
 } from "../../lib/kpiPeriods";
 import { ErrorBox, Loader, Modal } from "../common/UI";
@@ -28,13 +29,35 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function weekText(w) {
   return `${w.total}/${w.target} · ${weekStates[w.status] ?? w.status}`;
 }
+// Update 072: the numbers behind a KPI the CRM fills in.
+function detailText(kpi, d) {
+  if (!d) return null;
+  switch (kpi.measure) {
+    case "calls":
+      return `${d.on_time ?? 0}/${d.due ?? 0} called on time`;
+    case "social":
+      return `${d.approved ?? 0}/${d.submitted ?? 0} links approved`;
+    case "inventory":
+      return `${d.verified ?? 0} verified of ${d.uploaded ?? 0} added`;
+    case "visits":
+      return `${d.approved ?? 0}/${d.submitted ?? 0} photos approved`;
+    case "video":
+      return `${d.approved ?? 0}/${d.submitted ?? 0} videos approved`;
+  }
+  return null;
+}
+const NOTHING_DUE = "No assigned calls due";
 // One agent's result for one KPI.
 export function cellText(kpi, cell, single) {
   if (!cell) return "—";
+  const auto = measured(kpi);
+  const withDetail = (text, d) =>
+    [text, auto && detailText(kpi, d)].filter(Boolean).join(" · ");
   if (single) {
     const day = cell.day;
     const w = cell.weekly?.weeks?.[0];
     if (kpi.frequency === "week") {
+      if (auto) return w ? withDetail(`Week ${weekText(w)}`, w.detail) : "—";
       const today =
         day?.state === "answered"
           ? `${answerText(kpi.answer_type, day.value)} today`
@@ -42,21 +65,33 @@ export function cellText(kpi, cell, single) {
       return w ? `${today} · week ${weekText(w)}` : today;
     }
     if (!day) return "—";
-    if (day.state !== "answered") return dayStates[day.state] ?? day.state;
-    return kpi.answer_type === "yes_no"
-      ? answerText("yes_no", day.value)
-      : `${day.value}/${kpi.target}`;
+    if (day.state === "not_due") return NOTHING_DUE;
+    if (day.state !== "answered")
+      return withDetail(dayStates[day.state] ?? day.state, day.detail);
+    return withDetail(
+      kpi.answer_type === "yes_no"
+        ? answerText("yes_no", day.value)
+        : `${day.value}/${kpi.target}`,
+      day.detail,
+    );
   }
   const parts = [];
   if (cell.daily) {
     const d = cell.daily;
-    parts.push(
-      d.answer_type === "yes_no"
-        ? `Yes ${d.met}/${d.days} days`
-        : `Met ${d.met}/${d.days} days · ${d.total} total`,
-    );
+    if (d.days || !d.not_due)
+      parts.push(
+        d.answer_type === "yes_no"
+          ? `Yes ${d.met}/${d.days} days`
+          : `Met ${d.met}/${d.days} days · ${d.total} total`,
+      );
     if (d.missed) parts.push(`${d.missed} missed`);
     if (d.pending) parts.push(`${d.pending} pending`);
+    if (d.review) parts.push(`${d.review} awaiting review`);
+    if (d.not_due)
+      parts.push(
+        d.days ? `${plural(d.not_due, "day")} nothing due` : NOTHING_DUE,
+      );
+    if (auto && d.detail) parts.push(detailText(kpi, d.detail));
   }
   if (cell.weekly) {
     const w = cell.weekly;
@@ -66,8 +101,10 @@ export function cellText(kpi, cell, single) {
       if (finished) parts.push(`Met ${w.met}/${plural(finished, "week")}`);
       const running = w.weeks.find((x) => x.status === "in_progress");
       if (running) parts.push(`this week ${running.total}/${running.target}`);
+      if (w.review) parts.push(`${plural(w.review, "week")} awaiting review`);
       parts.push(`${w.total} total`);
     }
+    if (auto && w.detail) parts.push(detailText(kpi, w.detail));
   }
   return parts.join(" · ") || "—";
 }
@@ -313,6 +350,7 @@ export default function KpiReport() {
                           {k.answer_type === "yes_no"
                             ? `Yes ${k.frequency === "week" ? "weekly" : "daily"}`
                             : `${k.target} a ${k.frequency === "week" ? "week" : "day"}`}
+                          {measured(k) ? " · from the CRM" : ""}
                         </small>
                       </th>
                     ))}
@@ -335,7 +373,9 @@ export default function KpiReport() {
                         )}
                       </td>
                       <td>
-                        {a.entries.answered}/{a.entries.expected}
+                        {a.entries.expected
+                          ? `${a.entries.answered}/${a.entries.expected}`
+                          : "—"}
                         {a.entries.missing > 0 && (
                           <small className="kpi-sub missed">
                             {a.entries.missing} missed
