@@ -1,8 +1,8 @@
-/* Lead export (update 073): presets, files, filters on the lead now and on
-   its history, then the file and the count. Two filter columns on a laptop,
-   one on a phone. */
+/* Lead export (updates 073 and 074): the lead file, optional filters, the
+   counts, then Export Excel. Filters in a grid on a laptop, one column on a
+   phone. */
 dialog.lead-export {
-  width: min(980px, calc(100% - 32px));
+  width: min(860px, calc(100% - 32px));
 }
 .lead-export fieldset {
   margin: 0 0 16px;
@@ -16,33 +16,6 @@ dialog.lead-export {
   margin: 0 0 14px;
   color: var(--ink-2);
 }
-.lead-export-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.lead-export-chips > button {
-  min-height: 36px;
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--surface);
-  color: var(--ink);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-}
-.lead-export-chips > button.active {
-  border-color: var(--brand-navy);
-  background: var(--brand-navy);
-  color: #fff;
-}
-.lead-export-radio {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  min-height: 36px;
-}
 .lead-export-files input[type="search"] {
   width: 100%;
   margin: 8px 0;
@@ -50,7 +23,7 @@ dialog.lead-export {
 .lead-export-file-list {
   display: grid;
   gap: 6px;
-  max-height: 260px;
+  max-height: 280px;
   margin: 8px 0 0;
   padding: 0;
   overflow: auto;
@@ -60,13 +33,16 @@ dialog.lead-export {
   display: flex;
   gap: 10px;
   align-items: flex-start;
+  justify-content: flex-start;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 10px;
+  text-align: left;
   cursor: pointer;
 }
-.lead-export-file-list input {
-  margin-top: 4px;
+.lead-export-file-list label:has(input:checked) {
+  border-color: var(--brand-navy);
+  box-shadow: inset 0 0 0 1px var(--brand-navy);
 }
 .lead-export-file {
   display: grid;
@@ -79,29 +55,21 @@ dialog.lead-export {
 }
 .lead-export-filters {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  gap: 0 20px;
-}
-.lead-export-filters fieldset {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px 12px;
   align-content: start;
 }
 .lead-export-filters legend {
   margin-bottom: 6px;
 }
-.lead-export-filters label,
-.lead-export-format > label {
+.lead-export-filters label {
   display: grid;
   gap: 4px;
   min-width: 0;
   font-size: var(--text-sm, 13px);
   font-weight: 600;
 }
-.lead-export-filters select,
-.lead-export-filters input,
-.lead-export-format select {
+.lead-export-filters select {
   min-height: 40px;
   min-width: 0;
 }
@@ -109,30 +77,30 @@ dialog.lead-export {
   grid-column: 1 / -1;
   margin: 0;
 }
-.lead-export-sheets {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 8px;
-  margin-top: 10px;
-}
-.lead-export-sheets label {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-}
-.lead-export-sheets span {
-  display: grid;
-  font-weight: 600;
-}
-.lead-export-sheets small {
-  color: var(--ink-2);
-  font-weight: 400;
-}
 .lead-export-count {
   padding: 12px 14px;
   border-radius: 10px;
   background: var(--neutral-soft);
   color: var(--ink);
+}
+.lead-export-count dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+.lead-export-count dt {
+  color: var(--ink-2);
+  font-size: var(--text-sm, 13px);
+}
+.lead-export-count dd {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.lead-export-total dd {
+  color: var(--brand-navy);
 }
 .lead-export-warning {
   color: var(--warning);
@@ -146,6 +114,7 @@ dialog.lead-export {
 .lead-export-done {
   color: var(--success);
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .lead-export footer {
   display: flex;
@@ -155,15 +124,11 @@ dialog.lead-export {
   margin-top: 12px;
 }
 @media (max-width: 760px) {
-  .lead-export-filters {
-    grid-template-columns: minmax(0, 1fr);
-  }
   .lead-export footer .button {
     flex: 1 1 100%;
   }
 }
-/* Checkboxes and radios at their own size, beside their text. */
-.lead-export input[type="checkbox"],
+/* Radios at their own size, beside their text. */
 .lead-export input[type="radio"] {
   flex: none;
   width: 18px;
@@ -171,9 +136,4 @@ dialog.lead-export {
   height: 18px;
   min-height: 18px;
   margin: 2px 0 0;
-}
-.lead-export-file-list label,
-.lead-export-sheets label {
-  justify-content: flex-start;
-  text-align: left;
 }

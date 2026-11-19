@@ -206,6 +206,48 @@ export const pipelineExportHeadings = [
   "Ad city",
   "Other ad answers",
 ];
+// How each column is laid out in Excel (both exports): its width, whether
+// long text wraps, and whether it is always text (IDs).
+const time = { width: 17 };
+export const pipelineExportColumns = {
+  "Lead #": { width: 12, text: true },
+  Name: { width: 24 },
+  Phone: { width: 17, text: true },
+  "Phone country": { width: 10 },
+  Email: { width: 28 },
+  Temperature: { width: 12 },
+  "Temperature set": time,
+  Status: { width: 20 },
+  Source: { width: 10 },
+  "Preferred location": { width: 24, wrap: true },
+  "Budget from (PKR)": { width: 18 },
+  "Budget up to (PKR)": { width: 18 },
+  Agent: { width: 22 },
+  "Agent UID": { width: 11, text: true },
+  "Agent account": { width: 14 },
+  "Agent's last contact": time,
+  "Last contact outcome": { width: 21 },
+  "Last call": time,
+  "Last call outcome": { width: 21 },
+  "Next follow-up": time,
+  "Last activity": time,
+  "Assigned to agent": time,
+  "Lead created": time,
+  "Lost reason": { width: 17 },
+  "Lost note": { width: 36, wrap: true },
+  "Lost on": time,
+  "Agent's latest note": { width: 44, wrap: true },
+  "Ad inquiries": { width: 12 },
+  "Latest ad inquiry": time,
+  "Ad platform": { width: 14 },
+  Advertisement: { width: 30, wrap: true },
+  Campaign: { width: 28, wrap: true },
+  "Ad form": { width: 24, wrap: true },
+  "Ad property interest": { width: 26, wrap: true },
+  "Ad budget": { width: 20, wrap: true },
+  "Ad city": { width: 16 },
+  "Other ad answers": { width: 50, wrap: true },
+};
 export function pipelineExportSheet(rows) {
   return [
     pipelineExportHeadings,

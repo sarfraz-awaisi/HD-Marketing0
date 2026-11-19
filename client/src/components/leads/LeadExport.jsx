@@ -3,12 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 import { api, download } from "../../lib/api";
 import { Button, ErrorBox, Modal } from "../common/UI";
 import "../../styles/lead-export.css";
-// Administrators' lead export (update 073): leads file by file (Google
-// Sheets, CSV and Excel files, or leads with no file), with filters on the
-// lead now and on its history, a count before exporting, and one Excel file
-// with the chosen worksheets or one worksheet as CSV. The server and the
-// database check everything again; the file holds full phone numbers and
-// the export is recorded in Audit history.
+// Administrators' lead export (updates 073 and 074): one Google Sheet or
+// imported lead file at a time, or the leads with no file. The Excel file
+// lists every lead of it that is assigned to an agent now, called or not,
+// in exactly the Lead pipeline export's 37 columns, on one worksheet.
+// Agent, temperature, status, the agent's last call, contacted and worked
+// can narrow it; by default nothing does. The server and the database check
+// everything again; the file holds full phone numbers and the export is
+// recorded in Audit history.
 const outcomes = [
   "No answer",
   "Busy",
@@ -20,73 +22,24 @@ const outcomes = [
   "Site visit scheduled",
   "Deal discussion",
 ];
-const sheets = [
-  ["summary", "Lead summary", "One row per lead"],
-  ["calls", "Call history", "Every call"],
-  ["notes", "Notes", "Lead, follow-up, visit and deal notes"],
-  ["assignments", "Assignment history", "Every move between agents"],
-  ["ad_quality", "Ad quality", "Leads by advertisement"],
-  ["files", "Files", "Each file's rows, new leads, repeats and rejections"],
-];
-const everySheet = sheets.map(([v]) => v);
-// Presets: the filters they set (files and agent stay as chosen) and the
-// worksheets that suit them.
-export const presets = [
-  ["file", "All leads from the files", {}, everySheet],
-  [
-    "contacted",
-    "Contacted",
-    { contacted: "yes" },
-    ["summary", "calls", "notes", "assignments", "ad_quality", "files"],
-  ],
-  [
-    "not_contacted",
-    "Not contacted",
-    { contacted: "no" },
-    ["summary", "calls", "assignments", "files"],
-  ],
-  [
-    "interested",
-    "Interested",
-    { had_outcome: "Interested" },
-    ["summary", "calls", "notes", "ad_quality"],
-  ],
-  ["hot", "Hot", { temperature: "hot" }, ["summary", "calls", "notes"]],
-  ["warm", "Warm", { temperature: "warm" }, ["summary", "calls", "notes"]],
-  [
-    "followup",
-    "Follow-up required",
-    { outcome: "Follow-up required" },
-    ["summary", "calls", "notes"],
-  ],
-  [
-    "visit",
-    "Site visit scheduled",
-    { visit: "scheduled" },
-    ["summary", "calls", "notes"],
-  ],
-  [
-    "won",
-    "Won deals",
-    { deal: "won" },
-    ["summary", "calls", "notes", "ad_quality"],
-  ],
-];
-const presetKeys = [
-  "contacted",
-  "had_outcome",
-  "temperature",
-  "outcome",
-  "visit",
-  "deal",
+const statuses = [
+  ["new", "New"],
+  ["contacted", "Contacted"],
+  ["interested", "Interested"],
+  ["visit_scheduled", "Site visit scheduled"],
+  ["visit_done", "Visit done"],
+  ["negotiation", "Negotiation"],
+  ["won", "Won (booked)"],
+  ["lost", "Lost"],
 ];
 const fileTypes = {
   sheets: "Google Sheet",
-  csv: "CSV",
-  xlsx: "Excel",
-  xls: "Excel",
+  csv: "CSV file",
+  xlsx: "Excel file",
+  xls: "Excel file",
   legacy: "Earlier import",
 };
+const noFile = "none";
 const n = (v) => Number(v ?? 0).toLocaleString("en-US");
 const counted = (v, one, many = one + "s") =>
   `${n(v)} ${Number(v) === 1 ? one : many}`;
@@ -94,15 +47,21 @@ const pkDay = () =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi" }).format(
     new Date(),
   );
-// Only what the server takes: blanks out.
+// As the server names it: "General-Form-Leads-Assigned-2026-11-19.xlsx".
+export const exportFileName = (name, day = pkDay()) => {
+  const safe = String(name ?? "")
+    .normalize("NFKD")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .slice(0, 80)
+    .replace(/^-+|-+$/g, "");
+  return `${safe || "Leads"}-Assigned-${day}.xlsx`;
+};
+// Only the filters chosen: blanks out.
 const cleaned = (f) =>
-  Object.fromEntries(
-    Object.entries(f).filter(([, v]) =>
-      Array.isArray(v) ? v.length > 0 : v !== "" && v !== false && v != null,
-    ),
-  );
+  Object.fromEntries(Object.entries(f).filter(([, v]) => v));
 
-export default function LeadExport({ initial = {} }) {
+// file: the lead file All leads is showing, if any, chosen to start with.
+export default function LeadExport({ file = "" }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -110,7 +69,7 @@ export default function LeadExport({ initial = {} }) {
         Export
       </Button>
       {open && (
-        <ExportDialog initial={initial} onClose={() => setOpen(false)} />
+        <ExportDialog initialFile={file} onClose={() => setOpen(false)} />
       )}
     </>
   );
@@ -131,19 +90,16 @@ function Select({ label, value, onChange, children, id }) {
   );
 }
 
-function ExportDialog({ initial, onClose }) {
-  const [filters, setFilters] = useState(() => cleaned(initial));
-  const [preset, setPreset] = useState(null),
-    [format, setFormat] = useState("xlsx"),
-    [chosen, setChosen] = useState(everySheet),
-    [csvSheet, setCsvSheet] = useState("summary"),
+function ExportDialog({ initialFile, onClose }) {
+  const [file, setFile] = useState(initialFile),
+    [narrow, setNarrow] = useState({}),
     [search, setSearch] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [done, setDone] = useState("");
   const set = (patch) => {
     setDone("");
-    setFilters((f) => cleaned({ ...f, ...patch }));
+    setNarrow((f) => ({ ...f, ...patch }));
   };
   const sources = useQuery({
     queryKey: ["lead-export", "sources"],
@@ -156,7 +112,26 @@ function ExportDialog({ initial, onClose }) {
   const agents = (Array.isArray(users.data) ? users.data : []).filter(
     (u) => u.role === "agent",
   );
-  // The count follows the filters, a moment after the last change.
+  const files = useMemo(
+    () => (sources.data?.files ?? []).filter((f) => !f.file_deleted),
+    [sources.data],
+  );
+  const chosen = files.find((f) => f.id === file);
+  const noFileLeads = Object.values(sources.data?.no_file ?? {}).reduce(
+    (a, b) => a + b,
+    0,
+  );
+  // A file All leads was showing that is no longer listed is not chosen.
+  const filters = useMemo(
+    () =>
+      file === noFile
+        ? { no_file: true, ...cleaned(narrow) }
+        : chosen
+          ? { file: chosen.id, ...cleaned(narrow) }
+          : null,
+    [file, chosen, narrow],
+  );
+  // The counts follow the choices, a moment after the last change.
   const [asked, setAsked] = useState(filters);
   useEffect(() => {
     const t = setTimeout(() => setAsked(filters), 300);
@@ -170,84 +145,67 @@ function ExportDialog({ initial, onClose }) {
         body: { filters: asked },
         signal,
       }),
-    placeholderData: (previous) => previous,
+    enabled: !!asked,
+    // While a filter changes, the last counts stay; another file is counted
+    // afresh.
+    placeholderData: (previous, query) => {
+      const before = query?.queryKey[2];
+      return before &&
+        before.file === asked?.file &&
+        !!before.no_file === !!asked?.no_file
+        ? previous
+        : undefined;
+    },
     retry: false,
   });
-  const files = sources.data?.files ?? [];
-  const noFile = Object.values(sources.data?.no_file ?? {}).reduce(
-    (a, b) => a + b,
-    0,
-  );
-  const picked = new Set(filters.files ?? []);
-  // The order stays put while ticking; only the files chosen on opening
-  // come first.
-  const [initialFiles] = useState(() => new Set(initial.files ?? []));
+  // Files in the list's order (newest first); the one All leads was
+  // showing first.
   const shown = useMemo(() => {
     const s = search.trim().toLowerCase();
-    // Files already ticked first, then the newest.
     return files
       .filter(
         (f) =>
-          !f.file_deleted &&
-          (!s ||
-            f.name.toLowerCase().includes(s) ||
-            (f.sheet?.spreadsheet_id ?? "").toLowerCase().includes(s)),
+          !s ||
+          f.name.toLowerCase().includes(s) ||
+          (f.sheet?.spreadsheet_id ?? "").toLowerCase().includes(s),
       )
-      .sort((a, b) => initialFiles.has(b.id) - initialFiles.has(a.id));
-  }, [files, search, initialFiles]);
+      .sort((a, b) => (b.id === initialFile) - (a.id === initialFile));
+  }, [files, search, initialFile]);
   // Two files can share a name; the spreadsheet ID or date tells them apart.
   const sameName = (f) => files.filter((x) => x.name === f.name).length > 1;
-  const toggleFile = (id, on) => {
-    const next = new Set(picked);
-    if (on) next.add(id);
-    else next.delete(id);
-    set({ files: [...next] });
-  };
-  const choosePreset = ([value, , patch, sheetList]) => {
-    setPreset(value);
-    set({
-      ...Object.fromEntries(presetKeys.map((k) => [k, ""])),
-      ...patch,
-    });
-    setChosen(sheetList);
-  };
-  const sheetsToSend = format === "xlsx" ? chosen : [csvSheet];
-  const count = size.data?.count;
+  const current = asked && size.data && !size.error ? size.data : null;
+  const count = current?.count;
+  const tooBig = count != null && count > (current.max ?? Infinity);
   const ready =
     !busy &&
-    count > 0 &&
+    !!filters &&
+    filters === asked &&
     !size.isFetching &&
-    sheetsToSend.length > 0 &&
-    !size.error;
+    count > 0 &&
+    !tooBig;
+  const name = file === noFile ? "No file" : chosen?.name;
   async function exportFile() {
     if (!ready) return;
     setBusy(true);
     setError("");
     setDone("");
     try {
-      const body = {
-        filters,
-        format,
-        ...(format === "xlsx" ? { sheets: chosen } : { sheet: csvSheet }),
-        ...(preset ? { preset } : {}),
-      };
-      const name = `hd-leads-${preset ?? "export"}-${pkDay()}`;
+      const saved = exportFileName(name);
       download(
-        await api("/leads/export", { method: "POST", body, download: true }),
-        format === "xlsx" ? `${name}.xlsx` : `${name}-${csvSheet}.csv`,
+        await api("/leads/export", {
+          method: "POST",
+          body: { filters },
+          download: true,
+        }),
+        saved,
       );
-      setDone(`Exported ${n(count)} ${count === 1 ? "lead" : "leads"}.`);
+      setDone(`Downloaded ${counted(count, "lead")}: ${saved}`);
     } catch (e) {
       setError(e.message);
     } finally {
       setBusy(false);
     }
   }
-  const tooBig =
-    count != null &&
-    (format === "xlsx"
-      ? count > (size.data?.limits?.xlsxLeads ?? Infinity)
-      : count > (size.data?.limits?.csvLeads ?? Infinity));
   return (
     <Modal
       title="Export leads"
@@ -255,34 +213,13 @@ function ExportDialog({ initial, onClose }) {
       onClose={() => !busy && onClose()}
     >
       <p className="lead-export-intro">
-        Choose files and filters. The file has one row per lead, and, if you
-        choose them, every call, note and assignment of those leads.
+        Choose a Google Sheet or lead file. The Excel file lists every lead from
+        it that is assigned to an agent now, called or not, with the same
+        columns as the Lead pipeline export.
       </p>
 
-      <fieldset className="lead-export-presets">
-        <legend>Quick choices</legend>
-        <div className="lead-export-chips">
-          {presets.map((p) => (
-            <button
-              key={p[0]}
-              type="button"
-              aria-pressed={preset === p[0]}
-              className={preset === p[0] ? "active" : ""}
-              onClick={() => choosePreset(p)}
-            >
-              {p[1]}
-            </button>
-          ))}
-        </div>
-      </fieldset>
-
       <fieldset className="lead-export-files">
-        <legend>Files</legend>
-        <p className="field-hint">
-          None chosen: every lead. A Google Sheet exports the leads it created;
-          a customer who was already a lead and wrote in again is counted under
-          Repeats, not exported as that Sheet&apos;s lead.
-        </p>
+        <legend>Lead file</legend>
         {files.length > 6 && (
           <input
             type="search"
@@ -298,9 +235,13 @@ function ExportDialog({ initial, onClose }) {
             <li key={f.id}>
               <label>
                 <input
-                  type="checkbox"
-                  checked={picked.has(f.id)}
-                  onChange={(e) => toggleFile(f.id, e.target.checked)}
+                  type="radio"
+                  name="lead-export-file"
+                  checked={file === f.id}
+                  onChange={() => {
+                    setDone("");
+                    setFile(f.id);
+                  }}
                 />
                 <span className="lead-export-file">
                   <b>{f.name}</b>
@@ -317,7 +258,8 @@ function ExportDialog({ initial, onClose }) {
                     {[
                       f.rows != null && counted(f.rows, "row"),
                       counted(f.created, "new lead"),
-                      f.repeat > 0 && counted(f.repeat, "repeat"),
+                      f.repeat > 0 &&
+                        counted(f.repeat, "repeat inquiry", "repeat inquiries"),
                       f.rejected > 0 && `${n(f.rejected)} rejected`,
                       `${n(f.in_crm)} in the CRM now`,
                     ]
@@ -331,14 +273,19 @@ function ExportDialog({ initial, onClose }) {
           <li>
             <label>
               <input
-                type="checkbox"
-                checked={!!filters.no_file}
-                onChange={(e) => set({ no_file: e.target.checked })}
+                type="radio"
+                name="lead-export-file"
+                checked={file === noFile}
+                onChange={() => {
+                  setDone("");
+                  setFile(noFile);
+                }}
               />
               <span className="lead-export-file">
                 <b>No file</b>
                 <small>
-                  Added by hand, Meta Lead Ads, WhatsApp · {n(noFile)} leads
+                  Added by hand, Meta Lead Ads, WhatsApp · {n(noFileLeads)}{" "}
+                  leads
                 </small>
               </span>
             </label>
@@ -346,271 +293,149 @@ function ExportDialog({ initial, onClose }) {
         </ul>
       </fieldset>
 
-      <div className="lead-export-filters">
-        <fieldset>
-          <legend>The lead now</legend>
-          <Select
-            id="lx-agent"
-            label="Agent"
-            value={
-              filters.agent ??
-              (filters.assignment ? `@${filters.assignment}` : "")
-            }
-            onChange={(v) =>
-              set(
-                v.startsWith("@")
-                  ? { agent: "", assignment: v.slice(1) }
-                  : { agent: v, assignment: "" },
-              )
-            }
-          >
-            <option value="">Any</option>
-            <option value="@assigned">Any agent</option>
-            <option value="@unassigned">No agent</option>
-            {agents.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-                {a.active ? "" : " (disabled)"}
-              </option>
-            ))}
-          </Select>
-          <Select
-            id="lx-source"
-            label="Source"
-            value={filters.source}
-            onChange={(v) => set({ source: v })}
-          >
-            <option value="">Any</option>
-            <option value="Meta">Meta</option>
-            <option value="CSV">CSV / Excel</option>
-            <option value="manual">Manual</option>
-            <option value="WhatsApp">WhatsApp</option>
-            <option value="other">Other</option>
-          </Select>
-          <Select
-            id="lx-status"
-            label="Status"
-            value={filters.status}
-            onChange={(v) => set({ status: v })}
-          >
-            <option value="">Any</option>
-            <option value="new">New</option>
-            <option value="contacted">Contacted</option>
-            <option value="interested">Interested</option>
-            <option value="visit_scheduled">Site visit scheduled</option>
-            <option value="visit_done">Visit done</option>
-            <option value="negotiation">Negotiation</option>
-            <option value="won">Won</option>
-            <option value="lost">Lost</option>
-          </Select>
-          <Select
-            id="lx-temp"
-            label="Temperature"
-            value={filters.temperature}
-            onChange={(v) => set({ temperature: v })}
-          >
-            <option value="">Any</option>
-            <option value="hot">Hot</option>
-            <option value="warm">Warm</option>
-            <option value="cold">Cold</option>
-            <option value="none">Not set</option>
-          </Select>
-          <Select
-            id="lx-outcome"
-            label="Latest call outcome"
-            value={filters.outcome}
-            onChange={(v) => set({ outcome: v })}
-          >
-            <option value="">Any</option>
-            {outcomes.map((o) => (
-              <option key={o}>{o}</option>
-            ))}
-          </Select>
-          <Select
-            id="lx-contacted"
-            label="Contacted"
-            value={filters.contacted}
-            onChange={(v) => set({ contacted: v })}
-          >
-            <option value="">Any</option>
-            <option value="yes">Contacted (an answered call)</option>
-            <option value="no">Not contacted</option>
-          </Select>
-          <Select
-            id="lx-followup"
-            label="Follow-ups"
-            value={filters.followup}
-            onChange={(v) => set({ followup: v })}
-          >
-            <option value="">Any</option>
-            <option value="pending">Pending</option>
-            <option value="overdue">Overdue</option>
-            <option value="completed">Completed</option>
-            <option value="none">None</option>
-          </Select>
-          <Select
-            id="lx-visit"
-            label="Site visits"
-            value={filters.visit}
-            onChange={(v) => set({ visit: v })}
-          >
-            <option value="">Any</option>
-            <option value="scheduled">Scheduled</option>
-            <option value="completed">Completed</option>
-            <option value="cancelled">Cancelled or no-show</option>
-            <option value="none">None</option>
-          </Select>
-          <Select
-            id="lx-deal"
-            label="Deals"
-            value={filters.deal}
-            onChange={(v) => set({ deal: v })}
-          >
-            <option value="">Any</option>
-            <option value="discussion">Discussion</option>
-            <option value="negotiation">Negotiation</option>
-            <option value="won">Won</option>
-            <option value="lost">Lost</option>
-            <option value="none">None</option>
-          </Select>
-        </fieldset>
-        <fieldset>
-          <legend>History (Pakistan days)</legend>
-          <label htmlFor="lx-cf">
-            Lead created from
-            <input
-              id="lx-cf"
-              type="date"
-              value={filters.created_from ?? ""}
-              onChange={(e) => set({ created_from: e.target.value })}
-            />
-          </label>
-          <label htmlFor="lx-ct">
-            to
-            <input
-              id="lx-ct"
-              type="date"
-              value={filters.created_to ?? ""}
-              onChange={(e) => set({ created_to: e.target.value })}
-            />
-          </label>
-          <label htmlFor="lx-kf">
-            Had a call from
-            <input
-              id="lx-kf"
-              type="date"
-              value={filters.calls_from ?? ""}
-              onChange={(e) => set({ calls_from: e.target.value })}
-            />
-          </label>
-          <label htmlFor="lx-kt">
-            to
-            <input
-              id="lx-kt"
-              type="date"
-              value={filters.calls_to ?? ""}
-              onChange={(e) => set({ calls_to: e.target.value })}
-            />
-          </label>
-          <Select
-            id="lx-had"
-            label="Had a call with the outcome"
-            value={filters.had_outcome}
-            onChange={(v) => set({ had_outcome: v })}
-          >
-            <option value="">Any</option>
-            {outcomes.map((o) => (
-              <option key={o}>{o}</option>
-            ))}
-          </Select>
-          <p className="field-hint">
-            A call period also limits Call history to those days.
-          </p>
-        </fieldset>
-      </div>
-
-      <fieldset className="lead-export-format">
-        <legend>File</legend>
-        <div className="lead-export-chips">
-          {[
-            ["xlsx", "Excel (several worksheets)"],
-            ["csv", "CSV (one worksheet)"],
-          ].map(([value, label]) => (
-            <label key={value} className="lead-export-radio">
-              <input
-                type="radio"
-                name="lead-export-format"
-                checked={format === value}
-                onChange={() => setFormat(value)}
-              />
-              {label}
-            </label>
+      <fieldset className="lead-export-filters">
+        <legend>Narrow the list (optional)</legend>
+        <Select
+          id="lx-agent"
+          label="Agent"
+          value={narrow.agent}
+          onChange={(v) => set({ agent: v })}
+        >
+          <option value="">All agents</option>
+          {agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+              {a.active === false ? " (disabled)" : ""}
+            </option>
           ))}
-        </div>
-        {format === "xlsx" ? (
-          <div className="lead-export-sheets">
-            {sheets.map(([value, label, hint]) => (
-              <label key={value}>
-                <input
-                  type="checkbox"
-                  checked={chosen.includes(value)}
-                  onChange={(e) =>
-                    setChosen((c) =>
-                      e.target.checked
-                        ? everySheet.filter((s) => s === value || c.includes(s))
-                        : c.filter((s) => s !== value),
-                    )
-                  }
-                />
-                <span>
-                  {label}
-                  <small>{hint}</small>
-                </span>
-              </label>
-            ))}
-          </div>
-        ) : (
-          <Select
-            id="lx-csv"
-            label="Worksheet"
-            value={csvSheet}
-            onChange={setCsvSheet}
-          >
-            {sheets.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        )}
+        </Select>
+        <Select
+          id="lx-temperature"
+          label="Temperature"
+          value={narrow.temperature}
+          onChange={(v) => set({ temperature: v })}
+        >
+          <option value="">Any</option>
+          <option value="hot">Hot</option>
+          <option value="warm">Warm</option>
+          <option value="cold">Cold</option>
+          <option value="none">Not set</option>
+        </Select>
+        <Select
+          id="lx-status"
+          label="Status"
+          value={narrow.status}
+          onChange={(v) => set({ status: v })}
+        >
+          <option value="">Any</option>
+          {statuses.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </Select>
+        <Select
+          id="lx-outcome"
+          label="Last call outcome"
+          value={narrow.outcome}
+          onChange={(v) => set({ outcome: v })}
+        >
+          <option value="">Any</option>
+          {outcomes.map((o) => (
+            <option key={o}>{o}</option>
+          ))}
+        </Select>
+        <Select
+          id="lx-contacted"
+          label="Contacted"
+          value={narrow.contacted}
+          onChange={(v) => set({ contacted: v })}
+        >
+          <option value="">Any</option>
+          <option value="yes">Contacted</option>
+          <option value="no">Not contacted</option>
+        </Select>
+        <Select
+          id="lx-worked"
+          label="Worked"
+          value={narrow.worked}
+          onChange={(v) => set({ worked: v })}
+        >
+          <option value="">Any</option>
+          <option value="yes">Worked (called)</option>
+          <option value="no">Not worked (never called)</option>
+        </Select>
+        <p className="field-hint">
+          Last call, Contacted and Worked are the assigned agent&apos;s own
+          calls, as in the Lead pipeline: worked means the agent called,
+          contacted means the agent got through.
+        </p>
       </fieldset>
 
       <div className="lead-export-count" role="status" aria-live="polite">
-        {size.error ? (
+        {!filters ? (
+          "Choose a lead file."
+        ) : size.error ? (
           <ErrorBox error={size.error} />
-        ) : count == null ? (
+        ) : !current ? (
           "Counting…"
         ) : (
-          <>
-            <b>
-              {n(count)} {count === 1 ? "lead" : "leads"}
-            </b>{" "}
-            match · {n(size.data.calls)} calls · {n(size.data.notes)} notes ·{" "}
-            {n(size.data.assignments)} assignments
-            {size.isFetching ? " · updating…" : ""}
-          </>
+          <dl>
+            {chosen?.rows != null && (
+              <div>
+                <dt>
+                  {chosen.format === "sheets"
+                    ? "Rows in the Sheet (last check)"
+                    : "Rows in the file"}
+                </dt>
+                <dd>{n(chosen.rows)}</dd>
+              </div>
+            )}
+            <div>
+              <dt>Leads from it in the CRM</dt>
+              <dd>{n(current.in_file)}</dd>
+            </div>
+            <div>
+              <dt>Assigned to an agent now</dt>
+              <dd>{n(current.assigned)}</dd>
+            </div>
+            <div className="lead-export-total">
+              <dt>Leads to export</dt>
+              <dd>
+                {n(count)}
+                {size.isFetching ? " …" : ""}
+              </dd>
+            </div>
+          </dl>
         )}
       </div>
+      {chosen && (chosen.repeat > 0 || chosen.rejected > 0) && (
+        <p className="lead-export-note">
+          Rows are not all leads:{" "}
+          {[
+            chosen.repeat > 0 &&
+              counted(
+                chosen.repeat,
+                "row was a repeat inquiry from a customer who was already a lead",
+                "rows were repeat inquiries from customers who were already leads",
+              ),
+            chosen.rejected > 0 &&
+              `${counted(chosen.rejected, "row was", "rows were")} rejected`,
+          ]
+            .filter(Boolean)
+            .join(", and ")}
+          .
+        </p>
+      )}
       {tooBig && (
         <p className="lead-export-warning">
-          Too many leads for one {format === "xlsx" ? "Excel file" : "CSV file"}
-          . Choose fewer files or narrower filters
-          {format === "xlsx" ? ", or one worksheet as CSV" : ""}.
+          More than {n(current.max)} leads match. Choose an agent or narrower
+          filters.
         </p>
       )}
       <p className="lead-export-note">
-        The file includes full phone numbers. Each number in the Lead summary,
-        and the export itself, is recorded in Audit history.
+        The file has full phone numbers. Each number, and the export itself, is
+        recorded in Audit history.
       </p>
       <ErrorBox error={error} />
       {done && (
@@ -622,12 +447,8 @@ function ExportDialog({ initial, onClose }) {
         <Button variant="secondary" disabled={busy} onClick={onClose}>
           Close
         </Button>
-        <Button disabled={!ready || tooBig} onClick={exportFile}>
-          {busy
-            ? "Preparing…"
-            : count
-              ? `Export ${n(count)} ${count === 1 ? "lead" : "leads"}`
-              : "Export"}
+        <Button disabled={!ready} onClick={exportFile}>
+          {busy ? "Preparing…" : "Export Excel"}
         </Button>
       </footer>
     </Modal>

@@ -523,9 +523,10 @@ add(
   "Viewed a lead's phone number",
   (c) => `Viewed the phone number of ${leadRef(c)}.`,
 );
-// Lead export file by file (update 073): the filters and counts, never a
-// customer's details. With a Lead summary, each number is also recorded as
-// viewed (lead.phone_revealed).
+// Lead export file by file: the filters and counts, never a customer's
+// details. Since update 074 one file's assigned leads in the Lead pipeline's
+// columns, each number also recorded as viewed (lead.phone_revealed);
+// before it (update 073), the worksheets chosen.
 const exportedSheets = {
   summary: "Lead summary",
   calls: "Call history",
@@ -541,6 +542,12 @@ add("leads.exported", "leads", "leads", "view", "Exported leads", (c) => {
     .map((s) => exportedSheets[s])
     .filter(Boolean);
   if (leads === null) return "Exported leads.";
+  if (c.m.layout === "pipeline_columns")
+    return (
+      `Exported ${count(leads, "assigned lead")}` +
+      (files === 1 ? " of one lead file" : " with no lead file") +
+      " as an Excel file, with their phone numbers."
+    );
   return (
     `Exported ${count(leads, "lead")}` +
     (files === null ? "" : ` from ${count(files, "file")}`) +
