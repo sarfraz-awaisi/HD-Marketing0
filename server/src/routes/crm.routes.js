@@ -72,6 +72,7 @@ import { reportDrilldownRouter } from "./reportDrilldown.routes.js";
 import { leadContacts } from "../services/phoneAccess.js";
 import {
   exportTemperatures,
+  pipelineExportColumns,
   pipelineExportLeads,
   pipelineExportSheet,
   pipelineTotals,
@@ -79,6 +80,7 @@ import {
   withDetails,
 } from "../services/pipelineExport.js";
 import { sendSheet } from "../utils/spreadsheet.js";
+import { excelTable } from "../utils/excelTable.js";
 import { phoneCountries } from "../utils/internationalPhone.js";
 import { dashboardSnapshot } from "../services/dashboard.js";
 import {
@@ -687,10 +689,27 @@ export function crmRouter(db, options = {}) {
         agents: new Set(rows.map((r) => r.agent.id)).size,
       });
       res.set("Cache-Control", "no-store");
+      const name = `hd-pipeline-${q.temperature}-leads-${pkToday()}`;
+      // Excel as the lead export lays it out (update 074): a frozen heading
+      // row with AutoFilter, the same widths and wrapping. The rows are the
+      // same either way.
+      if (q.format === "xlsx")
+        return res
+          .type(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          )
+          .attachment(name + ".xlsx")
+          .send(
+            excelTable({
+              sheet: `${label} leads`,
+              rows: pipelineExportSheet(rows),
+              columns: pipelineExportColumns,
+            }),
+          );
       sendSheet(
         res,
         pipelineExportSheet(rows),
-        `hd-pipeline-${q.temperature}-leads-${pkToday()}`,
+        name,
         q.format,
         `${label} leads`,
       );

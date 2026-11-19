@@ -43,16 +43,6 @@ export default function Leads() {
   // All leads, with import and Add lead (update 057).
   return <AdminLeads importId={importId} />;
 }
-// The export dialog starts from the All leads filters it shares: agent,
-// assignment, temperature, latest call outcome, source and lead file.
-const exportStart = (params) => ({
-  agent: params.get("agent") || "",
-  assignment: params.get("agent") ? "" : params.get("assignment") || "",
-  temperature: params.get("temperature") || "",
-  outcome: params.get("outcome") || "",
-  source: params.get("source") || "",
-  files: params.get("import_id") ? [params.get("import_id")] : [],
-});
 function AdminLeads({ importId }) {
   const [params] = useSearchParams();
   const [modal, setModal] = useState(false),
@@ -194,8 +184,10 @@ function AdminLeads({ importId }) {
           </p>
         </div>
         <div className="actions">
-          {/* Update 073: starts from the list's own filters. */}
-          <LeadExport initial={exportStart(params)} />
+          {/* Updates 073 and 074: starts from the lead file the list is
+              showing, if any, and nothing else, so no lead is left out
+              unasked. */}
+          <LeadExport file={params.get("import_id") || ""} />
           <Button
             type="button"
             variant="secondary"

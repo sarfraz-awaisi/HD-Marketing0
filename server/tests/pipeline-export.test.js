@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import { read, utils } from "xlsx";
+import { CFB, read, utils } from "xlsx";
 import { createApp } from "../src/app.js";
 import { presentAuditEntry } from "../src/services/auditHistory.js";
 import {
@@ -295,6 +295,19 @@ describe("Lead pipeline export", () => {
     // Excel keeps the numbers exactly, as text.
     expect(col(rows, "Phone")).toEqual([phoneOf(1), phoneOf(4)]);
     expect(Object.values(sheet).some((cell) => cell?.f)).toBe(false);
+    // Laid out as the lead export lays it out (update 074): the heading row
+    // bold, frozen and filtered over every row; IDs as text.
+    const xml = CFB.find(
+      CFB.read(file.body, { type: "buffer" }),
+      "/xl/worksheets/sheet1.xml",
+    ).content.toString("utf8");
+    expect(xml).toContain(
+      '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>',
+    );
+    expect(xml).toContain(`<autoFilter ref="A1:AK${rows.length}"/>`);
+    expect(xml.match(/<c r="[A-Z]+1" s="1" t="s">/g)).toHaveLength(37);
+    expect(xml).not.toMatch(/<f[ >]/);
+    expect(sheet.N2.t).toBe("s");
     // In CSV, a cell a spreadsheet could read as a formula is prefixed.
     const csv = (
       await fetchFile("/api/pipeline/export?temperature=hot")
