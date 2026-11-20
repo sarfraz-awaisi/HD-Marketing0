@@ -834,11 +834,12 @@ describe("history and rules (update 072)", () => {
         at("2026-11-04", "17:00"),
       ]),
     ).rejects.toThrow("filled in by the CRM");
-    // Its frequency and answer type stay; other rules change as before
-    // (from the next day) and keep the measure.
+    // Rules change as before (from the next day) and keep the measure.
+    // Update 076: within what the CRM can measure, the frequency and answer
+    // type may change too; an impossible target is refused with the reason.
     await expect(
-      save({ answer_type: "number", target: 2 }, at("2026-11-05"), social),
-    ).rejects.toThrow("filled in by the CRM");
+      save({ answer_type: "number", target: 6 }, at("2026-11-05"), social),
+    ).rejects.toThrow("at most 5 a day");
     await save({ target: 2 }, at("2026-11-05"), inventory);
     // Saving the same rules with a new title changes nothing else.
     await save(

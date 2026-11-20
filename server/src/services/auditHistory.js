@@ -769,15 +769,46 @@ add(
   (c) =>
     `Created the KPI ${kpiName(c)}${dayText(c.m.effective_from) ? `, from ${dayText(c.m.effective_from)}` : ""}.`,
 );
-add(
-  "kpi.updated",
-  "kpis",
-  "targets",
-  "update",
-  "Changed a daily KPI",
-  (c) =>
-    `Changed the KPI ${kpiName(c)}${typeof c.m.previous_title === "string" ? ` (was “${c.m.previous_title}”)` : ""}.${fromDay(c)}`,
-);
+// Update 076: what a change did to the rules, before → after.
+const kpiFrequency = { day: "Daily", week: "Weekly" };
+const kpiType = { yes_no: "Yes / No", number: "Number" };
+const kpiGoal = (r) =>
+  r.answer_type === "yes_no"
+    ? `expected answer ${r.expected === "no" ? "No" : "Yes"}`
+    : `target ${kpiTarget(r)}`;
+const kpiTarget = (r) =>
+  `${number(r.target) ?? "?"} a ${r.frequency === "week" ? "week" : "day"}`;
+function kpiRulesChange(m) {
+  const a = m.rules_before,
+    b = m.rules_after;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return "";
+  const parts = [];
+  if (a.frequency !== b.frequency && kpiFrequency[b.frequency])
+    parts.push(
+      `${kpiFrequency[a.frequency] ?? "?"} → ${kpiFrequency[b.frequency]}`,
+    );
+  if (a.answer_type !== b.answer_type && kpiType[b.answer_type])
+    parts.push(`${kpiType[a.answer_type] ?? "?"} → ${kpiType[b.answer_type]}`);
+  if (kpiGoal(a) !== kpiGoal(b))
+    parts.push(
+      a.answer_type === "number" && b.answer_type === "number"
+        ? `target ${kpiTarget(a)} → ${kpiTarget(b)}`
+        : `${kpiGoal(a)} → ${kpiGoal(b)}`,
+    );
+  if (a.active !== b.active)
+    parts.push(b.active ? "switched on" : "switched off");
+  if (
+    JSON.stringify(a.agent_ids ?? null) !== JSON.stringify(b.agent_ids ?? null)
+  )
+    parts.push(b.agent_ids ? "for chosen agents" : "for all agents");
+  return parts.join("; ");
+}
+add("kpi.updated", "kpis", "targets", "update", "Changed a daily KPI", (c) => {
+  const from = dayText(c.m.rules_from),
+    change = kpiRulesChange(c.m),
+    cancelled = dayText(c.m.cancelled_change_from);
+  return `Changed the KPI ${kpiName(c)}${typeof c.m.previous_title === "string" ? ` (was “${c.m.previous_title}”)` : ""}.${typeof c.m.previous_question === "string" ? " Its question was reworded." : ""}${from ? ` Its rules change from ${from}${change ? `: ${change}` : ""}.` : ""}${cancelled ? ` The rules change waiting from ${cancelled} was cancelled.` : ""}`;
+});
 add(
   "kpi.archived",
   "kpis",

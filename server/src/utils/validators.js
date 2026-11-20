@@ -1645,6 +1645,9 @@ const kpiRuleFields = {
   frequency: z.enum(["day", "week"]),
   answer_type: z.enum(["yes_no", "number"]),
   target: z.number().int().min(1).max(10000),
+  // Update 076: a Yes/No KPI's expected answer. What each CRM source can
+  // measure is checked by the database, which knows the KPI's source.
+  expected: z.enum(["yes", "no"]),
   active: z.boolean(),
   agent_ids: z.array(uuid).min(1).max(500).nullable(),
 };
@@ -1668,6 +1671,7 @@ export const kpiCreate = z
     description: true,
     position: true,
     target: true,
+    expected: true,
     active: true,
     agent_ids: true,
   })

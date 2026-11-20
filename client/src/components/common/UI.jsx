@@ -55,6 +55,10 @@ export function Modal({
   const ref = useRef();
   const titleId = useId();
   const closing = useRef(false);
+  // What had focus when the dialog opened, from the first render, so focus
+  // goes back to it on close (React's development double effects would
+  // otherwise see the open dialog's own button).
+  const opener = useRef(document.activeElement);
   // Fade out, then ask the parent to close. A parent that keeps the dialog
   // open (for example while saving) gets it back unchanged.
   function requestClose() {
@@ -71,9 +75,8 @@ export function Modal({
     }, 140);
   }
   useEffect(() => {
-    const focus = document.activeElement;
     ref.current.showModal();
-    return () => focus?.focus?.();
+    return () => opener.current?.focus?.();
   }, []);
   return (
     <dialog
