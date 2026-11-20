@@ -17,7 +17,8 @@ import "../../styles/kpis.css";
 // column per KPI, for a day, a week, a month or any range. Weeks run Monday
 // to Sunday; a week counts in the range holding its Thursday; a week still
 // running is in progress, not missed. Missed (no answer on a working day)
-// is apart from an explicit No or 0.
+// is apart from an explicit No or 0. Update 076: a Yes/No KPI may expect No,
+// and a range across a change of daily rules shows each target.
 const overallLabels = {
   complete: "On target",
   on_track: "On track",
@@ -47,6 +48,14 @@ function detailText(kpi, d) {
   return null;
 }
 const NOTHING_DUE = "No assigned calls due";
+// Update 076: each set of daily rules a range used, from the day it took
+// over, so a changed target shows with the days it judged.
+const ruleGoal = (r) =>
+  r.answer_type === "yes_no"
+    ? `expects ${r.expected === "no" ? "No" : "Yes"}`
+    : `${r.target} a day`;
+const dailyRulesText = (rules) =>
+  rules.map((r) => `${ruleGoal(r)} from ${dayLabel(r.from)}`).join(", ");
 // One agent's result for one KPI.
 export function cellText(kpi, cell, single) {
   if (!cell) return "—";
@@ -78,12 +87,20 @@ export function cellText(kpi, cell, single) {
   const parts = [];
   if (cell.daily) {
     const d = cell.daily;
+    // Update 076: one kind of daily rule over the range, or several.
+    const kinds = new Set(
+      (d.rules ?? []).map((r) => r.answer_type + (r.expected ?? "")),
+    );
+    const yesNo = kinds.size <= 1 && d.answer_type === "yes_no";
     if (d.days || !d.not_due)
       parts.push(
-        d.answer_type === "yes_no"
-          ? `Yes ${d.met}/${d.days} days`
-          : `Met ${d.met}/${d.days} days · ${d.total} total`,
+        yesNo
+          ? `${d.rules?.[0]?.expected === "no" ? "No" : "Yes"} ${d.met}/${d.days} days`
+          : kinds.size > 1
+            ? `Met ${d.met}/${d.days} days`
+            : `Met ${d.met}/${d.days} days · ${d.total} total`,
       );
+    if (d.rules?.length > 1) parts.push(dailyRulesText(d.rules));
     if (d.missed) parts.push(`${d.missed} missed`);
     if (d.pending) parts.push(`${d.pending} pending`);
     if (d.review) parts.push(`${d.review} awaiting review`);
@@ -348,7 +365,7 @@ export default function KpiReport() {
                         {k.title}
                         <small className="kpi-sub">
                           {k.answer_type === "yes_no"
-                            ? `Yes ${k.frequency === "week" ? "weekly" : "daily"}`
+                            ? `${k.expected === "no" ? "No" : "Yes"} ${k.frequency === "week" ? "weekly" : "daily"}`
                             : `${k.target} a ${k.frequency === "week" ? "week" : "day"}`}
                           {measured(k) ? " · from the CRM" : ""}
                         </small>

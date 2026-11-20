@@ -453,16 +453,15 @@ describe("administrators' Daily KPIs", () => {
     expect(calls_).toHaveTextContent("Yes / No");
     expect(within(calls_).queryByRole("button", { name: /Delete/ })).toBeNull();
     expect(visits).toHaveTextContent("3 a week");
-    expect(visits).toHaveTextContent("Change waiting from");
+    // Update 076: the waiting change, with the day it starts.
+    expect(visits).toHaveTextContent("Change waiting · From");
     expect(visits).toHaveTextContent("4 a week");
     expect(
       within(visits).getByRole("button", { name: "Delete Project visits" }),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "+ New KPI" }));
     const dialog = await screen.findByRole("dialog", { name: "New KPI" });
-    expect(
-      within(dialog).getByText("Expected answer: Yes"),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Expected answer")).toHaveValue("yes");
     await user.type(within(dialog).getByLabelText("Title"), "Video");
     await user.type(
       within(dialog).getByLabelText("Question shown to agents"),
@@ -476,8 +475,8 @@ describe("administrators' Daily KPIs", () => {
       within(dialog).getByLabelText("Answer type"),
       "number",
     );
-    await user.clear(within(dialog).getByLabelText("Target (per week)"));
-    await user.type(within(dialog).getByLabelText("Target (per week)"), "1");
+    await user.clear(within(dialog).getByLabelText("Target per week"));
+    await user.type(within(dialog).getByLabelText("Target per week"), "1");
     await user.click(
       within(dialog).getByRole("button", { name: "Create KPI" }),
     );

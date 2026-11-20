@@ -295,6 +295,25 @@ export function MeasuredKpi({ item, data, onChanged }) {
   const weekText = w
     ? `This week: ${w.total}/${w.target}${w.status === "met" ? " · met" : ` · ${weekStates[w.status] ?? w.status}`}`
     : "";
+  // Update 076: a count the CRM measures may be read daily or weekly, as a
+  // number or as Yes once one counts; the summary and the numbers follow
+  // the KPI's rules (each source's original rules keep their wording).
+  const weekly = item.frequency === "week";
+  const pd = weekly ? wd : d;
+  const counted = (noun) =>
+    weekly
+      ? item.answer_type === "yes_no"
+        ? `This week: ${w?.total ? "Yes" : "not yet"}${w ? (w.status === "met" ? " · met" : ` · ${weekStates[w.status] ?? w.status}`) : ""}`
+        : weekText
+      : item.answer_type === "yes_no"
+        ? item.answer
+          ? "Yes"
+          : item.state === "review"
+            ? "Waiting for an administrator's review"
+            : item.answer === false
+              ? "No"
+              : (dayStates[item.state] ?? "—")
+        : `${item.answer ?? 0}/${item.target} ${noun}${item.met ? " · met" : item.state === "review" ? " · waiting for review" : ""}`;
   let summary, body;
   switch (item.measure) {
     case "calls":
@@ -330,23 +349,26 @@ export function MeasuredKpi({ item, data, onChanged }) {
       const list = evidence.filter(
         (e) => e.kind === "social" && e.day === data.day,
       );
-      summary = item.answer
-        ? "Yes: a link was approved"
-        : item.state === "review"
-          ? "Waiting for an administrator's review"
-          : item.answer === false
-            ? "No: no link was approved"
-            : item.state === "pending"
-              ? "Add at least one link today"
-              : (dayStates[item.state] ?? "—");
+      summary =
+        weekly || item.answer_type !== "yes_no"
+          ? counted("approved")
+          : item.answer
+            ? "Yes: a link was approved"
+            : item.state === "review"
+              ? "Waiting for an administrator's review"
+              : item.answer === false
+                ? "No: no link was approved"
+                : item.state === "pending"
+                  ? "Add at least one link today"
+                  : (dayStates[item.state] ?? "—");
       body = (
         <>
           <Counts
             rows={[
-              ["Submitted", d.submitted],
-              ["Approved", d.approved],
-              ["Waiting", d.pending],
-              ["Rejected", d.rejected],
+              ["Submitted", pd.submitted],
+              ["Approved", pd.approved],
+              ["Waiting", pd.pending],
+              ["Rejected", pd.rejected],
             ]}
           />
           {data.day === data.today &&
@@ -369,15 +391,18 @@ export function MeasuredKpi({ item, data, onChanged }) {
     }
     case "inventory": {
       const list = data.inventory || [];
-      summary = `${item.answer ?? 0}/${item.target} verified${item.met ? " · met" : item.state === "review" ? " · waiting for verification" : item.state === "pending" ? "" : item.state === "missed" ? " · no listings added" : ""}`;
+      summary =
+        weekly || item.answer_type !== "number"
+          ? counted("verified")
+          : `${item.answer ?? 0}/${item.target} verified${item.met ? " · met" : item.state === "review" ? " · waiting for verification" : item.state === "pending" ? "" : item.state === "missed" ? " · no listings added" : ""}`;
       body = (
         <>
           <Counts
             rows={[
-              ["Uploaded", d.uploaded],
-              ["Waiting for verification", d.pending],
-              ["Verified", d.verified],
-              ["Rejected", d.rejected],
+              ["Uploaded", pd.uploaded],
+              ["Waiting for verification", pd.pending],
+              ["Verified", pd.verified],
+              ["Rejected", pd.rejected],
             ]}
           />
           {list.length > 0 && (
@@ -421,15 +446,16 @@ export function MeasuredKpi({ item, data, onChanged }) {
       const days = [];
       for (let x = data.editable_from; x <= data.today; x = addDays(x, 1))
         days.push(x);
-      summary = weekText;
+      summary =
+        weekly && item.answer_type === "number" ? weekText : counted("visits");
       body = (
         <>
           <Counts
             rows={[
-              ["Visits counted", w?.total],
-              ["Photos uploaded", wd.submitted],
-              ["Waiting", wd.pending],
-              ["Rejected", wd.rejected],
+              ["Visits counted", weekly ? w?.total : d.visits],
+              ["Photos uploaded", pd.submitted],
+              ["Waiting", pd.pending],
+              ["Rejected", pd.rejected],
             ]}
           />
           {currentWeek && <PhotoAdder days={days} onAdded={onChanged} />}
@@ -440,15 +466,18 @@ export function MeasuredKpi({ item, data, onChanged }) {
     }
     case "video": {
       const list = evidence.filter((e) => e.kind === "video");
-      summary = weekText;
+      summary =
+        weekly && item.answer_type === "number"
+          ? weekText
+          : counted("approved");
       body = (
         <>
           <Counts
             rows={[
-              ["Submitted", wd.submitted],
-              ["Approved", wd.approved],
-              ["Waiting", wd.pending],
-              ["Rejected", wd.rejected],
+              ["Submitted", pd.submitted],
+              ["Approved", pd.approved],
+              ["Waiting", pd.pending],
+              ["Rejected", pd.rejected],
             ]}
           />
           {currentWeek && (

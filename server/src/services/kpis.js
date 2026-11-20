@@ -25,6 +25,12 @@
 //   then the day is pending, or "review" while evidence waits for an
 //   administrator. A day on which no first call was due is "not_due", never
 //   missed, and so is a day without evidence for a weekly KPI.
+// - Update 076: a KPI the CRM fills in may take other rules its records can
+//   measure (kpiSources). Each count can be read as a number, or as Yes once
+//   at least one counts; assigned calls stay a daily Yes/No. A Yes/No KPI
+//   has an expected answer (Yes unless an administrator chose No for an
+//   agents' own KPI): the day is met when the answer is the expected one,
+//   and a weekly Yes/No KPI once a day of the week has it.
 const DAY = 86400000;
 export const addDays = (day, n) =>
   new Date(Date.parse(day + "T00:00:00Z") + n * DAY).toISOString().slice(0, 10);
@@ -78,6 +84,88 @@ export async function kpiRpc(db, name, args) {
 
 const measureOf = (v) => v?.measure ?? "self";
 const measured = (v) => !!v && measureOf(v) !== "self";
+// Update 076: the expected answer of a Yes/No KPI (rules before 076: Yes).
+const expectsYes = (v) => v?.expected !== "no";
+
+// Update 076: the rules each way of measuring a KPI supports, as the
+// database's kpi_rules_problem checks them, and the reason for any other.
+// The administrators' page reads this to offer only what can be measured.
+const expectsYesOnly =
+  "A KPI the CRM fills in expects Yes: it counts work that was done and approved, so No cannot be its expected answer.";
+const anyRules = {
+  frequencies: ["day", "week"],
+  answer_types: ["yes_no", "number"],
+};
+export const kpiSources = {
+  self: { ...anyRules, expected: ["yes", "no"], max: {} },
+  calls: {
+    frequencies: ["day"],
+    answer_types: ["yes_no"],
+    expected: ["yes"],
+    max: {},
+    counts: null,
+    yes: "Every lead due that day got its first call by its deadline",
+    reasons: {
+      expected: expectsYesOnly,
+      week: "Assigned calls is decided day by day: Yes when every lead due that day got its first call by its deadline. There is no rule for a whole week, so it stays Daily.",
+      number:
+        "Assigned calls has no number to reach: the CRM checks that every lead due that day was called by its deadline. Keep Yes / No; each day still shows the calls due, on time and late.",
+    },
+  },
+  social: {
+    ...anyRules,
+    expected: ["yes"],
+    max: { day: 5, week: 35 },
+    counts: "approved social media links",
+    yes: "At least one social media link approved",
+    reasons: {
+      expected: expectsYesOnly,
+      max: "Agents can add up to 5 social media links a day, so the target can be at most 5 a day or 35 a week.",
+    },
+  },
+  inventory: {
+    ...anyRules,
+    expected: ["yes"],
+    max: {},
+    counts: "verified listings with the owner's name and phone",
+    yes: "At least one listing verified with the owner's details",
+    reasons: { expected: expectsYesOnly },
+  },
+  visits: {
+    ...anyRules,
+    expected: ["yes"],
+    max: {},
+    counts: "approved project visits (one per project and date)",
+    yes: "At least one project visit approved",
+    reasons: { expected: expectsYesOnly },
+  },
+  video: {
+    ...anyRules,
+    expected: ["yes"],
+    max: { day: 2, week: 20 },
+    counts: "approved video links",
+    yes: "At least one video link approved",
+    reasons: {
+      expected: expectsYesOnly,
+      max: "Agents can add up to 20 video links a week, so the target can be at most 2 a day (a week can have 7 working days) or 20 a week.",
+    },
+  },
+};
+// Why a KPI measured this way cannot have these rules, or null when it can.
+export function rulesProblem(
+  measure,
+  { frequency, answer_type, target, expected = "yes" },
+) {
+  const s = kpiSources[measure];
+  if (!s) return "This KPI's CRM source is not known.";
+  if (measure === "self") return null;
+  if (answer_type === "yes_no" && expected === "no") return s.reasons.expected;
+  if (!s.frequencies.includes(frequency)) return s.reasons.week;
+  if (!s.answer_types.includes(answer_type)) return s.reasons.number;
+  if (answer_type === "number" && s.max[frequency] && target > s.max[frequency])
+    return s.reasons.max;
+  return null;
+}
 // Adds up the numbers of two measured details.
 const addUp = (sum, detail) => {
   const out = { ...sum };
@@ -98,6 +186,17 @@ const addUp = (sum, detail) => {
 //   on the day itself below the target.
 // - visits, video: what was approved that day (distinct projects, links);
 //   unsettled while one waits for review.
+// Update 076: social, inventory, visits and video are each a day's count
+// (approved links, verified listings, distinct approved visits, approved
+// videos), read as the KPI's rules ask: the number, or Yes once at least
+// one counts. A daily KPI's day is settled once met, or once it is over
+// with nothing waiting; a weekly KPI's day once nothing waits, as before.
+const dayCount = {
+  social: (e) => e.approved,
+  inventory: (e) => e.verified,
+  visits: (e) => e.visits,
+  video: (e) => e.approved,
+};
 function autoAnswer(v, m, day, today) {
   const answer = (value, settled, detail) => ({
     ...value,
@@ -105,44 +204,29 @@ function autoAnswer(v, m, day, today) {
     settled,
     detail,
   });
-  switch (v.measure) {
-    case "calls": {
-      const c = m?.calls;
-      if (!c?.due) return { auto: true, none: true, detail: null };
-      if (c.late + c.not_called - c.waiting > 0)
-        return answer({ yes: false }, true, c);
-      return c.waiting
-        ? answer({ yes: null }, false, c)
-        : answer({ yes: true }, true, c);
-    }
-    case "social": {
-      const e = m?.social;
-      if (!e) return null;
-      if (e.approved) return answer({ yes: true }, true, e);
-      if (e.pending || day >= today) return answer({ yes: null }, false, e);
-      return answer({ yes: false }, true, e);
-    }
-    case "inventory": {
-      const e = m?.inventory;
-      if (!e) return null;
-      return answer(
-        { count: e.verified },
-        e.verified >= v.target || (!e.pending && day < today),
-        e,
-      );
-    }
-    case "visits":
-    case "video": {
-      const e = m?.[v.measure];
-      if (!e) return null;
-      return answer(
-        { count: v.measure === "visits" ? e.visits : e.approved },
-        !e.pending,
-        e,
-      );
-    }
+  if (v.measure === "calls") {
+    const c = m?.calls;
+    if (!c?.due) return { auto: true, none: true, detail: null };
+    if (c.late + c.not_called - c.waiting > 0)
+      return answer({ yes: false }, true, c);
+    return c.waiting
+      ? answer({ yes: null }, false, c)
+      : answer({ yes: true }, true, c);
   }
-  return null;
+  const count = dayCount[v.measure];
+  const e = m?.[v.measure];
+  if (!count || !e) return null;
+  const n = count(e);
+  const met = v.answer_type === "yes_no" ? n >= 1 : n >= v.target;
+  const done =
+    v.frequency === "week" ? !e.pending : met || (!e.pending && day < today);
+  return answer(
+    v.answer_type === "yes_no"
+      ? { yes: n >= 1 ? true : done ? false : null }
+      : { count: n },
+    done,
+    e,
+  );
 }
 // An answer that counts: the agent's own, or a settled measured one.
 const settled = (a) => !!a && !a.none && (!a.auto || a.settled);
@@ -205,19 +289,31 @@ const applies = (v, agent) =>
   !!v && v.active && (!v.agent_ids || v.agent_ids.includes(agent));
 const valueOf = (v, a) =>
   (!a ? null : v.answer_type === "yes_no" ? a.yes : a.count) ?? null;
-// What a day's answer adds to a weekly total: the count, or 1 for Yes.
-const amountOf = (a) => (!a ? 0 : a.count != null ? a.count : a.yes ? 1 : 0);
+// What a day's answer adds to a weekly total: the count, or 1 for the
+// expected answer (update 076; Yes before).
+const amountOf = (v, a) =>
+  !a
+    ? 0
+    : a.count != null
+      ? a.count
+      : a.yes != null && a.yes === expectsYes(v)
+        ? 1
+        : 0;
 // Can a missing answer for this day still be given? Today always; for a
 // weekly KPI, any earlier day of the current week.
 const stillOpen = (v, d, today) =>
   d === today || (v.frequency === "week" && weekStart(d) === weekStart(today));
 const dayMet = (v, a) =>
-  !!a && (v.answer_type === "yes_no" ? a.yes === true : a.count >= v.target);
+  !!a &&
+  (v.answer_type === "yes_no"
+    ? a.yes != null && a.yes === expectsYes(v)
+    : a.count >= v.target);
 const rules = (v) =>
   v && {
     frequency: v.frequency,
     answer_type: v.answer_type,
     target: v.target,
+    expected: v.answer_type === "yes_no" ? (v.expected ?? "yes") : null,
     active: v.active,
     agent_ids: v.agent_ids,
     effective_from: v.effective_from,
@@ -235,7 +331,7 @@ function week(look, kpi, agent, start, today) {
   const days = [];
   for (const d of daysOf(start, end)) {
     const a = look.answer(kpi, agent, d);
-    total += amountOf(a);
+    total += amountOf(v, a);
     if (look.dayStatus(agent, d) === "work") working = true;
     if (a?.detail) detail = addUp(detail, a.detail);
     days.push({ day: d, value: valueOf(v, a) });
@@ -279,17 +375,33 @@ export function reportWeeks(from, to) {
 // change waiting for the next period.
 export function kpiList(data) {
   const look = lookup({ ...data, days: [], answers: [] });
+  const today = data.today;
   return {
-    today: data.today,
+    today,
+    // Update 076: when a change of rules would start, as kpi_apply_rules
+    // decides it: tomorrow, or next Monday when the KPI is weekly before or
+    // after the change.
+    next_day: addDays(today, 1),
+    next_monday: addDays(weekStart(today), 7),
+    sources: kpiSources,
     kpis: data.kpis.map((k) => {
-      const current = look.versionOn(k.id, data.today);
+      const current = look.versionOn(k.id, today);
       const scheduled = look
         .versionsOf(k.id)
-        .find((v) => v.effective_from > data.today);
+        .find((v) => v.effective_from > today);
       return {
         ...k,
         rules: rules(current),
         scheduled: rules(scheduled ?? null),
+        // An agents' own KPI whose rules started this period and that no
+        // one has answered under them is corrected at once instead, when
+        // its frequency stays the same.
+        corrects_now:
+          !!current &&
+          !measured(current) &&
+          current.effective_from ===
+            (current.frequency === "week" ? weekStart(today) : today) &&
+          k.current_answers === 0,
       };
     }),
   };
@@ -315,6 +427,7 @@ export function agentDay(facts, agentId, day) {
       frequency: rule.frequency,
       answer_type: rule.answer_type,
       target: rule.target,
+      expected: rules(rule).expected,
       measure: measureOf(rule),
       answer: valueOf(rule, a),
       answered_question: a?.question ?? null,
@@ -433,6 +546,7 @@ function columns(facts, look, used, to) {
         frequency: v?.frequency,
         answer_type: v?.answer_type,
         target: v?.target,
+        expected: v ? rules(v).expected : null,
         measure: measureOf(v),
         archived: !!k.archived_at,
       };
@@ -487,6 +601,7 @@ export function kpiReport(facts, from, to) {
           total: 0,
           answer_type: v.answer_type,
           target: v.target,
+          rules: [],
           ...(auto && {
             measure: v.measure,
             review: 0,
@@ -494,6 +609,22 @@ export function kpiReport(facts, from, to) {
             detail: null,
           }),
         };
+        // Update 076: each set of daily rules over the range and the day it
+        // took over, so a changed target shows with the days it judged.
+        const last = cell.daily.rules.at(-1),
+          now = rules(v);
+        if (
+          !last ||
+          last.answer_type !== now.answer_type ||
+          last.target !== now.target ||
+          last.expected !== now.expected
+        )
+          cell.daily.rules.push({
+            from: d,
+            answer_type: now.answer_type,
+            target: now.target,
+            expected: now.expected,
+          });
         if (a?.detail) cell.daily.detail = addUp(cell.daily.detail, a.detail);
         if (a?.none) {
           cell.daily.not_due++;
@@ -503,7 +634,7 @@ export function kpiReport(facts, from, to) {
         if (settled(a)) {
           if (dayMet(v, a)) cell.daily.met++;
           else cell.daily.below++;
-          cell.daily.total += amountOf(a);
+          cell.daily.total += amountOf(v, a);
         } else if (a) cell.daily[a.detail?.pending ? "review" : "pending"]++;
         else if (d < today) cell.daily.missed++;
         else cell.daily.pending++;

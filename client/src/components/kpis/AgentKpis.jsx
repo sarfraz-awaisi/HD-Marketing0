@@ -240,6 +240,11 @@ export default function AgentKpis() {
                           item.frequency === "day" && (
                             <small>Target: {item.target} a day</small>
                           )}
+                        {/* Update 076: a Yes/No KPI may expect No. */}
+                        {item.answer_type === "yes_no" &&
+                          item.expected === "no" && (
+                            <small>Expected answer: No</small>
+                          )}
                       </div>
                       <div className="kpi-answer">
                         {item.answer_type === "yes_no" ? (
