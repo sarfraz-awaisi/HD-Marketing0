@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, download } from "../../lib/api";
 import { Button, ErrorBox, Modal } from "../common/UI";
+import { usageOption } from "../../lib/leadUsage";
 import "../../styles/lead-export.css";
+import "../../styles/lead-usage.css";
 // Administrators' lead export (updates 073 and 074): one Google Sheet or
 // imported lead file at a time, or the leads with no file. The Excel file
 // lists every lead of it that is assigned to an agent now, called or not,
@@ -61,7 +63,10 @@ const cleaned = (f) =>
   Object.fromEntries(Object.entries(f).filter(([, v]) => v));
 
 // file: the lead file All leads is showing, if any, chosen to start with.
-export default function LeadExport({ file = "" }) {
+// usage: All leads' Lead Usage choice (update 075), which the export does
+// not use: the dialog says so, so a different set of leads is never
+// exported unannounced.
+export default function LeadExport({ file = "", usage = "" }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -69,7 +74,11 @@ export default function LeadExport({ file = "" }) {
         Export
       </Button>
       {open && (
-        <ExportDialog initialFile={file} onClose={() => setOpen(false)} />
+        <ExportDialog
+          initialFile={file}
+          usage={usage}
+          onClose={() => setOpen(false)}
+        />
       )}
     </>
   );
@@ -90,7 +99,7 @@ function Select({ label, value, onChange, children, id }) {
   );
 }
 
-function ExportDialog({ initialFile, onClose }) {
+function ExportDialog({ initialFile, usage, onClose }) {
   const [file, setFile] = useState(initialFile),
     [narrow, setNarrow] = useState({}),
     [search, setSearch] = useState(""),
@@ -217,6 +226,13 @@ function ExportDialog({ initialFile, onClose }) {
         it that is assigned to an agent now, called or not, with the same
         columns as the Lead pipeline export.
       </p>
+      {usage && (
+        <p className="lead-export-notice" role="note">
+          All leads is showing {usageOption(usage)} only. The export does not
+          use Lead Usage: it lists every assigned lead of the file you choose,
+          whatever its usage, so it can include leads the list is not showing.
+        </p>
+      )}
 
       <fieldset className="lead-export-files">
         <legend>Lead file</legend>

@@ -14,7 +14,9 @@ import {
 import LeadForm from "../../components/leads/LeadForm";
 import ImportedFiles from "../../components/leads/ImportedFiles";
 import AgentLeadList from "../../components/leads/AgentLeadList";
-import AdminLeadList from "../../components/leads/AdminLeadList";
+import AdminLeadList, {
+  AdminLeadUsage,
+} from "../../components/leads/AdminLeadList";
 import LeadExport from "../../components/leads/LeadExport";
 const importFields = [
   ["name", "Customer name (required)"],
@@ -184,10 +186,15 @@ function AdminLeads({ importId }) {
           </p>
         </div>
         <div className="actions">
+          {/* Update 075: Lead Usage, with the list's counts. */}
+          <AdminLeadUsage />
           {/* Updates 073 and 074: starts from the lead file the list is
               showing, if any, and nothing else, so no lead is left out
-              unasked. */}
-          <LeadExport file={params.get("import_id") || ""} />
+              unasked. The export does not use Lead Usage, and says so. */}
+          <LeadExport
+            file={params.get("import_id") || ""}
+            usage={params.get("usage") || ""}
+          />
           <Button
             type="button"
             variant="secondary"
