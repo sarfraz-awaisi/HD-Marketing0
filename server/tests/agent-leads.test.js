@@ -673,7 +673,7 @@ describe("a call's temperature", () => {
     expect(row).toMatchObject({
       name: "Iqra",
       temperature: "warm",
-      status: "contacted",
+      status: "interested",
     });
   });
 });

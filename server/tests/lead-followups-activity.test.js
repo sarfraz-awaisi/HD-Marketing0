@@ -590,7 +590,9 @@ describe("who did what on the timeline", () => {
       "insert into followups(lead_id,agent_id,due_at,status) values($1,$2,now()+interval '3 days','pending')",
       [lead, ali],
     );
-    await pg.query("update leads set status='interested' where id=$1", [lead]);
+    // The Interested call moved the lead (update 077); this stage change has
+    // no application record.
+    await pg.query("update leads set status='visit_done' where id=$1", [lead]);
     const items = (await get(ali, `/leads/${lead}/timeline`)).body;
     const find = (kind, test = () => true) =>
       items.find((i) => i.kind === kind && test(i));
@@ -605,7 +607,7 @@ describe("who did what on the timeline", () => {
     expect(followup.agent_name).toBe("Ali Agent");
     const stage = find(
       "lead_status_history",
-      (i) => i.to_status === "interested",
+      (i) => i.to_status === "visit_done",
     );
     expect(stage.actor_name).toBeNull();
   });

@@ -167,8 +167,8 @@ describe("Lead pipeline export", () => {
     expect(
       pick("Name", "Agent", "Temperature", "Status", "Agent account"),
     ).toEqual([
-      ["Asad Khan", "Ali Agent", "Hot", "Contacted", "Active"],
-      ["Danish Khan", "Sara Agent", "Hot", "Contacted", "Active"],
+      ["Asad Khan", "Ali Agent", "Hot", "Interested", "Active"],
+      ["Danish Khan", "Sara Agent", "Hot", "Interested", "Active"],
     ]);
     // Full numbers, as on the pipeline's lead pages. In CSV a cell starting
     // with "+" gets an apostrophe, so no spreadsheet reads it as a formula.
