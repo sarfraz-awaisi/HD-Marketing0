@@ -280,7 +280,8 @@ describe("P1 manual-call transactions", () => {
           lead,
         ])
       ).status,
-    ).toBe("contacted");
+    ).toBe("interested");
+    // New → Contacted, then Interested from the outcome (update 077).
     expect(
       (
         await one(
@@ -288,7 +289,7 @@ describe("P1 manual-call transactions", () => {
           [lead],
         )
       ).n,
-    ).toBe(1);
+    ).toBe(2);
     const audit = (
       await pg.query(
         "select * from audit_log where action='call.manual_logged' and request_id=$1",
@@ -311,7 +312,7 @@ describe("P1 manual-call transactions", () => {
           [lead],
         )
       ).n,
-    ).toBe(1);
+    ).toBe(2);
   });
   it.each(["No answer", "Busy", "Wrong number"])(
     "records zero-duration %s without advancing a new lead",

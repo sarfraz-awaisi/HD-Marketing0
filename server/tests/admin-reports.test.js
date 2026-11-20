@@ -332,7 +332,8 @@ describe("team reports (update 063)", () => {
     // Nothing was created in that month, yet the pipeline shows every open
     // lead; won and lost ones are not open.
     expect(metrics.leads).toBe(0);
-    expect(metrics.open_by_status).toEqual({ contacted: 2 });
+    // Their calls were Interested, which moves them there (update 077).
+    expect(metrics.open_by_status).toEqual({ interested: 2 });
   });
 
   it("lists overdue leads not connected in their current assignment, and marks a last call from an earlier one", async () => {
