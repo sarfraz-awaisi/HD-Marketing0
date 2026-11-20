@@ -1,0 +1,257 @@
+/* Update 075: Lead Usage next to Export, the usage in a lead's row, and the
+   lead's agent history. */
+.lead-usage-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.lead-usage-filter select {
+  min-height: 40px;
+  width: auto;
+  max-width: 230px;
+}
+.lead-owner-cell {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+.lead-usage-button {
+  display: inline-flex;
+  padding: 2px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--brand-gold-50);
+  color: var(--brand-gold-700);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.lead-usage-button:hover {
+  border-color: var(--brand-gold);
+}
+.lead-usage-button:focus-visible {
+  outline: 2px solid var(--brand-gold);
+  outline-offset: 2px;
+}
+.lead-export-notice {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--text-sm);
+}
+
+dialog.lead-history {
+  width: min(820px, calc(100% - 32px));
+}
+.lead-history-body {
+  display: grid;
+  gap: 14px;
+}
+.lead-history-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.lead-history-facts > div,
+.lead-history-numbers > div {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  background: var(--surface-muted);
+}
+.lead-history-facts dt,
+.lead-history-numbers dt {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+.lead-history-facts dd,
+.lead-history-numbers dd {
+  margin: 2px 0 0;
+  display: grid;
+  overflow-wrap: anywhere;
+}
+.lead-history-facts small {
+  color: var(--ink-3);
+}
+.lead-history-summary {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+.lead-history-warning,
+.lead-history-missing {
+  color: var(--warning);
+}
+.lead-history-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--warning-soft);
+}
+.lead-history-periods {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 18px;
+  display: grid;
+  gap: 14px;
+  border-left: 2px solid var(--border-strong);
+}
+.lead-history-period {
+  position: relative;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--surface);
+  display: grid;
+  gap: 8px;
+}
+.lead-history-period::before {
+  content: "";
+  position: absolute;
+  left: -26px;
+  top: 20px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--brand-gold);
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.lead-history-period.admin_team::before,
+.lead-history-period.before::before {
+  background: var(--ink-4);
+}
+.lead-history-period.admin_team,
+.lead-history-period.before {
+  background: var(--surface-muted);
+}
+.lead-history-period > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.lead-history-period h3 {
+  margin: 0;
+  font-size: var(--text-md, 16px);
+}
+.lead-history-id,
+.lead-history-by {
+  color: var(--ink-3);
+}
+.lead-history-flags,
+.lead-history-badges,
+.lead-history-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.lead-history-line > span:first-child:not(.badge):not(.temperature) {
+  min-width: 96px;
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+.lead-history-when {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+.lead-history-numbers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.lead-history-comment {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lead-history-comment > span {
+  font-size: var(--text-sm);
+  color: var(--ink-3);
+}
+.lead-history-records summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--brand-navy);
+}
+.lead-history-records > ol {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.lead-history-record {
+  padding: 8px 10px;
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-muted);
+  border-radius: 0 var(--radius-md, 8px) var(--radius-md, 8px) 0;
+  display: grid;
+  gap: 4px;
+}
+.lead-history-record.calls {
+  border-left-color: var(--info);
+}
+.lead-history-record.notes {
+  border-left-color: var(--brand-gold);
+}
+.lead-history-record p {
+  margin: 0;
+}
+.lead-history-record-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.lead-history-record-head small {
+  color: var(--ink-3);
+}
+.lead-history-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .lead-usage-filter {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .lead-usage-filter select {
+    flex: 1;
+    max-width: none;
+  }
+  dialog.lead-history {
+    width: calc(100% - 16px);
+  }
+  .lead-history-periods {
+    padding-left: 12px;
+  }
+  .lead-history-period {
+    padding: 12px;
+  }
+  .lead-history-period::before {
+    left: -20px;
+  }
+  .lead-history-numbers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .lead-history-period > header {
+    flex-direction: column;
+  }
+}

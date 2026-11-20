@@ -27,6 +27,12 @@ import CountryFilter from "./CountryFilter";
 import { countryLabel } from "../../lib/countries";
 import { CustomerCell, LastCallCell } from "./LeadCells";
 import { temperatureChoices } from "./PipelineParts";
+import {
+  LeadHistoryDialog,
+  LeadUsageButton,
+  LeadUsageFilter,
+} from "./LeadUsage";
+import { usageOption } from "../../lib/leadUsage";
 // Administrators' All leads (update 057), built like an agent's Assigned
 // leads: the database searches every lead by name or contact number (or an
 // HD number written with HD), applies the filters together and counts and
@@ -42,6 +48,9 @@ import { temperatureChoices } from "./PipelineParts";
 // they match (update 038) are as in agents' Assigned leads.
 // Update 063: Missed first call is no call in the current assignment by its
 // deadline; Not connected (overdue) is no answered call in it, from anyone.
+// Update 075: Lead Usage (next to Export) keeps the leads assigned to
+// exactly that many different agents; Used N times in a lead's row opens its
+// agent history.
 const callLabels = {
   uncalled: "New",
   missed: "Missed first call",
@@ -65,6 +74,7 @@ const keys = [
   "source",
   "import_id",
   "country",
+  "usage",
   "page",
 ];
 // What the database is asked for, from the address.
@@ -81,9 +91,38 @@ const query = (f) => ({
   ...(f.source ? { source: f.source } : {}),
   ...(f.import_id ? { import_id: f.import_id } : {}),
   ...(f.country ? { country: f.country } : {}),
+  ...(f.usage ? { usage: f.usage } : {}),
 });
 const plural = (n, one, many = one + "s") =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
+// The list as the address asks for it. Lead Usage next to Export reads the
+// same request, so its counts always match the list.
+function useAdminLeads() {
+  const { user } = useAuth();
+  const [f, change] = useUrlFilters(keys);
+  const page = Math.max(1, Number(f.page) || 1);
+  const params = new URLSearchParams({ ...query(f), page });
+  const q = useQuery({
+    queryKey: ["leads", "all", user.id, params.toString()],
+    queryFn: ({ signal }) => api("/leads/all?" + params, { signal }),
+    // The current results stay while the next ones load.
+    placeholderData: (previous) => previous,
+  });
+  return { f, change, page, q };
+}
+
+// Lead Usage, for the page heading next to Export.
+export function AdminLeadUsage() {
+  const { f, change, q } = useAdminLeads();
+  return (
+    <LeadUsageFilter
+      value={f.usage}
+      counts={q.data ? (q.data.usage ?? null) : undefined}
+      onChange={(usage) => change({ usage, page: null })}
+    />
+  );
+}
 
 export default function AdminLeadList() {
   const { user } = useAuth(),
@@ -91,24 +130,17 @@ export default function AdminLeadList() {
     qc = useQueryClient(),
     toast = useToast();
   const back = location.pathname + location.search;
-  const [f, change] = useUrlFilters(keys);
-  const page = Math.max(1, Number(f.page) || 1);
+  const { f, change, page, q } = useAdminLeads();
   const set = (values) => change({ ...values, page: null });
   const [dialLead, setDialLead] = useState(null),
     [assignLead, setAssignLead] = useState(null),
+    [historyLead, setHistoryLead] = useState(null),
     [bulk, setBulk] = useState(null),
     [results, setResults] = useState(null),
     [deleteIds, setDeleteIds] = useState(null),
     [error, setError] = useState("");
   const filters = new URLSearchParams(query(f));
-  const params = new URLSearchParams({ ...query(f), page });
   const selection = useLeadSelection(filters.toString());
-  const q = useQuery({
-    queryKey: ["leads", "all", user.id, params.toString()],
-    queryFn: ({ signal }) => api("/leads/all?" + params, { signal }),
-    // The current results stay while the next ones load.
-    placeholderData: (previous) => previous,
-  });
   const users = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
@@ -176,6 +208,9 @@ export default function AdminLeadList() {
       : []),
     ...(f.country
       ? [[`Country: ${countryLabel(f.country)}`, () => set({ country: null })]]
+      : []),
+    ...(f.usage
+      ? [[`Lead Usage: ${usageOption(f.usage)}`, () => set({ usage: null })]]
       : []),
   ];
   const reset = () => change(Object.fromEntries(keys.map((k) => [k, null])));
@@ -400,15 +435,19 @@ export default function AdminLeadList() {
                 {
                   key: "assigned_agent",
                   label: "Assigned to",
-                  render: (r) =>
-                    r.assigned_agent ? (
-                      <span>
-                        {r.assigned_name}
-                        {r.assigned_active ? "" : " (inactive)"}
-                      </span>
-                    ) : (
-                      <span className="lead-muted">Unassigned</span>
-                    ),
+                  render: (r) => (
+                    <span className="lead-owner-cell">
+                      {r.assigned_agent ? (
+                        <span>
+                          {r.assigned_name}
+                          {r.assigned_active ? "" : " (inactive)"}
+                        </span>
+                      ) : (
+                        <span className="lead-muted">Unassigned</span>
+                      )}
+                      <LeadUsageButton lead={r} onOpen={setHistoryLead} />
+                    </span>
+                  ),
                 },
                 {
                   key: "last_call",
@@ -478,6 +517,12 @@ export default function AdminLeadList() {
         ))}
       {results && (
         <AssignmentResults result={results} onClose={() => setResults(null)} />
+      )}
+      {historyLead && (
+        <LeadHistoryDialog
+          lead={historyLead}
+          onClose={() => setHistoryLead(null)}
+        />
       )}
       {dialLead && (
         <CallDialog

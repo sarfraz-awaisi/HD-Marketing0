@@ -301,6 +301,8 @@ export const adminLeadsQuery = z
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     import_id: uuid.optional(),
     country: countryFilter,
+    // Update 075: Lead usage, exactly 2–5 different agents.
+    usage: z.enum(["2", "3", "4", "5"]).transform(Number).optional(),
     page: z.coerce.number().int().min(1).max(100000).default(1),
   })
   .strict()

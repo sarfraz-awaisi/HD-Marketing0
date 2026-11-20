@@ -740,6 +740,11 @@ export function crmRouter(db, options = {}) {
     } catch (error) {
       const refused = countryRefusal(q, "Choose valid lead filters", error);
       if (refused !== error) throw refused;
+      if (q.usage && error.message === "Choose valid lead filters")
+        throw Object.assign(
+          new Error("Lead Usage needs CRM database update 075 after 074."),
+          { status: 503 },
+        );
       if (
         q.call === "not_connected" &&
         error.message === "Choose valid lead filters"
@@ -768,6 +773,22 @@ export function crmRouter(db, options = {}) {
   });
   router.get("/leads/all/selection", adminOnly, reportLimit, async (req, res) =>
     res.json({ ids: (await adminLeads(req, true)).ids }),
+  );
+  // A lead's agent history (update 075): each assignment period with the
+  // calls, notes, stage changes, follow-ups, visits and deals saved in it,
+  // and who recorded each. Administrators only, in the server and the
+  // database; no phone numbers.
+  router.get("/leads/:id/agent-history", adminOnly, async (req, res) =>
+    res
+      .set("Cache-Control", "no-store")
+      .json(
+        await salesRpc(
+          db,
+          "admin_lead_agent_history",
+          { p_actor: req.user.id, p_lead: uuid.parse(req.params.id) },
+          "075 after 074",
+        ),
+      ),
   );
   // Assigns the selected leads that have no agent (update 057), never one
   // that has: the database skips and names those, and reports each lead.
