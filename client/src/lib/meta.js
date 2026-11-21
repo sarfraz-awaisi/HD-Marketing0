@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import { POLL, metaActive } from "./polling";
 export const metaApi = "/integrations/meta";
 export function useMetaSummary(user) {
   return useQuery({
@@ -7,7 +8,8 @@ export function useMetaSummary(user) {
     queryFn: () => api(metaApi + "/summary"),
     enabled: user.role === "admin",
     staleTime: 20000,
-    refetchInterval: 30000,
+    // Every minute while there are social leads (metaActive), else slowly.
+    refetchInterval: (query) => (metaActive(query.state.data) ? POLL.meta : POLL.metaIdle),
   });
 }
 export const platformLabel = (value) =>

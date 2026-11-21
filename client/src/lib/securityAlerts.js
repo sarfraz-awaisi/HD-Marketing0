@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import { POLL } from "./polling";
 export function useSecurityAlertSummary(enabled) {
   return useQuery({
     queryKey: ["security-alert-summary"],
     queryFn: () => api("/security-alerts/summary"),
     enabled,
     staleTime: 30000,
-    refetchInterval: 60000,
+    refetchInterval: POLL.securityAlerts,
   });
 }
 export function securityAlertLabel(type) {
