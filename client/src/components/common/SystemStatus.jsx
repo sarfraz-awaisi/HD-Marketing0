@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { api, date } from "../../lib/api";
 import { ErrorBox } from "./UI";
+import { POLL } from "../../lib/polling";
 const labels = {
   deleteOldRecordings: "Recording retention",
   reportInactiveLeadOwners: "Inactive lead owners",
@@ -17,7 +18,7 @@ export default function SystemStatus() {
   const query = useQuery({
     queryKey: ["system-status"],
     queryFn: () => api("/health/status"),
-    refetchInterval: 60000,
+    refetchInterval: POLL.systemStatus,
   });
   const data = query.data;
   const problems = data?.jobs?.filter((job) => job.status !== "success") || [];

@@ -19,6 +19,7 @@ import AccountUid from "../accounts/AccountUid";
 import IdleGuard from "../common/IdleGuard";
 import { useSecurityAlertSummary } from "../../lib/securityAlerts";
 import { useMetaSummary, metaApi, platformLabel } from "../../lib/meta";
+import { POLL } from "../../lib/polling";
 import { breadcrumb, navigationFor } from "./navigation";
 import { roleLabel, workDaysText } from "../../lib/roles";
 import { clockLabel } from "../../lib/attendance";
@@ -81,14 +82,14 @@ export default function Layout() {
   const inbox = useQuery({
     queryKey: ["notifications"],
     queryFn: ({ signal }) => api("/notifications", { signal }),
-    refetchInterval: 60000,
+    refetchInterval: POLL.notifications,
   });
   // Until database update 038 is installed, keep showing follow-up reminders.
   const legacy = inbox.error?.status === 503;
   const q = useQuery({
     queryKey: ["reminders"],
     queryFn: ({ signal }) => api("/reminders", { signal }),
-    refetchInterval: 60000,
+    refetchInterval: POLL.reminders,
     enabled: legacy,
   });
   const qc = useQueryClient();

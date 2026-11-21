@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { api, pkr } from "../../lib/api";
 import { statusLabel, statuses } from "../../lib/pipeline";
+import { POLL } from "../../lib/polling";
 // Compact figure tile: label and icon on top, the value, then a short note.
 // to: a page it links to; onOpen: shows the records behind the number.
 export function KpiTile({
@@ -182,7 +183,8 @@ export function RecentActivity({ limit = 6 }) {
   const q = useQuery({
     queryKey: ["notifications"],
     queryFn: ({ signal }) => api("/notifications", { signal }),
-    refetchInterval: 60000,
+    // The same interval as the sidebar's query, which this one shares.
+    refetchInterval: POLL.notifications,
   });
   // Before database update 038 there is no notification list to show.
   if (q.error?.status === 503) return null;

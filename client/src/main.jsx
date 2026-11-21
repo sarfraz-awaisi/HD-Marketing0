@@ -6,20 +6,12 @@ import { AuthProvider } from "./context/AuthContext";
 import { ToastProvider } from "./components/common/UI";
 import App from "./App";
 import { loadFonts } from "./lib/fonts";
-import { retryQuery } from "./lib/api";
+import { queryDefaults } from "./lib/queryDefaults";
 import "./styles/index.css";
 import "./styles/animations.css";
 import "./styles/tokens.css";
 import "./styles/theme.css";
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: retryQuery,
-      staleTime: 15000,
-      refetchOnWindowFocus: true,
-    },
-  },
-});
+const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 loadFonts();
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>

@@ -12,6 +12,7 @@ import KycClientPicker from "../src/components/documents/KycClientPicker";
 import { api } from "../src/lib/api";
 import { useMetaSummary } from "../src/lib/meta";
 import { useSecurityAlertSummary } from "../src/lib/securityAlerts";
+import { POLL } from "../src/lib/polling";
 const mocks = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock("../src/lib/api", async (original) => ({
   ...(await original()),
@@ -51,7 +52,7 @@ function LayoutPolls() {
   useQuery({
     queryKey: ["notifications"],
     queryFn: ({ signal }) => api("/notifications", { signal }),
-    refetchInterval: 60000,
+    refetchInterval: POLL.notifications,
   });
   return null;
 }
@@ -76,10 +77,12 @@ describe("polling shared by the layout and a page", () => {
     await wait(10000);
     rerender(page(true));
     await wait(300000);
-    // Once on sign-in, then every 30 s or 60 s until 310 s.
-    expect(requests("/integrations/meta/summary")).toBe(11);
+    // Once on sign-in, then once per interval until 310 s: security alerts
+    // every minute, notifications every 2 minutes. With no social lead the
+    // Meta summary loads once and does not poll.
+    expect(requests("/integrations/meta/summary")).toBe(1);
     expect(requests("/security-alerts/summary")).toBe(6);
-    expect(requests("/notifications")).toBe(6);
+    expect(requests("/notifications")).toBe(3);
   });
 });
 
