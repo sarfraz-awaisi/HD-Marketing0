@@ -113,6 +113,75 @@ function FormMapping({ form, busy, save }) {
     </article>
   );
 }
+// Update 080: connection health from counts and times only; no token or
+// customer detail reaches the browser.
+const when = (value) => (value ? date(value) : "Never");
+function MetaHealth() {
+  const h = useQuery({
+    queryKey: ["meta-health"],
+    queryFn: () => api(metaApi + "/health"),
+    refetchInterval: 120000,
+  });
+  if (h.isPending) return null;
+  if (h.error) return <ErrorBox error={h.error} />;
+  const d = h.data;
+  const connections = d.connections || [];
+  const reconnect = connections.some((c) => c.reconnect);
+  const status = !d.configured
+    ? "Not configured"
+    : !connections.length
+      ? "Not connected"
+      : reconnect
+        ? "Needs reconnect"
+        : "Connected";
+  return (
+    <section className="panel meta-health" aria-labelledby="meta-health-title">
+      <div className="panel-heading">
+        <h2 id="meta-health-title">Connection health</h2>
+        <span className={`badge ${reconnect || !d.configured ? "lost" : "won"}`}>{status}</span>
+      </div>
+      {reconnect && (
+        <p role="alert" className="error">
+          {connections.some((c) => c.status !== "connected")
+            ? "Meta authorization needs attention. Reconnect Meta, then select your Pages again."
+            : "Meta authorization expires within 7 days. Reconnect Meta to keep receiving leads."}
+        </p>
+      )}
+      <dl className="meta-health-grid">
+        <dt>Token expires</dt>
+        <dd>{connections.length ? connections.map((c) => (c.expires_at ? date(c.expires_at) : "No expiry reported")).join(", ") : "—"}</dd>
+        <dt>Pages on</dt>
+        <dd>{connections.reduce((n, c) => n + c.pages_on, 0)} of {connections.reduce((n, c) => n + c.pages, 0)}</dd>
+        <dt>Forms on</dt>
+        <dd>{d.forms_on} of {d.forms}</dd>
+        <dt>Last webhook</dt>
+        <dd>{when(d.last_webhook_at)}</dd>
+        <dt>Last lead retrieved</dt>
+        <dd>{when(d.last_retrieval_at)}</dd>
+        <dt>Waiting</dt>
+        <dd>{d.queued}</dd>
+        <dt>Needs review</dt>
+        <dd>{d.review}</dd>
+        <dt>Failed</dt>
+        <dd>{d.failed}</dd>
+        <dt>Lead worker</dt>
+        <dd>
+          {d.worker?.running
+            ? d.worker.jobs?.includes("processMetaLeads")
+              ? `Running · last check ${when(d.job?.last_run_at)}`
+              : "Running without the Meta job"
+            : "Not running"}
+        </dd>
+      </dl>
+      {d.errors?.length > 0 && (
+        <p>
+          Errors in the last 7 days:{" "}
+          {d.errors.map((e) => `${e.code.replaceAll("_", " ")} (${e.count})`).join(", ")}
+        </p>
+      )}
+    </section>
+  );
+}
 export default function MetaIntegration() {
   const [params] = useSearchParams(),
     qc = useQueryClient(),
@@ -134,6 +203,7 @@ export default function MetaIntegration() {
       const result = await action();
       await qc.invalidateQueries({ queryKey: ["meta-settings"] });
       await qc.invalidateQueries({ queryKey: ["meta-summary"] });
+      await qc.invalidateQueries({ queryKey: ["meta-health"] });
       if (message)
         toast(typeof message === "function" ? message(result) : message);
       return result;
@@ -169,6 +239,7 @@ export default function MetaIntegration() {
           synchronization.
         </p>
       )}
+      <MetaHealth />
       {q.isPending ? (
         <Loader />
       ) : (
@@ -230,7 +301,26 @@ export default function MetaIntegration() {
             ))}
             {q.data.pages?.map((p) => (
               <section className="panel" key={p.id}>
-                <h2>{p.name}</h2>
+                <div className="panel-heading">
+                  <h2>{p.name}</h2>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      run(
+                        () => api(`${metaApi}/pages/${p.id}/test`, { method: "POST", body: {} }),
+                        (r) =>
+                          r.ok
+                            ? `Connection works: Meta returned ${r.name || "the Page"}.`
+                            : r.reconnect
+                              ? "Meta refused the saved authorization. Reconnect Meta."
+                              : `Meta could not be reached (${String(r.code).replaceAll("_", " ")}). Try again later.`,
+                      )
+                    }
+                  >
+                    Test connection
+                  </Button>
+                </div>
                 <p>
                   Page {p.id}{" "}
                   {p.instagram_name

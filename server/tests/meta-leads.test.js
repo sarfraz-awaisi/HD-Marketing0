@@ -772,6 +772,31 @@ describe("Meta retries, credentials and OAuth", () => {
     ).rejects.toMatchObject({ code: "40001" });
     expect((await one("select count(*)::int n from leads")).n).toBe(0);
   });
+  it("two workers at once and a crash before saving still create each lead once (update 080)", async () => {
+    const phones = { 301: "03001234567", 302: "03001234568", 303: "03001234569" };
+    for (const id of Object.keys(phones)) await send(event(id));
+    metaFetch.mockImplementation(async (url) => {
+      const id = new URL(url).pathname.split("/").pop();
+      return json(lead(id, phones[id]));
+    });
+    // A worker fetched lead 301 from Meta and stopped before saving it.
+    const [crashed] = await rpc("meta_claim", { p_limit: 1 });
+    await Promise.all([processMetaLeads(db, { metaFetch }), processMetaLeads(db, { metaFetch })]);
+    expect((await one("select count(*)::int n from leads")).n).toBe(2);
+    expect(await one("select status from meta_submissions where id=$1", [crashed.id])).toEqual({ status: "processing" });
+    // Its lease runs out; the next run saves it, once.
+    await pg.query("update meta_submissions set lease_until=now()-interval '1 second' where id=$1", [crashed.id]);
+    await processMetaLeads(db, { metaFetch });
+    await Promise.all([processMetaLeads(db, { metaFetch }), send(event("301"))]);
+    expect((await pg.query("select provider_lead_id,status from meta_submissions order by provider_lead_id")).rows).toEqual([
+      { provider_lead_id: "301", status: "created" },
+      { provider_lead_id: "302", status: "created" },
+      { provider_lead_id: "303", status: "created" },
+    ]);
+    expect(await one("select count(*)::int n, count(distinct phone)::int p from crm_private.lead_phones")).toEqual({ n: 3, p: 3 });
+    expect((await one("select count(*)::int n from leads")).n).toBe(3);
+    expect(metaFetch).toHaveBeenCalledTimes(3);
+  });
   it("backs off rate limits and retries successfully without duplicate creation", async () => {
     await send();
     metaFetch.mockResolvedValue(
@@ -1043,5 +1068,64 @@ describe("Meta retries, credentials and OAuth", () => {
       ).status,
     ).toBe(503);
     expect(await processMetaLeads(db)).toEqual({ skipped: true });
+  });
+});
+
+describe("Meta connection health (update 080)", () => {
+  const health = (id = admin) => request(app).get(prefix + "/health").set(auth(id));
+  it("reports status, Pages and forms, and lead activity without any token", async () => {
+    let res = await health();
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      configured: true,
+      forms: 1,
+      forms_on: 1,
+      last_webhook_at: null,
+      last_retrieval_at: null,
+      queued: 0,
+      failed: 0,
+    });
+    expect(res.body.connections).toHaveLength(1);
+    expect(res.body.connections[0]).toMatchObject({ status: "connected", pages: 1, reconnect: false });
+    await ingest("801");
+    res = await health();
+    expect(res.body.last_webhook_at).not.toBeNull();
+    expect(res.body.last_retrieval_at).not.toBeNull();
+    expect(JSON.stringify(res.body)).not.toMatch(/fixture-(user|page)-token|ciphertext|03001234567/);
+  });
+
+  it("warns to reconnect when the token is close to expiry or needs attention", async () => {
+    await pg.query("update meta_connections set expires_at=now()+interval '2 days'");
+    expect((await health()).body.connections[0].reconnect).toBe(true);
+    await pg.query("update meta_connections set expires_at=now()+interval '60 days',status='attention'");
+    expect((await health()).body.connections[0].reconnect).toBe(true);
+  });
+
+  it("counts waiting and failed leads, and the CRM keeps working when Meta is down", async () => {
+    await send(event("802"));
+    metaFetch.mockRejectedValue(new Error("Meta unavailable"));
+    await processMetaLeads(db, { metaFetch });
+    const res = await health();
+    expect(res.body.queued).toBe(1);
+    expect(res.body.errors.length).toBeGreaterThan(0);
+    expect((await request(app).get(prefix + "/summary").set(auth())).status).toBe(200);
+  });
+
+  it("tests a Page's saved authorization read-only, without exposing it", async () => {
+    metaFetch.mockResolvedValue(json({ id: page, name: "Sales Page" }));
+    let res = await request(app).post(`${prefix}/pages/${page}/test`).set(auth()).send({});
+    expect(res.body).toEqual({ ok: true, name: "Sales Page" });
+    const [url, init] = metaFetch.mock.calls.at(-1);
+    expect(String(url)).toContain(`/${page}?`);
+    expect(init.method ?? "GET").toBe("GET");
+    metaFetch.mockResolvedValue(json({ error: { code: 190 } }, 400));
+    res = await request(app).post(`${prefix}/pages/${page}/test`).set(auth()).send({});
+    expect(res.body).toEqual({ ok: false, code: "authorization_expired", reconnect: true });
+    expect(JSON.stringify(res.body)).not.toMatch(/fixture-page-token/);
+  });
+
+  it("is for administrators only", async () => {
+    expect((await health(agent)).status).toBe(403);
+    expect((await request(app).post(`${prefix}/pages/${page}/test`).set(auth(agent)).send({})).status).toBe(403);
   });
 });

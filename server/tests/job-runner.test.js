@@ -39,9 +39,27 @@ vi.mock("../src/jobs/processMetaLeads.js", () => ({
 vi.mock("../src/jobs/attendanceReconciliation.js", () => ({
   attendanceReconciliation: fixture.jobs[8],
 }));
+const allJobs = [
+  "deleteOldRecordings",
+  "reportInactiveLeadOwners",
+  "leadResponseCheck",
+  "followUpReminders",
+  "missingOutcomeCheck",
+  "cleanupPropertyPhotos",
+  "cleanupPropertyDocuments",
+  "cleanupKnowledgeFiles",
+  "processMetaLeads",
+  "attendanceReconciliation",
+  "purgeDeletedLeads",
+];
 beforeEach(() => {
   vi.resetModules();
-  fixture.db.rpc.mockReset().mockResolvedValue({ data: null });
+  // Update 080: the worker lease is granted unless a test says otherwise.
+  fixture.db.rpc
+    .mockReset()
+    .mockImplementation(async (name) => ({ data: name === "worker_lease" ? true : null }));
+  // Every job is named, as the earlier runner ran them all.
+  vi.stubEnv("JOBS_ENABLED", allJobs.join(","));
   for (const job of fixture.jobs) job.mockReset().mockResolvedValue({});
   vi.spyOn(process, "once").mockReturnValue(process);
   vi.spyOn(globalThis, "setTimeout").mockReturnValue(0);
@@ -73,6 +91,26 @@ describe("durable Meta work alongside existing maintenance jobs", () => {
     expect(JSON.stringify(console.error.mock.calls)).not.toContain(
       "private database",
     );
+  });
+});
+describe("choosing jobs and one worker at a time (update 080)", () => {
+  it("runs only the Meta job in Meta-only mode", async () => {
+    vi.stubEnv("JOBS_ENABLED", "processMetaLeads");
+    await import("../src/jobs/runner.js");
+    expect(fixture.jobs[7]).toHaveBeenCalledOnce();
+    expect(fixture.jobs.filter((job) => job.mock.calls.length).length).toBe(1);
+  });
+  it("runs no job when none is named", async () => {
+    vi.stubEnv("JOBS_ENABLED", "");
+    await import("../src/jobs/runner.js");
+    expect(fixture.jobs.every((job) => job.mock.calls.length === 0)).toBe(true);
+    expect(fixture.db.rpc).toHaveBeenCalledWith("worker_lease", expect.objectContaining({ p_jobs: [] }));
+  });
+  it("waits while another worker holds the lease", async () => {
+    fixture.db.rpc.mockImplementation(async () => ({ data: false }));
+    await import("../src/jobs/runner.js");
+    expect(fixture.jobs.every((job) => job.mock.calls.length === 0)).toBe(true);
+    expect(console.error).toHaveBeenCalledWith("Another worker holds the lease; waiting.");
   });
 });
 describe("background jobs in LOCAL_DEV_ONLY development", () => {

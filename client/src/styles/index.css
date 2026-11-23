@@ -4074,3 +4074,20 @@ dialog.document-viewer {
     justify-content: center;
   }
 }
+
+/* Update 080: Meta connection health. */
+.meta-health-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 0.4rem 1.25rem;
+  margin: 0.5rem 0 0;
+}
+.meta-health-grid dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.meta-health-grid dd {
+  margin: 0.15rem 0 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
