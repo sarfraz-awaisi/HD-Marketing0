@@ -185,3 +185,116 @@ The verification record contains final counts and browser/build results. Covered
 **Implemented but awaiting real configuration:** business authorization, actual Page/form discovery/subscription, public webhook delivery, real Graph retrieval and actual Facebook/Instagram test leads. These acceptance criteria are unverified until the external test procedure passes. Production acceptance is not complete.
 
 **Not implemented:** website forms, messaging/calling, automatic token renewal, scheduled missed-webhook backfill, account-wide remote grant revocation, paid-ad management and public Meta deletion callbacks. Separate live PostgreSQL connection contention, Meta review approval, SMTP delivery and physical-device/browser acceptance require the prepared environment.
+
+## Update 080: safe Meta-only worker and connection health
+
+### Worker control
+
+The background worker now runs only the jobs named in **`JOBS_ENABLED`**, a
+comma list in the server settings (`/etc/hd-crm/production/server.env`).
+
+- **Unset or empty:** it runs no job. It only holds its lease.
+- **An unknown name:** the worker stops at start-up with the list of known
+  jobs.
+- **For Meta leads alone:** `JOBS_ENABLED=processMetaLeads`.
+
+  None of the backlog jobs run: missed first calls, follow-up reminders,
+  attendance, file and recording clean-up, and the deleted-lead purge each
+  stay off until they are named.
+
+**One worker at a time.** A worker runs jobs only while it holds the single
+worker lease (`worker_lease`, migration 080).
+
+- **Lease length:** three intervals, and at least two minutes.
+- **Renewal:** before every job.
+- **A second copy** (an old install, or an overlapping restart) waits.
+- **A crashed worker's lease** runs out, and another worker takes over.
+- **A worker that has lost its lease** stops before its next job.
+- **Shutdown** (SIGTERM) finishes the current job and gives the lease up.
+
+Each Meta submission also keeps its own five-minute lease, so no lead is
+processed twice.
+
+- **A worker that loses the worker lease mid-job** can still save only the
+  submissions it holds a valid lease on. Saving checks that lease in the
+  same transaction as the lead insert, so an expired or taken-over
+  submission is refused.
+- **A crash between fetching from Meta and saving** leaves the submission
+  waiting. When its lease runs out, it is fetched and saved again, once.
+
+**Migration 080.**
+
+- Apply it after 079. It stops, and changes nothing, if it finds an
+  unexpected lease table or function.
+- `supabase/check-worker-control-080.sql` is read-only.
+  - Before applying: `at 079, ready for 080`.
+  - After applying: `at 080`, with `browser_can_use_it = false`.
+- Apply 080 before deploying the code that uses it.
+
+**Interval.** `JOB_INTERVAL_SECONDS` defaults to 60 seconds. A Meta lead
+waits at most one interval before it is fetched. 120 seconds halves the
+worker's Supabase traffic.
+
+**Start it** (only with the owner's approval), as `crm-prod` after a deploy:
+
+1. Add `JOBS_ENABLED=processMetaLeads` to the server settings.
+2. Run `deploy/production/worker.sh production <live SHA>`.
+
+`release.sh` does not restart the worker, so run `worker.sh` again after
+each deploy.
+
+### Connection health (Admin → Integrations → Meta Lead Ads)
+
+The page shows counts and times only:
+
+- **Status:** Not configured, Not connected, Connected, or Needs reconnect.
+- **Token expiry:** with a warning 7 days before expiry, or when Meta asks
+  for attention.
+- **Pages and forms switched on.**
+- **Last webhook and last lead retrieved.**
+- **Waiting, review and failed counts,** and the most common error codes of
+  the last 7 days.
+- **Whether a worker is running the Meta job.**
+
+**Test connection** (on each Page) reads only the Page's id and name with
+its saved authorization. It changes or subscribes nothing. Tokens never
+reach the browser.
+
+API: `GET /api/integrations/meta/health`, `POST /api/integrations/meta/pages/:id/test`
+(administrators only).
+
+### Settings checklist
+
+| Setting | Where it comes from |
+| --- | --- |
+| `META_APP_ID` | App settings → Basic → App ID |
+| `META_APP_SECRET` | App settings → Basic → App secret (server only) |
+| `META_LOGIN_CONFIG_ID` | Facebook Login for Business → Configurations → the configuration's ID |
+| `META_GRAPH_VERSION` | A version your App Dashboard lists, as `vNN.0` |
+| `META_OAUTH_REDIRECT_URL` | Exactly `https://hdmarketing.tech/api/integrations/meta/callback`, also entered under Valid OAuth redirect URIs |
+| `META_WEBHOOK_VERIFY_TOKEN` | A random secret you choose, also entered in Webhooks → Page → Verify token |
+| `META_TOKEN_ENCRYPTION_KEY` | `openssl rand -hex 32`. Keep a safe copy: changing it means reconnecting |
+| `META_ANSWER_RETENTION_DAYS` | 1–90, default 30 |
+
+### Access requirements (Meta documentation, checked 23 Nov 2026)
+
+- **Permissions.** Lead retrieval uses the `leadgen` Page webhook and a Page
+  access token from someone who can perform the **ADVERTISE** task on the
+  Page. Meta lists these permissions:
+  - `leads_retrieval`;
+  - `pages_manage_metadata`;
+  - `pages_show_list`;
+  - `pages_read_engagement`;
+  - `ads_management`.
+
+  The CRM checks the first four plus `pages_manage_ads`. If your dashboard
+  requires `ads_management`, add it to the Login configuration; the CRM does
+  not refuse extra granted permissions.
+- **Access levels and review.** Meta now names its access levels **Limited**
+  and **Full** access (formerly Standard and Advanced).
+  - Full access to `leads_retrieval` can require App Review and access
+    verification.
+  - Business Verification is requested after approval.
+  - Webhook delivery generally needs the app in **Live** mode.
+
+  Confirm each requirement in your App Dashboard: these rules change.

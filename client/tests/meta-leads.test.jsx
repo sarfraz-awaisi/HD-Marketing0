@@ -25,6 +25,21 @@ vi.mock("../src/lib/api", async (original) => ({
 }));
 vi.mock("../src/lib/supabase", () => ({ supabase: null }));
 const base = "/integrations/meta";
+// Update 080: the health panel's data (counts and times only).
+let health = {
+  configured: true,
+  connections: [],
+  forms: 0,
+  forms_on: 0,
+  last_webhook_at: null,
+  last_retrieval_at: null,
+  queued: 0,
+  failed: 0,
+  review: 0,
+  errors: [],
+  job: null,
+  worker: null,
+};
 let settings,
   rows,
   summary,
@@ -82,6 +97,8 @@ beforeEach(() => {
   ];
   mocks.api.mockImplementation(async (path, options) => {
     if (path === base + "/settings") return settings;
+    if (path === base + "/health") return health;
+    if (path === base + "/pages/101/test") return { ok: true, name: "Sales Page" };
     if (path === base + "/summary") return summary;
     if (path.startsWith(base + "/inbox?")) return { data: rows, count: 42 };
     if (path === base + "/submissions/submission-1")
@@ -458,5 +475,36 @@ describe("Meta integration and incoming leads interface", () => {
         screen.queryByRole("link", { name: "Facebook · Buyer One" }),
       ).toBeNull(),
     );
+  });
+});
+
+describe("Meta connection health (update 080)", () => {
+  it("shows a reconnect warning, lead activity and a stopped worker", async () => {
+    connected();
+    health = {
+      ...health,
+      connections: [{ id: "connection-1", status: "connected", expires_at: "2026-11-25T07:00:00Z", reconnect: true, pages: 1, pages_on: 1 }],
+      forms: 2,
+      forms_on: 1,
+      last_webhook_at: "2026-11-23T07:00:00Z",
+      queued: 3,
+      failed: 1,
+      errors: [{ code: "rate_limited", count: 2 }],
+    };
+    workspace("/integrations/meta");
+    const panel = await screen.findByRole("region", { name: "Connection health" });
+    expect(within(panel).getByText("Needs reconnect")).toBeInTheDocument();
+    expect(within(panel).getByRole("alert")).toHaveTextContent(/expires within 7 days/);
+    expect(within(panel).getByText("1 of 2")).toBeInTheDocument();
+    expect(within(panel).getByText("Not running")).toBeInTheDocument();
+    expect(within(panel).getByText(/rate limited \(2\)/)).toBeInTheDocument();
+  });
+
+  it("tests a Page's connection from its panel", async () => {
+    connected();
+    workspace("/integrations/meta");
+    fireEvent.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("Connection works: Meta returned Sales Page.")).toBeInTheDocument();
+    expect(mocks.api).toHaveBeenCalledWith(base + "/pages/101/test", { method: "POST", body: {} });
   });
 });

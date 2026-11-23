@@ -388,6 +388,32 @@ export function metaRouter(db, options = {}) {
     empty.parse(req.query);
     res.json(await rpc("meta_summary", { p_actor: req.user.id }));
   });
+  // Update 080: connection health (counts and times only, never tokens).
+  router.get("/health", async (req, res) => {
+    empty.parse(req.query);
+    res.json({
+      ...(await rpc("meta_health", { p_actor: req.user.id })),
+      configured: metaReady(),
+    });
+  });
+  // A read-only check that the saved Page token still works: reads the
+  // Page's id and name from Meta. Nothing is changed or subscribed.
+  router.post("/pages/:id/test", sensitiveLimit, async (req, res) => {
+    const id = providerId.parse(req.params.id);
+    empty.parse(req.body ?? {});
+    const { graph, token } = await pageSecret(req, id);
+    try {
+      const page = await graph.request(id, token, { fields: "id,name" });
+      res.json({ ok: page.id === id, name: page.name ?? null });
+    } catch (error) {
+      const code = error.code || "provider_rejected";
+      res.json({
+        ok: false,
+        code,
+        reconnect: ["authorization_expired", "permission_denied"].includes(code),
+      });
+    }
+  });
   router.get("/inbox", async (req, res) => {
     const filters = z
       .object({
