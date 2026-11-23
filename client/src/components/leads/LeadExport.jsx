@@ -23,6 +23,7 @@ const outcomes = [
   "Follow-up required",
   "Site visit scheduled",
   "Deal discussion",
+  "Closed lost",
 ];
 const statuses = [
   ["new", "New"],

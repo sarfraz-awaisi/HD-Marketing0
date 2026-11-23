@@ -10,6 +10,8 @@ export const callOutcomes = [
   "Follow-up required",
   "Site visit scheduled",
   "Deal discussion",
+  // Update 079: the customer answered and the opportunity is over.
+  "Closed lost",
 ];
 // Outcomes of a call that did not connect.
 export const unansweredOutcomes = [

@@ -332,6 +332,7 @@ describe("Lead pipeline", () => {
       "Follow-up required",
       "Site visit scheduled",
       "Deal discussion",
+      "Closed lost",
     ]);
     const table = await screen.findByRole("table");
     expect(
