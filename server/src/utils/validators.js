@@ -40,6 +40,7 @@ export const outcomes = [
   "Follow-up required",
   "Site visit scheduled",
   "Deal discussion",
+  "Closed lost",
 ];
 export const tags = [
   "Hot lead",

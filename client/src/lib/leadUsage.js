@@ -14,6 +14,7 @@ const responses = [
   "Follow-up required",
   "Site visit scheduled",
   "Deal discussion",
+  "Closed lost",
 ];
 export const recordKinds = [
   "calls",
