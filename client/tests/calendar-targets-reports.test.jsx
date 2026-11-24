@@ -12,7 +12,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "../src/App";
 import { ToastProvider } from "../src/components/common/UI";
 import {
+  addDays,
   addMonths,
+  fullDayLabel,
+  monthLabel,
   periodLabel,
   periodRange,
   periodStart,
@@ -189,38 +192,65 @@ describe("calendar dates", () => {
 });
 
 describe("site visit calendar", () => {
-  it("shows the week and month in Pakistan time and moves between them", async () => {
-    open("/visits?view=calendar");
-    expect(
-      await screen.findByText("Ayesha Khan", { exact: false }),
-    ).toBeInTheDocument();
-    const first = new URLSearchParams(
-      calls("/visits/calendar")[0][0].split("?")[1],
-    );
-    expect(first.get("from")).toBe(
-      periodRange("week", startOfWeek(today)).from,
-    );
-    const card = screen.getByText("HD-000042 · Ayesha Khan").closest("a");
-    expect(card).toHaveAttribute("href", "/leads/" + lead.id);
-    expect(
-      within(card).getByText("Gulberg House · Ali Agent"),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Next week" }));
-    await waitFor(() => expect(calls("/visits/calendar")).toHaveLength(2));
-    fireEvent.click(screen.getByRole("tab", { name: "Month" }));
-    const cell = await screen.findByRole("button", { name: /, 2 visits$/ });
-    fireEvent.click(cell);
-    expect(cell).toHaveAttribute("aria-pressed", "true");
-    fireEvent.change(screen.getByRole("combobox", { name: "Calendar agent" }), {
-      target: { value: ali.id },
-    });
-    await waitFor(() =>
-      expect(calls("/visits/calendar").at(-1)[0]).toContain("agent=" + ali.id),
-    );
-    fireEvent.click(screen.getByRole("tab", { name: "List" }));
-    expect(
-      await screen.findByRole("combobox", { name: "Filter records" }),
-    ).toBeInTheDocument();
+  // The clock is fixed, so the test does not depend on the day it runs:
+  // a mid-month day, a week that runs into the next month, and one that
+  // runs into the next year. Next week's visits fall on the month shown.
+  it.each([
+    ["mid-month", "2026-10-14"],
+    ["into the next month", "2026-11-24"],
+    ["into the next year", "2026-12-29"],
+  ])("shows the week and month in Pakistan time and moves between them (%s)", async (_, day) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(`${day}T07:00:00Z`));
+    try {
+      const later = addDays(day, 7);
+      const on = (d, time, v) => ({ ...v, scheduled_at: new Date(`${d}T${time}:00+05:00`).toISOString() });
+      const dated = [
+        on(day, "11:00", visits[0]),
+        on(day, "15:30", visits[1]),
+        on(later, "11:00", { ...visits[0], id: "v3" }),
+        on(later, "15:30", { ...visits[1], id: "v4" }),
+      ];
+      const api = mocks.api.getMockImplementation();
+      mocks.api.mockImplementation(async (path, options) =>
+        path.startsWith("/visits/calendar") ? dated : api(path, options),
+      );
+      open("/visits?view=calendar");
+      expect(
+        await screen.findByText("Ayesha Khan", { exact: false }),
+      ).toBeInTheDocument();
+      const first = new URLSearchParams(
+        calls("/visits/calendar")[0][0].split("?")[1],
+      );
+      expect(first.get("from")).toBe(periodRange("week", startOfWeek(day)).from);
+      const card = screen.getByText("HD-000042 · Ayesha Khan").closest("a");
+      expect(card).toHaveAttribute("href", "/leads/" + lead.id);
+      expect(
+        within(card).getByText("Gulberg House · Ali Agent"),
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Next week" }));
+      await waitFor(() => expect(calls("/visits/calendar")).toHaveLength(2));
+      fireEvent.click(screen.getByRole("tab", { name: "Month" }));
+      // The month of next week's day, in that year.
+      expect(await screen.findByText(monthLabel(later))).toBeInTheDocument();
+      const cell = await screen.findByRole("button", {
+        name: `${fullDayLabel(later)}, 2 visits`,
+      });
+      fireEvent.click(cell);
+      expect(cell).toHaveAttribute("aria-pressed", "true");
+      fireEvent.change(screen.getByRole("combobox", { name: "Calendar agent" }), {
+        target: { value: ali.id },
+      });
+      await waitFor(() =>
+        expect(calls("/visits/calendar").at(-1)[0]).toContain("agent=" + ali.id),
+      );
+      fireEvent.click(screen.getByRole("tab", { name: "List" }));
+      expect(
+        await screen.findByRole("combobox", { name: "Filter records" }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("warns about an overlapping visit while scheduling", async () => {
     open("/visits?view=calendar");
