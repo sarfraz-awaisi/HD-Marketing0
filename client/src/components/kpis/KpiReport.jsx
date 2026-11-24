@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 import { addDays, dayLabel, fullDayLabel, todayPk } from "../../lib/calendar";
 import {
   answerText,
+  completedCallsText,
   dayStates,
   kpiPeriods,
   kpiRange,
@@ -36,6 +37,8 @@ function detailText(kpi, d) {
   switch (kpi.measure) {
     case "calls":
       return `${d.on_time ?? 0}/${d.due ?? 0} called on time`;
+    case "call_activity":
+      return `${d.completed ?? 0}/${d.assigned ?? 0} completed`;
     case "social":
       return `${d.approved ?? 0}/${d.submitted ?? 0} links approved`;
     case "inventory":
@@ -74,6 +77,9 @@ export function cellText(kpi, cell, single) {
       return w ? `${today} · week ${weekText(w)}` : today;
     }
     if (!day) return "—";
+    // Update 081: completed out of assigned, and nothing more.
+    if (kpi.measure === "call_activity")
+      return completedCallsText(day.detail, day.value, day.state);
     if (day.state === "not_due") return NOTHING_DUE;
     if (day.state !== "answered")
       return withDetail(dayStates[day.state] ?? day.state, day.detail);

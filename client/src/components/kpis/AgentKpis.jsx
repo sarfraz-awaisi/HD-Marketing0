@@ -2,7 +2,12 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
 import { addDays, dayLabel, fullDayLabel, todayPk } from "../../lib/calendar";
-import { answerText, dayStates, measured } from "../../lib/kpiPeriods";
+import {
+  answerText,
+  completedCallsText,
+  dayStates,
+  measured,
+} from "../../lib/kpiPeriods";
 import { Button, ErrorBox, Loader, useToast } from "../common/UI";
 import { MeasuredKpi } from "./KpiEvidence";
 import "../../styles/kpis.css";
@@ -349,9 +354,11 @@ export default function AgentKpis() {
                           {!a ||
                           (a.state === "not_due" && k.frequency === "week")
                             ? "—"
-                            : a.state === "answered"
-                              ? answerText(k.answer_type, a.value)
-                              : (dayStates[a.state] ?? a.state)}
+                            : a.measure === "call_activity"
+                              ? completedCallsText(a.detail, a.value, a.state)
+                              : a.state === "answered"
+                                ? answerText(k.answer_type, a.value)
+                                : (dayStates[a.state] ?? a.state)}
                         </td>
                       );
                     })}

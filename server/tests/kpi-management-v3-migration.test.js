@@ -171,7 +171,8 @@ describe("update 076 on a database at 075", () => {
 
   it("refuses the same rules as the server, with the same reasons", async () => {
     const seen = new Set();
-    for (const measure of Object.keys(kpiSources))
+    // Update 081 adds call_activity; kpi-calls-completed-081.test.js checks it.
+    for (const measure of Object.keys(kpiSources).filter((m) => m !== "call_activity"))
       for (const frequency of ["day", "week"])
         for (const answer_type of ["yes_no", "number"])
           for (const target of answer_type === "number"

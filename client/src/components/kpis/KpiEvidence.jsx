@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api, date } from "../../lib/api";
 import { addDays, dayLabel, fullDayLabel } from "../../lib/calendar";
 import {
+  completedCallsText,
   dayStates,
   evidenceStates,
   platformLabels,
@@ -317,7 +318,8 @@ export function MeasuredKpi({ item, data, onChanged }) {
   let summary, body;
   switch (item.measure) {
     case "calls":
-      summary =
+      // Update 081: the first-call deadline only; "Calls made" counts every call.
+      summary = `First-call deadline: ${
         item.state === "not_due"
           ? "No assigned calls due"
           : item.state === "pending"
@@ -326,7 +328,8 @@ export function MeasuredKpi({ item, data, onChanged }) {
               ? "Yes: every assigned call made by its deadline"
               : item.answer === false
                 ? `No: ${d.due - (d.on_time ?? 0)} of ${d.due} not called by the deadline`
-                : (dayStates[item.state] ?? "—");
+                : (dayStates[item.state] ?? "—")
+      }`;
       body =
         item.state === "not_due" ? (
           <small className="field-hint">
@@ -339,11 +342,15 @@ export function MeasuredKpi({ item, data, onChanged }) {
               ["Called by the deadline", d.on_time],
               ["Called late", d.late],
               ["Remaining", d.not_called],
-              ["Calls made", d.attempts],
+              ["Calls on these leads by the deadline", d.attempts],
               ["Answered (connected)", d.answered],
             ]}
           />
         );
+      break;
+    // Update 081: completed out of assigned, and nothing more.
+    case "call_activity":
+      summary = completedCallsText(d, item.answer, item.state);
       break;
     case "social": {
       const list = evidence.filter(
