@@ -390,6 +390,17 @@ describe("Task management", () => {
   beforeEach(() => {
     mocks.user = { ...admin };
   });
+  it("is hidden from the administrator menu but still opens by its address", async () => {
+    const { adminNavigation, agentNavigation } = await import("../src/components/layout/navigation");
+    const links = (nav) => nav.flatMap((s) => s.links.map(([to, label]) => `${to} ${label}`));
+    expect(links(adminNavigation).join()).not.toMatch(/task-management|Task management/);
+    expect(links(adminNavigation)).toContain("/tasks Task assign");
+    expect(links(agentNavigation)).toContain("/my-tasks My tasks");
+    open("/task-management");
+    expect(await screen.findByRole("heading", { name: "Task management" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Task management/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /Attendance management/ })).toHaveAttribute("href", "/attendance-management");
+  });
   it("assigns a team task to every active agent, once", async () => {
     open("/task-management?tab=assign");
     const form = (

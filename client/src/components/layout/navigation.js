@@ -81,7 +81,8 @@ export const adminNavigation = [
       ["/team", "Employee management", UsersRound],
       ["/attendance", "My attendance", CalendarCheck],
       ["/attendance-management", "Attendance management", ClipboardCheck],
-      ["/task-management", "Task management", ListChecks],
+      // Task management (/task-management) is hidden from the menu by the
+      // owner's choice; the page, its route and its data are unchanged.
     ],
   },
   {
