@@ -59,13 +59,21 @@ export const weekStates = {
 // it in from its own records and the evidence administrators approve.
 export const measureLabels = {
   self: "Agent answers",
-  calls: "CRM: first calls by their deadline",
+  calls: "CRM: first-call deadline compliance",
+  call_activity: "CRM: assigned calls completed that day",
   social: "CRM: approved social media links",
   inventory: "CRM: verified listings with owner details",
   visits: "CRM: approved project visit photos",
   video: "CRM: approved video links",
 };
 export const measured = (k) => !!k?.measure && k.measure !== "self";
+// Update 081: a day of Calls completed, as completed out of assigned:
+// "35/50 Completed — No"; today, unfinished, "— In progress".
+export function completedCallsText(detail, answer, state) {
+  if (state === "not_due" || !detail?.assigned) return "0/0 — No calls assigned";
+  const verdict = answer === true ? "Yes" : answer === false ? "No" : "In progress";
+  return `${detail.completed ?? 0}/${detail.assigned} Completed — ${verdict}`;
+}
 export const evidenceStates = {
   pending: "Waiting for review",
   approved: "Approved",

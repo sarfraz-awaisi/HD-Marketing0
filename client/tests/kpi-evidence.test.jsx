@@ -206,7 +206,9 @@ describe("an agent's KPIs filled in by the CRM", () => {
     );
     open("/kpis");
     expect(
-      await screen.findByText("No: 2 of 20 not called by the deadline"),
+      await screen.findByText(
+        "First-call deadline: No: 2 of 20 not called by the deadline",
+      ),
     ).toBeInTheDocument();
     const counts = (label) =>
       screen.getByText(label, { selector: "dt" }).nextSibling.textContent;
@@ -390,6 +392,50 @@ describe("administrators' Reviews", () => {
     ).toHaveAttribute("href", `/inventory?property=${kid(200)}`);
     expect(screen.getByText("Name or phone missing")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Verify" })).toBeDisabled();
+  });
+});
+
+describe("Calls completed: completed out of assigned (update 081)", () => {
+  beforeEach(() => {
+    mocks.user = { ...ali };
+  });
+  it("shows only completed out of assigned, apart from the first-call deadline", async () => {
+    const day = myDay();
+    day.kpis.push(
+      base(6, {
+        title: "Calls completed",
+        question: "Did you complete all the calls assigned to you today?",
+        frequency: "day",
+        answer_type: "yes_no",
+        target: 1,
+        measure: "call_activity",
+        answer: null,
+        met: null,
+        state: "pending",
+        detail: { assigned: 50, completed: 35 },
+      }),
+    );
+    mocks.api.mockImplementation(async (path) =>
+      path.startsWith("/kpis/my") ? day : { data: [], count: 0 },
+    );
+    open("/kpis");
+    expect(await screen.findByText("35/50 Completed — In progress")).toBeInTheDocument();
+    for (const gone of ["Calls made (all)", "Not answered", "First calls", "Repeat calls", "Different leads called"])
+      expect(screen.queryByText(gone, { selector: "dt" })).toBeNull();
+    // The deadline KPI keeps its own, separately named count.
+    expect(
+      screen.getByText("Calls on these leads by the deadline", { selector: "dt" }).nextSibling.textContent,
+    ).toBe("31");
+  });
+  it("reads the same in the administrators' report", () => {
+    const made = { id: kid(6), frequency: "day", answer_type: "yes_no", target: 1, measure: "call_activity" };
+    const day = (value, state, assigned, completed) =>
+      cellText(made, { day: { state, value, detail: { assigned, completed } } }, true);
+    expect(day(true, "answered", 50, 50)).toBe("50/50 Completed — Yes");
+    expect(day(false, "answered", 50, 35)).toBe("35/50 Completed — No");
+    expect(day(false, "answered", 50, 0)).toBe("0/50 Completed — No");
+    expect(day(null, "pending", 50, 35)).toBe("35/50 Completed — In progress");
+    expect(cellText(made, { day: { state: "not_due", detail: null } }, true)).toBe("0/0 — No calls assigned");
   });
 });
 

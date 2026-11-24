@@ -31,6 +31,10 @@
 //   has an expected answer (Yes unless an administrator chose No for an
 //   agents' own KPI): the day is met when the answer is the expected one,
 //   and a weekly Yes/No KPI once a day of the week has it.
+// - Update 081: call_activity ("Calls completed") is Yes when the agent
+//   saved a call outcome, the same day, for every lead assigned to them
+//   that day (any outcome); a day with nothing assigned is "not_due". The
+//   first-call deadline KPI (calls) is unchanged.
 const DAY = 86400000;
 export const addDays = (day, n) =>
   new Date(Date.parse(day + "T00:00:00Z") + n * DAY).toISOString().slice(0, 10);
@@ -131,6 +135,20 @@ export const kpiSources = {
     yes: "At least one listing verified with the owner's details",
     reasons: { expected: expectsYesOnly },
   },
+  call_activity: {
+    frequencies: ["day"],
+    answer_types: ["yes_no"],
+    expected: ["yes"],
+    max: {},
+    counts: null,
+    yes: "Every lead assigned that day was called that day",
+    reasons: {
+      expected: expectsYesOnly,
+      week: "Calls completed is decided day by day: Yes when every lead assigned that day was called that day. There is no rule for a whole week, so it stays Daily.",
+      number:
+        "Calls completed has no fixed number: each day's assigned leads are its target. Keep Yes / No; each day still shows the calls assigned and completed.",
+    },
+  },
   visits: {
     ...anyRules,
     expected: ["yes"],
@@ -212,6 +230,15 @@ function autoAnswer(v, m, day, today) {
     return c.waiting
       ? answer({ yes: null }, false, c)
       : answer({ yes: true }, true, c);
+  }
+  // Update 081: the day's assigned leads, each completed that day.
+  if (v.measure === "call_activity") {
+    const c = m?.call_activity;
+    if (!c?.assigned) return { auto: true, none: true, detail: c ?? null };
+    if (c.completed >= c.assigned) return answer({ yes: true }, true, c);
+    return day < today
+      ? answer({ yes: false }, true, c)
+      : answer({ yes: null }, false, c);
   }
   const count = dayCount[v.measure];
   const e = m?.[v.measure];
