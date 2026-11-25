@@ -959,3 +959,173 @@ describe("All leads: several agents and Never called (update 082)", () => {
     expect(sent().at(-1)[0]).toBe("/leads/distribute/preview");
   });
 });
+
+describe("Never assigned page (update 084)", () => {
+  it("is in the Leads menu with only search, agent and call outcome filters, and asks for leads never assigned to the chosen agents", async () => {
+    const user = userEvent.setup();
+    rows[1] = { ...rows[1], agents_used: 3 };
+    open("/leads/never-assigned");
+    expect(
+      await screen.findByRole("heading", { name: "Never assigned" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Never assigned" }),
+    ).toHaveAttribute("href", "/leads/never-assigned");
+    await screen.findByText("Customer 1");
+    for (const name of [
+      "Filter by assignment",
+      "Filter by temperature",
+      "Filter by first call",
+      "Filter by source",
+      "Filter by lead file",
+    ])
+      expect(screen.queryByLabelText(name)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Lead Usage/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Total/ })).toBeNull();
+    expect(screen.getByText("Total")).toBeInTheDocument();
+    const outcome = screen.getByLabelText("Filter by call outcome");
+    expect(within(outcome).getAllByRole("option")[0]).toHaveTextContent(
+      "All call outcomes",
+    );
+    expect(
+      within(outcome)
+        .getAllByRole("option")
+        .slice(1)
+        .map((o) => o.value),
+    ).toEqual(callOutcomes);
+    await user.click(
+      screen.getByRole("button", { name: "Filter by agent: Any agent" }),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Ali Agent" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sara Agent" }));
+    await user.selectOptions(outcome, "No answer");
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe(
+        "/leads/all?" +
+          new URLSearchParams({
+            never_assigned: `${ali.id},${sara.id}`,
+            outcome: "No answer",
+            page: 1,
+          }),
+      ),
+    );
+    expect(
+      screen.getByText("Never assigned to Ali Agent, Sara Agent"),
+    ).toBeInTheDocument();
+    expect(listCalls().some((p) => /[?&]agent=/.test(p))).toBe(false);
+    // Lead Usage shows as in All leads.
+    expect(
+      screen.getByRole("button", {
+        name: "Used 3 times: open the agent history of Customer 2",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("Assign to agents keeps the filter and the receivers apart and sends the Never assigned check; no round-robin over every agent", async () => {
+    const user = userEvent.setup();
+    open(`/leads/never-assigned?agent=${ali.id}`);
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Select all 2 matching leads",
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Round-robin unassigned" }),
+    ).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Assign to agents" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Assign the selected leads",
+    });
+    expect(
+      within(dialog).getByText(
+        /Page filter: leads never assigned to Ali Agent/,
+      ),
+    ).toBeInTheDocument();
+    // Nothing is chosen until asked.
+    expect(within(dialog).getByText("Choose the agent.")).toBeInTheDocument();
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Choose the filtered agents",
+      }),
+    );
+    await waitFor(() =>
+      expect(mocks.api).toHaveBeenCalledWith(
+        "/leads/distribute/preview",
+        expect.objectContaining({
+          body: {
+            lead_ids: rows.map((r) => r.id),
+            agent_ids: [ali.id],
+            never_assigned: true,
+          },
+        }),
+      ),
+    );
+    await user.click(
+      await within(dialog).findByRole("button", { name: "Assign" }),
+    );
+    await waitFor(() =>
+      expect(posts.at(-1)).toEqual([
+        "/leads/distribute",
+        {
+          lead_ids: rows.map((r) => r.id),
+          agent_ids: [ali.id],
+          token: "a".repeat(32),
+          never_assigned: true,
+        },
+      ]),
+    );
+  });
+
+  it("Assign on one lead offers only agents it never had and goes through the same checks", async () => {
+    const user = userEvent.setup();
+    rows[0] = { ...rows[0], agents_had: [sara.id] };
+    open("/leads/never-assigned");
+    await user.click(
+      await screen.findByRole("button", { name: "Assign Customer 1" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Assign Customer 1",
+    });
+    expect(
+      within(dialog).getByRole("option", {
+        name: "Sara Agent (had this lead)",
+      }),
+    ).toBeDisabled();
+    expect(
+      within(dialog).queryByRole("button", { name: "Round-robin" }),
+    ).toBeNull();
+    await user.selectOptions(
+      within(dialog).getByLabelText("Assign to"),
+      ali.id,
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Assign" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Assign Customer 1" }),
+      ).toBeNull(),
+    );
+    const body = {
+      lead_ids: [rows[0].id],
+      agent_ids: [ali.id],
+      never_assigned: true,
+    };
+    expect(
+      mocks.api.mock.calls
+        .filter(([p]) => /distribute|assign-/.test(p))
+        .map(([p, o]) => [p, o.body]),
+    ).toEqual([
+      ["/leads/distribute/preview", body],
+      ["/leads/distribute", { ...body, token: "a".repeat(32) }],
+    ]);
+  });
+
+  it("is for administrators only", async () => {
+    mocks.user = { ...ali };
+    open("/leads/never-assigned");
+    await waitFor(() => expect(address()).not.toBe("/leads/never-assigned"));
+    expect(
+      screen.queryByRole("heading", { name: "Never assigned" }),
+    ).toBeNull();
+    expect(screen.queryByRole("link", { name: "Never assigned" })).toBeNull();
+  });
+});

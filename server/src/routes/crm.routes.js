@@ -722,6 +722,7 @@ export function crmRouter(db, options = {}) {
   // The call outcome and temperature filters are update 058's: the list of
   // 057 refuses them, after this server has already checked them.
   // Update 082: several agents go to the database as agents, one as agent.
+  // Update 084: never_assigned, the leads none of these agents has had.
   const adminLeads = async (req, ids) => {
     const { import_id, page, agent, ...q } = adminLeadsQuery.parse(req.query);
     try {
@@ -746,6 +747,11 @@ export function crmRouter(db, options = {}) {
     } catch (error) {
       const refused = countryRefusal(q, "Choose valid lead filters", error);
       if (refused !== error) throw refused;
+      if (q.never_assigned && error.message === "Choose valid lead filters")
+        throw Object.assign(
+          new Error("Never assigned needs CRM database update 084 after 083."),
+          { status: 503 },
+        );
       if (
         (q.call === "never_called" || agent?.length > 1) &&
         error.message === "Choose valid lead filters"
@@ -858,6 +864,8 @@ export function crmRouter(db, options = {}) {
   // the assignment lock, and returns the new plan instead (stale) if the
   // leads or agents changed since the preview. Update 082: from a Never
   // called list, leads their agent has called since stay with that agent.
+  // Update 084: from the Never assigned page, no lead goes to an agent it
+  // has had.
   for (const [path, apply, limit] of [
     ["/leads/distribute/preview", false, reportLimit],
     ["/leads/distribute", true, sensitiveLimit],
@@ -867,9 +875,11 @@ export function crmRouter(db, options = {}) {
       res.json(
         await salesRpc(
           db,
-          body.never_called
-            ? "admin_distribute_never_called"
-            : "admin_distribute_leads",
+          body.never_assigned
+            ? "admin_distribute_never_assigned"
+            : body.never_called
+              ? "admin_distribute_never_called"
+              : "admin_distribute_leads",
           {
             p_actor: req.user.id,
             p_lead_ids: body.lead_ids,
@@ -878,7 +888,11 @@ export function crmRouter(db, options = {}) {
             p_token: body.token || null,
             p_request: req.id,
           },
-          body.never_called ? "082 after 081" : "062 after 061",
+          body.never_assigned
+            ? "084 after 083"
+            : body.never_called
+              ? "082 after 081"
+              : "062 after 061",
         ),
       );
     });

@@ -16,6 +16,7 @@ export const routeLoaders = {
   LeadPipeline: once(() => import("../pages/agent/LeadPipeline")),
   AgentPipelines: once(() => import("../pages/admin/AgentPipelines")),
   AgentPipeline: once(() => import("../pages/admin/AgentPipeline")),
+  NeverAssigned: once(() => import("../pages/admin/NeverAssigned")),
   Inventory: once(() => import("../pages/shared/Inventory")),
   Dealers: once(() => import("../pages/shared/Dealers")),
   Targets: once(() => import("../pages/admin/Targets")),
