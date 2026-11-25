@@ -52,8 +52,8 @@ import AgentFilter from "./AgentFilter";
 // Update 075: Lead Usage (next to Export) keeps the leads assigned to
 // exactly that many different agents; Used N times in a lead's row opens its
 // agent history.
-// Update 082: Never called is no call outcome saved by the lead's agent
-// since receiving it, whatever its status or deadline; the agent filter
+// Update 082: Never called is, since update 083, no call outcome saved on
+// the lead by anyone, whatever its deadline; the agent filter
 // takes one agent, several or all of them (agent: their IDs, with commas).
 // Assign to agents from a Never called list keeps with their agent the
 // leads called since.

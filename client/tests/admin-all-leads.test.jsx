@@ -816,8 +816,7 @@ describe("All leads: several agents and Never called (update 082)", () => {
           id: rows[1].id,
           name: "Customer 2",
           result: "kept",
-          reason:
-            "Called by Ali Agent since receiving it: stays with Ali Agent",
+          reason: "Called meanwhile: stays with Ali Agent",
         },
       ],
     });
@@ -855,9 +854,7 @@ describe("All leads: several agents and Never called (update 082)", () => {
     ).toBeInTheDocument();
     expect(
       within(dialog).getByRole("row", { name: /Customer 2/ }),
-    ).toHaveTextContent(
-      "Called by Ali Agent since receiving it: stays with Ali Agent",
-    );
+    ).toHaveTextContent("Called meanwhile: stays with Ali Agent");
     await user.click(within(dialog).getByRole("button", { name: "Assign" }));
     const report = await screen.findByRole("dialog", {
       name: "Assignment results",
@@ -901,8 +898,7 @@ describe("All leads: several agents and Never called (update 082)", () => {
               id: rows[1].id,
               name: "Customer 2",
               result: "kept",
-              reason:
-                "Called by Ali Agent since receiving it: stays with Ali Agent",
+              reason: "Called meanwhile: stays with Ali Agent",
             }
           : {
               id: rows[1].id,
@@ -958,9 +954,7 @@ describe("All leads: several agents and Never called (update 082)", () => {
     await user.selectOptions(within(dialog).getByLabelText("Move to"), sara.id);
     await user.click(within(dialog).getByRole("button", { name: "Reassign" }));
     expect(
-      await within(dialog).findByText(
-        "Called by Ali Agent since receiving it: stays with Ali Agent",
-      ),
+      await within(dialog).findByText("Called meanwhile: stays with Ali Agent"),
     ).toBeInTheDocument();
     expect(sent().at(-1)[0]).toBe("/leads/distribute/preview");
   });
