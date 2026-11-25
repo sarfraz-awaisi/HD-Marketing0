@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
@@ -20,6 +20,9 @@ import "../../styles/kpis.css";
 // running is in progress, not missed. Missed (no answer on a working day)
 // is apart from an explicit No or 0. Update 076: a Yes/No KPI may expect No,
 // and a range across a change of daily rules shows each target.
+// Update 085: Today calls, next to Calls completed (or after the last KPI),
+// counts every call each agent saved an outcome for today, on any lead,
+// whatever period is shown; it is not a KPI and leaves Overall alone.
 const overallLabels = {
   complete: "On target",
   on_track: "On track",
@@ -277,7 +280,17 @@ export default function KpiReport() {
     (u) => u.role === "agent",
   );
   const r = q.data;
+  // Where Today calls goes: after Calls completed, or after the last KPI.
+  const callsAfter = r?.today_calls
+    ? (r.kpis.find((k) => k.measure === "call_activity") ?? r.kpis.at(-1))?.id
+    : undefined;
   const single = range.from === range.to;
+  const callsHead = (
+    <th>
+      Today calls
+      <small className="kpi-sub">daily · from the CRM</small>
+    </th>
+  );
   return (
     <>
       <section className="panel kpi-filters">
@@ -367,16 +380,20 @@ export default function KpiReport() {
                     <th>Agent</th>
                     <th>Answers</th>
                     {r.kpis.map((k) => (
-                      <th key={k.id}>
-                        {k.title}
-                        <small className="kpi-sub">
-                          {k.answer_type === "yes_no"
-                            ? `${k.expected === "no" ? "No" : "Yes"} ${k.frequency === "week" ? "weekly" : "daily"}`
-                            : `${k.target} a ${k.frequency === "week" ? "week" : "day"}`}
-                          {measured(k) ? " · from the CRM" : ""}
-                        </small>
-                      </th>
+                      <Fragment key={k.id}>
+                        <th>
+                          {k.title}
+                          <small className="kpi-sub">
+                            {k.answer_type === "yes_no"
+                              ? `${k.expected === "no" ? "No" : "Yes"} ${k.frequency === "week" ? "weekly" : "daily"}`
+                              : `${k.target} a ${k.frequency === "week" ? "week" : "day"}`}
+                            {measured(k) ? " · from the CRM" : ""}
+                          </small>
+                        </th>
+                        {k.id === callsAfter && callsHead}
+                      </Fragment>
                     ))}
+                    {r.today_calls && callsAfter == null && callsHead}
                     <th>Overall</th>
                   </tr>
                 </thead>
@@ -411,13 +428,16 @@ export default function KpiReport() {
                         )}
                       </td>
                       {r.kpis.map((k) => (
-                        <td
-                          key={k.id}
-                          className={cellTone(k, a.cells[k.id], single)}
-                        >
-                          {cellText(k, a.cells[k.id], single)}
-                        </td>
+                        <Fragment key={k.id}>
+                          <td className={cellTone(k, a.cells[k.id], single)}>
+                            {cellText(k, a.cells[k.id], single)}
+                          </td>
+                          {k.id === callsAfter && <td>{a.today_calls}</td>}
+                        </Fragment>
                       ))}
+                      {r.today_calls && callsAfter == null && (
+                        <td>{a.today_calls}</td>
+                      )}
                       <td>
                         <span className={`kpi-overall ${a.overall.status}`}>
                           {overallLabels[a.overall.status]}

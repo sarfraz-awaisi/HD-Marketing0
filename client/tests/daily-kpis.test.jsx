@@ -391,6 +391,64 @@ describe("administrators' Daily KPIs", () => {
     ).toBeInTheDocument();
     expect(calls("/kpis/history?")[0][0]).toContain(`agent=${ali.id}`);
   });
+  it("shows Today calls next to Calls completed: each agent's calls saved today, as a plain number, for any period (update 085)", async () => {
+    const user = userEvent.setup();
+    const completed = {
+      id: kid(5),
+      title: "Calls completed",
+      frequency: "day",
+      answer_type: "yes_no",
+      target: 1,
+      expected: "yes",
+      measure: "call_activity",
+    };
+    const withCalls = {
+      ...report,
+      today_calls: true,
+      kpis: [completed, report.kpis[1]],
+      agents: [
+        { ...report.agents[0], today_calls: 80 },
+        { ...report.agents[1], today_calls: 0 },
+      ],
+    };
+    mocks.api.mockImplementation(async (path) => {
+      if (path.startsWith("/kpis/report?")) return withCalls;
+      if (path === "/users") return [ali, owner];
+      return { data: [], count: 0 };
+    });
+    open("/kpis");
+    const table = await screen.findByRole("table");
+    const heads = () =>
+      within(screen.getByRole("table"))
+        .getAllByRole("columnheader")
+        .map((h) => h.textContent);
+    expect(heads()).toEqual([
+      "Agent",
+      "Answers",
+      "Calls completedYes daily · from the CRM",
+      "Today callsdaily · from the CRM",
+      "Project visits3 a week",
+      "Overall",
+    ]);
+    const [, aliRow, saraRow] = within(table).getAllByRole("row");
+    expect(within(aliRow).getAllByRole("cell")[3]).toHaveTextContent(/^80$/);
+    expect(within(saraRow).getAllByRole("cell")[3]).toHaveTextContent(/^0$/);
+    // Overall is untouched.
+    expect(aliRow).toHaveTextContent("On track");
+    await user.click(screen.getByRole("tab", { name: "This month" }));
+    // Still today's calls, under the same heading, for any period.
+    await waitFor(() =>
+      expect(calls("/kpis/report?").at(-1)[0]).toContain(
+        `from=${today.slice(0, 8)}01`,
+      ),
+    );
+    expect(heads()).toContain("Today callsdaily · from the CRM");
+    expect(
+      within(
+        within(screen.getByRole("table")).getAllByRole("row")[1],
+      ).getAllByRole("cell")[3],
+    ).toHaveTextContent(/^80$/);
+  });
   it("lists KPIs with any waiting change, creates one, and offers Delete only without answers", async () => {
     const user = userEvent.setup();
     let created;

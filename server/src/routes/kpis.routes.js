@@ -292,7 +292,18 @@ export function kpisRouter(db) {
       p_to: q.to,
       p_agent: q.agent ?? null,
     });
-    res.set("Cache-Control", "no-store").json(kpiReport(facts, q.from, q.to));
+    // Update 085: Today calls is always today's, so a period ending before
+    // today reads today's measures too.
+    const today = await (q.to < facts.today
+      ? rpc(req, "kpi_facts", {
+          p_from: facts.today,
+          p_to: facts.today,
+          p_agent: q.agent ?? null,
+        })
+      : null);
+    res
+      .set("Cache-Control", "no-store")
+      .json(kpiReport(facts, q.from, q.to, today?.measures ?? null));
   });
   router.get("/history", adminOnly, reportLimit, async (req, res) => {
     const q = kpiReportQuery.parse(req.query);

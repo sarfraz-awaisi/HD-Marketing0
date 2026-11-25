@@ -581,12 +581,22 @@ function columns(facts, look, used, to) {
 }
 
 // The administrators' report for every agent (or one) over from..to.
-export function kpiReport(facts, from, to) {
+export function kpiReport(facts, from, to, todayMeasures = null) {
   const look = lookup(facts);
   const today = facts.today;
   const weeks = reportWeeks(from, to);
   const used = new Set();
   const agents = [];
+  // Update 085: Today calls, every call each agent saved an outcome for
+  // today (Pakistan time), on any lead, whatever period is shown. A count to
+  // read, not a KPI. A period ending before today brings today's measures
+  // apart (todayMeasures).
+  const measures = todayMeasures ?? facts.measures ?? [];
+  const todayCalls = new Map(
+    measures
+      .filter((m) => m.day === today && m.today_calls)
+      .map((m) => [m.agent_id, m.today_calls]),
+  );
   for (const agent of facts.agents) {
     let present = false;
     const cells = {};
@@ -755,12 +765,15 @@ export function kpiReport(facts, from, to) {
       entries,
       cells,
       overall,
+      today_calls: todayCalls.get(agent.id) || 0,
     });
   }
   return {
     from,
     to,
     today,
+    // Before update 085 the database has no such count.
+    today_calls: !measures.length || measures.some((m) => "today_calls" in m),
     weeks: weeks.map((w) => ({ start: w, end: addDays(w, 6) })),
     kpis: columns(facts, look, used, to),
     agents,
