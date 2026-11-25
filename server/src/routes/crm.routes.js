@@ -721,8 +721,9 @@ export function crmRouter(db, options = {}) {
   // matching leads.
   // The call outcome and temperature filters are update 058's: the list of
   // 057 refuses them, after this server has already checked them.
+  // Update 082: several agents go to the database as agents, one as agent.
   const adminLeads = async (req, ids) => {
-    const { import_id, page, ...q } = adminLeadsQuery.parse(req.query);
+    const { import_id, page, agent, ...q } = adminLeadsQuery.parse(req.query);
     try {
       return await salesRpc(
         db,
@@ -731,6 +732,11 @@ export function crmRouter(db, options = {}) {
           p_actor: req.user.id,
           p_query: {
             ...q,
+            ...(agent?.length > 1
+              ? { agents: agent }
+              : agent
+                ? { agent: agent[0] }
+                : {}),
             ...(import_id ? { import: import_id } : {}),
             ...(ids ? { ids: true } : { page }),
           },
@@ -740,6 +746,14 @@ export function crmRouter(db, options = {}) {
     } catch (error) {
       const refused = countryRefusal(q, "Choose valid lead filters", error);
       if (refused !== error) throw refused;
+      if (
+        (q.call === "never_called" || agent?.length > 1) &&
+        error.message === "Choose valid lead filters"
+      )
+        throw Object.assign(
+          new Error("This filter needs CRM database update 082 after 081."),
+          { status: 503 },
+        );
       if (q.usage && error.message === "Choose valid lead filters")
         throw Object.assign(
           new Error("Lead Usage needs CRM database update 075 after 074."),
@@ -842,7 +856,8 @@ export function crmRouter(db, options = {}) {
   // to one agent, moving leads other agents have too (update 062). The
   // preview changes nothing; carrying it out works the plan out again under
   // the assignment lock, and returns the new plan instead (stale) if the
-  // leads or agents changed since the preview.
+  // leads or agents changed since the preview. Update 082: from a Never
+  // called list, leads their agent has called since stay with that agent.
   for (const [path, apply, limit] of [
     ["/leads/distribute/preview", false, reportLimit],
     ["/leads/distribute", true, sensitiveLimit],
@@ -852,7 +867,9 @@ export function crmRouter(db, options = {}) {
       res.json(
         await salesRpc(
           db,
-          "admin_distribute_leads",
+          body.never_called
+            ? "admin_distribute_never_called"
+            : "admin_distribute_leads",
           {
             p_actor: req.user.id,
             p_lead_ids: body.lead_ids,
@@ -861,7 +878,7 @@ export function crmRouter(db, options = {}) {
             p_token: body.token || null,
             p_request: req.id,
           },
-          "062 after 061",
+          body.never_called ? "082 after 081" : "062 after 061",
         ),
       );
     });
