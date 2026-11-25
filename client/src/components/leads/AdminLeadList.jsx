@@ -57,6 +57,10 @@ import AgentFilter from "./AgentFilter";
 // takes one agent, several or all of them (agent: their IDs, with commas).
 // Assign to agents from a Never called list keeps with their agent the
 // leads called since.
+// Update 084: the Never assigned page is this list with only the search,
+// the agent filter (here: never assigned to any of them) and the call
+// outcome; its moves, one lead or many, go only to agents a lead has never
+// had, checked again when confirmed.
 const callLabels = {
   uncalled: "New",
   missed: "Missed first call",
@@ -84,32 +88,40 @@ const keys = [
   "usage",
   "page",
 ];
+const neverKeys = ["q", "agent", "outcome", "page"];
 // What the database is asked for, from the address.
-const query = (f) => ({
-  ...(f.q ? { search: f.q } : {}),
-  ...(f.agent
-    ? { agent: f.agent }
-    : f.assignment
-      ? { assignment: f.assignment }
-      : {}),
-  ...(f.temperature ? { temperature: f.temperature } : {}),
-  ...(f.call ? { call: f.call } : {}),
-  ...(f.outcome ? { outcome: f.outcome } : {}),
-  ...(f.source ? { source: f.source } : {}),
-  ...(f.import_id ? { import_id: f.import_id } : {}),
-  ...(f.country ? { country: f.country } : {}),
-  ...(f.usage ? { usage: f.usage } : {}),
-});
+const query = (f, neverAssigned = false) =>
+  neverAssigned
+    ? {
+        ...(f.q ? { search: f.q } : {}),
+        ...(f.agent ? { never_assigned: f.agent } : {}),
+        ...(f.outcome ? { outcome: f.outcome } : {}),
+      }
+    : {
+        ...(f.q ? { search: f.q } : {}),
+        ...(f.agent
+          ? { agent: f.agent }
+          : f.assignment
+            ? { assignment: f.assignment }
+            : {}),
+        ...(f.temperature ? { temperature: f.temperature } : {}),
+        ...(f.call ? { call: f.call } : {}),
+        ...(f.outcome ? { outcome: f.outcome } : {}),
+        ...(f.source ? { source: f.source } : {}),
+        ...(f.import_id ? { import_id: f.import_id } : {}),
+        ...(f.country ? { country: f.country } : {}),
+        ...(f.usage ? { usage: f.usage } : {}),
+      };
 const plural = (n, one, many = one + "s") =>
   `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 // The list as the address asks for it. Lead Usage next to Export reads the
 // same request, so its counts always match the list.
-function useAdminLeads() {
+function useAdminLeads(neverAssigned = false) {
   const { user } = useAuth();
-  const [f, change] = useUrlFilters(keys);
+  const [f, change] = useUrlFilters(neverAssigned ? neverKeys : keys);
   const page = Math.max(1, Number(f.page) || 1);
-  const params = new URLSearchParams({ ...query(f), page });
+  const params = new URLSearchParams({ ...query(f, neverAssigned), page });
   const q = useQuery({
     queryKey: ["leads", "all", user.id, params.toString()],
     queryFn: ({ signal }) => api("/leads/all?" + params, { signal }),
@@ -131,13 +143,13 @@ export function AdminLeadUsage() {
   );
 }
 
-export default function AdminLeadList() {
+export default function AdminLeadList({ neverAssigned = false }) {
   const { user } = useAuth(),
     location = useLocation(),
     qc = useQueryClient(),
     toast = useToast();
   const back = location.pathname + location.search;
-  const { f, change, page, q } = useAdminLeads();
+  const { f, change, page, q } = useAdminLeads(neverAssigned);
   const set = (values) => change({ ...values, page: null });
   const [dialLead, setDialLead] = useState(null),
     [assignLead, setAssignLead] = useState(null),
@@ -146,7 +158,7 @@ export default function AdminLeadList() {
     [results, setResults] = useState(null),
     [deleteIds, setDeleteIds] = useState(null),
     [error, setError] = useState("");
-  const filters = new URLSearchParams(query(f));
+  const filters = new URLSearchParams(query(f, neverAssigned));
   const selection = useLeadSelection(filters.toString());
   const users = useQuery({
     queryKey: ["users"],
@@ -186,7 +198,7 @@ export default function AdminLeadList() {
     ...(f.agent
       ? [
           [
-            `Assigned to ${agentNames}`,
+            `${neverAssigned ? "Never assigned to" : "Assigned to"} ${agentNames}`,
             () => set({ agent: null, assignment: null }),
           ],
         ]
@@ -227,7 +239,8 @@ export default function AdminLeadList() {
   ];
   const reset = () => change(Object.fromEntries(keys.map((k) => [k, null])));
   // Filters other than assignment, which the counts are about.
-  const narrowed = chips.length > (f.agent || f.assignment ? 1 : 0);
+  const narrowed =
+    chips.length > (!neverAssigned && (f.agent || f.assignment) ? 1 : 0);
   const totals = q.data?.totals;
   const assignment = f.agent ? "assigned" : f.assignment;
   async function selectAll() {
@@ -249,17 +262,23 @@ export default function AdminLeadList() {
           ["", "Total", totals?.total],
           ["assigned", "Assigned", totals?.assigned],
           ["unassigned", "Unassigned", totals?.unassigned],
-        ].map(([value, label, n]) => (
-          <button
-            key={label}
-            type="button"
-            className="temperature-count"
-            aria-pressed={!f.agent && (f.assignment || "") === value}
-            onClick={() => set({ assignment: value || null, agent: null })}
-          >
-            {label} <b>{n ?? "…"}</b>
-          </button>
-        ))}
+        ].map(([value, label, n]) =>
+          neverAssigned ? (
+            <span key={label} className="temperature-count">
+              {label} <b>{n ?? "…"}</b>
+            </span>
+          ) : (
+            <button
+              key={label}
+              type="button"
+              className="temperature-count"
+              aria-pressed={!f.agent && (f.assignment || "") === value}
+              onClick={() => set({ assignment: value || null, agent: null })}
+            >
+              {label} <b>{n ?? "…"}</b>
+            </button>
+          ),
+        )}
       </div>
       <p className="pipeline-count-note">
         {narrowed
@@ -268,15 +287,17 @@ export default function AdminLeadList() {
       </p>
       <div className="toolbar lead-toolbar">
         <LeadSearch value={f.q} onSearch={(text) => set({ q: text })} />
-        <select
-          aria-label="Filter by assignment"
-          value={assignment}
-          onChange={(e) => set({ assignment: e.target.value, agent: null })}
-        >
-          <option value="">All leads</option>
-          <option value="assigned">Assigned</option>
-          <option value="unassigned">Unassigned</option>
-        </select>
+        {!neverAssigned && (
+          <select
+            aria-label="Filter by assignment"
+            value={assignment}
+            onChange={(e) => set({ assignment: e.target.value, agent: null })}
+          >
+            <option value="">All leads</option>
+            <option value="assigned">Assigned</option>
+            <option value="unassigned">Unassigned</option>
+          </select>
+        )}
         <AgentFilter
           agents={agents}
           value={agentIds}
@@ -284,30 +305,34 @@ export default function AdminLeadList() {
             set({ agent: ids.length ? ids.join(",") : null, assignment: null })
           }
         />
-        <select
-          aria-label="Filter by temperature"
-          value={f.temperature}
-          onChange={(e) => set({ temperature: e.target.value })}
-        >
-          <option value="">All temperatures</option>
-          {temperatureChoices.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by first call"
-          value={f.call}
-          onChange={(e) => set({ call: e.target.value })}
-        >
-          <option value="">Any first-call state</option>
-          {Object.entries(callLabels).map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+        {!neverAssigned && (
+          <select
+            aria-label="Filter by temperature"
+            value={f.temperature}
+            onChange={(e) => set({ temperature: e.target.value })}
+          >
+            <option value="">All temperatures</option>
+            {temperatureChoices.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        )}
+        {!neverAssigned && (
+          <select
+            aria-label="Filter by first call"
+            value={f.call}
+            onChange={(e) => set({ call: e.target.value })}
+          >
+            <option value="">Any first-call state</option>
+            {Object.entries(callLabels).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           aria-label="Filter by call outcome"
           value={f.outcome}
@@ -320,35 +345,39 @@ export default function AdminLeadList() {
             </option>
           ))}
         </select>
-        <select
-          aria-label="Filter by source"
-          value={f.source}
-          onChange={(e) => set({ source: e.target.value })}
-        >
-          <option value="">All sources</option>
-          {sources.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="Filter by lead file"
-          value={f.import_id}
-          onChange={(e) => set({ import_id: e.target.value })}
-        >
-          <option value="">All lead files</option>
-          {fileOptions.map((x) => (
-            <option key={x.id} value={x.id}>
-              {x.file_name}
-              {x.file_format === "sheets" ? " (Google Sheets)" : ""}
-            </option>
-          ))}
-        </select>
-        <CountryFilter
-          value={f.country}
-          onChange={(country) => set({ country })}
-        />
+        {!neverAssigned && (
+          <>
+            <select
+              aria-label="Filter by source"
+              value={f.source}
+              onChange={(e) => set({ source: e.target.value })}
+            >
+              <option value="">All sources</option>
+              {sources.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter by lead file"
+              value={f.import_id}
+              onChange={(e) => set({ import_id: e.target.value })}
+            >
+              <option value="">All lead files</option>
+              {fileOptions.map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.file_name}
+                  {x.file_format === "sheets" ? " (Google Sheets)" : ""}
+                </option>
+              ))}
+            </select>
+            <CountryFilter
+              value={f.country}
+              onChange={(country) => set({ country })}
+            />
+          </>
+        )}
       </div>
       <ActiveFilters items={chips} onReset={reset} />
       <ErrorBox error={error || q.error} />
@@ -379,12 +408,16 @@ export default function AdminLeadList() {
                 <Button onClick={() => setBulk({ mode: "distribute" })}>
                   Assign to agents
                 </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => setBulk({ mode: "round_robin" })}
-                >
-                  Round-robin unassigned
-                </Button>
+                {/* Round-robin among every agent could give a lead back to
+                    an agent it had, so Never assigned leaves it out. */}
+                {!neverAssigned && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => setBulk({ mode: "round_robin" })}
+                  >
+                    Round-robin unassigned
+                  </Button>
+                )}
                 <Button
                   variant="danger"
                   onClick={() => setDeleteIds(selection.ids)}
@@ -488,6 +521,7 @@ export default function AdminLeadList() {
           lead={assignLead}
           agents={activeAgents}
           neverCalled={f.call === "never_called"}
+          neverAssigned={neverAssigned}
           onClose={() => setAssignLead(null)}
           onDone={(message) => {
             setAssignLead(null);
@@ -501,6 +535,9 @@ export default function AdminLeadList() {
             ids={selection.ids}
             agents={activeAgents}
             neverCalled={f.call === "never_called"}
+            neverAssigned={neverAssigned}
+            filterAgents={agentIds}
+            filterLabel={agentNames}
             onClose={() => setBulk(null)}
             onDone={(result) => {
               setBulk(null);
@@ -560,40 +597,55 @@ export default function AdminLeadList() {
 // it meanwhile), or, once confirmed, move it to another agent or remove its
 // agent with the usual assignment rules. From a Never called list (update
 // 082) the move goes through Assign to agents' checks: it stops if the lead
-// was called, marked Won or Lost, or moved since the list loaded.
-async function moveNeverCalled(lead, agent) {
-  const body = { lead_ids: [lead.id], agent_ids: [agent], never_called: true };
+// was called, marked Won or Lost, or moved since the list loaded. From the
+// Never assigned page (update 084) likewise, and it stops if the lead has
+// had that agent.
+async function moveChecked(lead, agent, list) {
+  const body = { lead_ids: [lead.id], agent_ids: [agent], [list]: true };
+  const moving = lead.assigned_agent ? "reassigned" : "assigned";
   const plan = await api("/leads/distribute/preview", { method: "POST", body });
   const [row] = plan.results;
   if (row?.result === "reassigned" && row.from !== lead.assigned_agent)
     throw new Error(
       `${lead.name} moved to ${row.from_name || "another agent"} after this list loaded. Check the list again.`,
     );
-  if (row?.result !== "reassigned")
-    throw new Error(row?.reason || "Not reassigned");
+  if (row?.result !== moving) throw new Error(row?.reason || `Not ${moving}`);
   const result = await api("/leads/distribute", {
     method: "POST",
     body: { ...body, token: plan.token },
   });
-  if (!result.applied || result.reassigned !== 1)
+  if (!result.applied || result[moving] !== 1)
     throw new Error(
       `${lead.name} changed while you were reassigning it. Check the list again.`,
     );
   return { results: [{ result: "assigned" }] };
 }
-function AssignLeadDialog({ lead, agents, neverCalled, onClose, onDone }) {
+function AssignLeadDialog({
+  lead,
+  agents,
+  neverCalled,
+  neverAssigned,
+  onClose,
+  onDone,
+}) {
   const [agent, setAgent] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const current = lead.assigned_agent;
   const choices = agents.filter((a) => a.id !== current);
+  const had = new Set(neverAssigned ? lead.agents_had || [] : []);
+  const checked = neverAssigned
+    ? "never_assigned"
+    : current && neverCalled
+      ? "never_called"
+      : null;
   async function save(mode) {
     setBusy(true);
     setError("");
     try {
       const result =
-        current && neverCalled && mode === "agent"
-          ? await moveNeverCalled(lead, agent)
+        checked && mode === "agent"
+          ? await moveChecked(lead, agent, checked)
           : current
             ? await api("/leads/assign-bulk", {
                 method: "POST",
@@ -635,6 +687,12 @@ function AssignLeadDialog({ lead, agents, neverCalled, onClose, onDone }) {
           ? `${lead.name} is assigned to ${lead.assigned_name}. Moving the lead takes it from ${lead.assigned_name}; its calls, notes and history stay with the lead for administrators. The new agent starts fresh, without ${lead.assigned_name}'s comments or results, and ${lead.assigned_name}'s pending follow-ups and scheduled visits on it are cancelled.`
           : `${lead.name} has no agent yet.`}
       </p>
+      {neverAssigned && (
+        <p className="pipeline-hint" role="note">
+          Only agents {lead.name} has never had can be chosen; the CRM checks
+          again when you confirm.
+        </p>
+      )}
       <label>
         {current ? "Move to" : "Assign to"}
         <select
@@ -644,8 +702,9 @@ function AssignLeadDialog({ lead, agents, neverCalled, onClose, onDone }) {
         >
           <option value="">Choose an active agent</option>
           {choices.map((a) => (
-            <option key={a.id} value={a.id}>
+            <option key={a.id} value={a.id} disabled={had.has(a.id)}>
               {a.name}
+              {had.has(a.id) ? " (had this lead)" : ""}
             </option>
           ))}
         </select>
@@ -663,13 +722,15 @@ function AssignLeadDialog({ lead, agents, neverCalled, onClose, onDone }) {
             Remove agent
           </Button>
         ) : (
-          <Button
-            variant="secondary"
-            disabled={busy}
-            onClick={() => save("round_robin")}
-          >
-            Round-robin
-          </Button>
+          !neverAssigned && (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={() => save("round_robin")}
+            >
+              Round-robin
+            </Button>
+          )
         )}
         <Button disabled={busy || !agent} onClick={() => save("agent")}>
           {busy ? "Saving…" : current ? "Reassign" : "Assign"}
@@ -729,8 +790,24 @@ function BulkAssignDialog({ ids, onClose, onDone }) {
 // again under its assignment lock; if the leads or agents changed since the
 // preview, nothing moves and the new plan comes back to confirm. From a
 // Never called list (update 082) the leads their agent has called since stay
-// with that agent.
-function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
+// with that agent. From the Never assigned page (update 084) each lead goes
+// only to a chosen agent it has never had; the agents chosen here are the
+// ones who receive leads, whoever the page is filtered by.
+function DistributeDialog({
+  ids,
+  agents,
+  neverCalled,
+  neverAssigned,
+  filterAgents = [],
+  filterLabel = "",
+  onClose,
+  onDone,
+}) {
+  const list = neverAssigned
+    ? { never_assigned: true }
+    : neverCalled
+      ? { never_called: true }
+      : {};
   const [mode, setMode] = useState("one"),
     [search, setSearch] = useState(""),
     [chosen, setChosen] = useState([]),
@@ -744,14 +821,14 @@ function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
     return () => clearTimeout(t);
   }, [chosen]);
   const preview = useQuery({
-    queryKey: ["lead-distribution", ids, asked, neverCalled],
+    queryKey: ["lead-distribution", ids, asked, list],
     queryFn: ({ signal }) =>
       api("/leads/distribute/preview", {
         method: "POST",
         body: {
           lead_ids: ids,
           agent_ids: asked,
-          ...(neverCalled ? { never_called: true } : {}),
+          ...list,
         },
         signal,
       }),
@@ -777,6 +854,13 @@ function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
           : [...now, id],
     );
   };
+  // The page's filter agents, chosen as receivers only when asked.
+  const filtered = filterAgents.filter((id) => agents.some((a) => a.id === id));
+  const chooseFiltered = () => {
+    setNewer(null);
+    setMode(filtered.length > 1 ? "turns" : "one");
+    setChosen(filtered);
+  };
   const switchTo = (next) => {
     setNewer(null);
     setMode(next);
@@ -792,7 +876,7 @@ function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
           lead_ids: ids,
           agent_ids: chosen,
           token: plan.token,
-          ...(neverCalled ? { never_called: true } : {}),
+          ...list,
         },
       });
       if (result.applied) return onDone(result);
@@ -813,6 +897,28 @@ function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
         administrators, and the new agent starts fresh. The earlier agent&apos;s
         pending follow-ups and scheduled visits on those leads are cancelled.
       </p>
+      {neverAssigned && (
+        <div className="pipeline-hint" role="note">
+          <p>
+            {filterAgents.length
+              ? `Page filter: leads never assigned to ${filterLabel}. `
+              : "Page filter: any agent. "}
+            The agents you choose below receive the leads, and they need not be
+            the filter&apos;s agents. Each lead goes only to a chosen agent it
+            has never had; a lead that had every chosen agent, or is marked Won
+            or Lost, stays where it is.
+          </p>
+          {filtered.length > 0 && (
+            <Button
+              variant="secondary"
+              disabled={busy}
+              onClick={chooseFiltered}
+            >
+              Choose the filtered agents
+            </Button>
+          )}
+        </div>
+      )}
       <fieldset className="distribution-mode" disabled={busy}>
         <legend>How to assign</legend>
         <label className="checkbox-field">
@@ -901,7 +1007,8 @@ function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
 // and moved in, and the total they end with, then where moved leads come
 // from. A preview says it is worked out now and may change.
 // From a Never called list, leads called since are counted and listed as
-// kept with their agent (update 082).
+// kept with their agent (update 082); from Never assigned, leads with no
+// chosen agent they have never had, and Won or Lost leads (update 084).
 function DistributionSummary({ result, preview = false }) {
   const failed = result.results.filter((r) =>
     ["failed", "kept"].includes(r.result),
@@ -921,7 +1028,7 @@ function DistributionSummary({ result, preview = false }) {
         {plural(result.skipped, "lead")} not changed ·{" "}
         {plural(result.failed, "lead")} failed
         {result.kept > 0 &&
-          ` · ${plural(result.kept, "lead")} kept (called since)`}
+          ` · ${plural(result.kept, "lead")} ${result.never_assigned ? "kept where they are" : "kept (called since)"}`}
       </p>
       <div className="assignment-results">
         <Table

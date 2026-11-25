@@ -282,6 +282,17 @@ export const agentLeadsQuery = z
 // filters apply together. An agent's leads are assigned ones. Update 058
 // adds the latest call's outcome and the temperature, as in the Lead
 // pipeline.
+const agentList = z
+  .string()
+  .transform((s) => s.split(","))
+  .pipe(
+    z
+      .array(uuid)
+      .min(1)
+      .max(100)
+      .refine((ids) => new Set(ids).size === ids.length),
+  )
+  .optional();
 export const adminLeadsQuery = z
   .object({
     search: z
@@ -293,17 +304,9 @@ export const adminLeadsQuery = z
     assignment: z.enum(["assigned", "unassigned"]).optional(),
     // Update 082: one agent, or up to 100 different agents separated by
     // commas.
-    agent: z
-      .string()
-      .transform((s) => s.split(","))
-      .pipe(
-        z
-          .array(uuid)
-          .min(1)
-          .max(100)
-          .refine((ids) => new Set(ids).size === ids.length),
-      )
-      .optional(),
+    agent: agentList,
+    // Update 084: the leads never assigned to any of these agents.
+    never_assigned: agentList,
     // Update 063: not_connected, overdue with no answered call in the
     // current assignment. Update 082: never_called, no call outcome saved
     // by the lead's agent since receiving it.
@@ -769,8 +772,14 @@ export const leadDistribution = z
     // Update 082: from a Never called list, leads their agent has called
     // since stay with that agent.
     never_called: z.boolean().optional(),
+    // Update 084: from the Never assigned page, each lead goes only to an
+    // agent it has never had.
+    never_assigned: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => !(b.never_called && b.never_assigned), {
+    message: "Choose one kind of list",
+  });
 // Attendance (update 040). Self-service bodies never carry a user id: the
 // employee always comes from the verified session.
 const isoDay = z.iso.date();

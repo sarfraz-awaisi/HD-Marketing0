@@ -14,6 +14,7 @@ const LeadDetail = lazy(routeLoaders.LeadDetail);
 const LeadPipeline = lazy(routeLoaders.LeadPipeline);
 const AgentPipelines = lazy(routeLoaders.AgentPipelines);
 const AgentPipeline = lazy(routeLoaders.AgentPipeline);
+const NeverAssigned = lazy(routeLoaders.NeverAssigned);
 const Inventory = lazy(routeLoaders.Inventory);
 const Dealers = lazy(routeLoaders.Dealers);
 const Targets = lazy(routeLoaders.Targets);
@@ -100,6 +101,11 @@ export default function App() {
                   <Route
                     path="leads/pipeline/:agent"
                     element={<AgentPipeline />}
+                  />
+                  {/* Update 084. */}
+                  <Route
+                    path="leads/never-assigned"
+                    element={<NeverAssigned />}
                   />
                 </Route>
                 <Route path="inventory" element={<Inventory />} />
