@@ -4,8 +4,8 @@ import { readFile } from "node:fs/promises";
 import { createApp } from "../src/app.js";
 import { trustedMfaFixture } from "./trusted-mfa-fixture.js";
 import { resetPeople, startCrmDatabase } from "./crm-fixture.js";
-// Update 082: All leads "Never called": no call outcome saved by the lead's
-// agent since receiving it, for one agent, several or all of them; and
+// Update 082: All leads "Never called", since update 083 no call outcome
+// saved on the lead by anyone, for one agent, several or all of them; and
 // Assign to agents from that list, which keeps with their agent the leads
 // called since. Calls go through the real call log, so who logged each one
 // is recorded as in production. Only administrators get in, in the server
@@ -145,7 +145,7 @@ describe("Never called (update 082)", () => {
     ).toBe(70);
   });
 
-  it("any saved outcome counts as called (No answer, Busy, Number off); an unsaved dial, an administrator's call, the first-call time or the deadline do not", async () => {
+  it("any saved outcome by anyone counts as called (No answer, Busy, Number off, an administrator's call); an unsaved dial, the first-call time or the deadline do not (update 083)", async () => {
     const [noAnswer, busy, off, dialled, byAdmin, stamped] = await leads(
       6,
       abru,
@@ -158,24 +158,22 @@ describe("Never called (update 082)", () => {
       "insert into calls(lead_id,agent_id,provider_call_id,status) values($1,$2,'dial-082','initiated')",
       [dialled, abru],
     );
-    // An administrator logs a call on Abru's lead: it is the administrator's.
+    // An administrator's call on Abru's lead is a call too.
     await call(byAdmin, admin, "Interested");
     // A first-call time and a passed deadline prove nothing.
     await cur.pg.query(
       "update leads set first_call_at=now(),call_due_at=now()-interval '2 days' where id=$1",
       [stamped],
     );
-    expect(ids(await never([abru]))).toEqual(
-      [dialled, byAdmin, stamped].sort(),
-    );
+    expect(ids(await never([abru]))).toEqual([dialled, stamped].sort());
   });
 
-  it("a reassigned lead is judged by its new agent's assignment; the earlier agent's call stays theirs", async () => {
-    const [lead] = await leads(1, abru);
+  it("a lead an earlier agent called is not never called after reassignment; that call stays theirs (update 083)", async () => {
+    const [lead, fresh] = await leads(2, abru);
     await call(lead, abru, "Busy");
-    expect((await never([abru])).count).toBe(0);
-    await move([lead], alisha);
-    expect(ids(await never([alisha]))).toEqual([lead]);
+    expect(ids(await never([abru]))).toEqual([fresh]);
+    await move([lead, fresh], alisha);
+    expect(ids(await never([alisha]))).toEqual([fresh]);
     expect((await never([abru])).count).toBe(0);
     const history = await cur.all(
       "select c.agent_id,report_recorded_by('calls',c.id) recorded_by,c.outcome from calls c where c.lead_id=$1",
@@ -184,11 +182,10 @@ describe("Never called (update 082)", () => {
     expect(history).toEqual([
       { agent_id: abru, recorded_by: abru, outcome: "Busy" },
     ]);
-    await call(lead, alisha, "No answer");
+    await call(fresh, alisha, "No answer");
     expect((await never([alisha])).count).toBe(0);
-    // Back to Abru: his earlier call came before this assignment.
-    await move([lead], abru);
-    expect(ids(await never([abru]))).toEqual([lead]);
+    await move([lead, fresh], abru);
+    expect((await never([abru])).count).toBe(0);
   });
 
   it("several agents together, or every agent; unassigned and deleted leads never show", async () => {
@@ -221,14 +218,14 @@ describe("Never called (update 082)", () => {
 
   it("works with search, source, lead file, latest outcome, temperature and Lead Usage", async () => {
     const [x, y] = await leads(2, abru);
-    await call(x, admin, "Interested");
     const name = (await cur.one("select name from leads where id=$1", [y]))
       .name;
     expect(ids(await never([abru], { search: name }))).toEqual([y]);
     expect(ids(await never([abru], { source: "manual" }))).toEqual(
       [x, y].sort(),
     );
-    expect(ids(await never([abru], { outcome: "Interested" }))).toEqual([x]);
+    // Never called leads have no latest call.
+    expect((await never([abru], { outcome: "Interested" })).count).toBe(0);
     expect(ids(await never([abru], { temperature: "none" }))).toEqual(
       [x, y].sort(),
     );
@@ -319,7 +316,7 @@ describe("Assign to agents from a Never called list (update 082)", () => {
     });
     expect(stale.results.find((r) => r.id === two)).toMatchObject({
       result: "kept",
-      reason: "Called by Abru since receiving it: stays with Abru",
+      reason: "Called meanwhile: stays with Abru",
     });
     expect(await owners([one, two, three])).toEqual(["Abru", "Abru", "Abru"]);
     const done = (
