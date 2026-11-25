@@ -709,3 +709,74 @@ dialog.lead-name-dialog {
   padding-top: 15px;
   border-top: 1px solid var(--line);
 }
+/* The agent filter of All leads (update 082), opening as the country list. */
+.agent-filter {
+  position: relative;
+  display: block;
+  flex: 1 1 170px;
+  min-width: 0;
+}
+.agent-filter-button {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 32px 8px 12px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' fill='none' stroke='%23667085' stroke-width='1.5'/%3E%3C/svg%3E")
+    no-repeat right 12px center;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-filter-panel {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max(100%, 260px);
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: 0 10px 28px #0e1e3024;
+}
+.agent-filter-panel input[type="search"] {
+  width: 100%;
+  margin-top: 0;
+}
+.agent-filter-actions {
+  display: flex;
+  gap: 8px;
+}
+.agent-filter-actions button {
+  flex: 1;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+.agent-filter-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.agent-filter-list .checkbox-field {
+  min-height: 40px;
+  padding: 0 6px;
+  border-radius: 5px;
+  font-size: 13px;
+}
+.agent-filter-list .checkbox-field:hover {
+  background: var(--gold-light);
+}

@@ -312,10 +312,10 @@ describe("administrators' All leads", () => {
     await waitFor(() =>
       expect(listCalls().at(-1)).toBe("/leads/all?search=0300+1234&page=1"),
     );
-    await user.selectOptions(
-      screen.getByLabelText("Filter by assignment"),
-      "agent:" + ali.id,
-    );
+    // Update 082: agents are chosen in their own filter.
+    await user.click(screen.getByRole("button", { name: /Filter by agent/ }));
+    await user.click(screen.getByRole("checkbox", { name: "Ali Agent" }));
+    await user.keyboard("{Escape}");
     await user.selectOptions(
       screen.getByLabelText("Filter by first call"),
       "missed",
@@ -397,6 +397,8 @@ describe("administrators' All leads", () => {
       "New",
       "Missed first call",
       "Not connected (overdue)",
+      // Update 082.
+      "Never called",
     ]);
     expect(options("Filter by call outcome")).toEqual([
       "All call outcomes",
@@ -719,5 +721,247 @@ describe("administrators' All leads", () => {
         "No leads match your search or filters. Reset filters to see every lead.",
       ),
     ).toBeInTheDocument();
+  });
+});
+
+// Update 082: the agent filter takes one agent, several or all of them, and
+// Never called is a first-call state; Assign to agents from that list keeps
+// with their agent the leads called since.
+describe("All leads: several agents and Never called (update 082)", () => {
+  it("chooses agents with a search, Select all and Clear all, in the address, starting again from page 1", async () => {
+    const user = userEvent.setup();
+    open("/leads?page=2");
+    await screen.findByText("Customer 1");
+    await user.click(
+      screen.getByRole("button", { name: "Filter by agent: Any agent" }),
+    );
+    const agents = screen.getByRole("group", { name: "Agents" });
+    // Agents only: the owner is an administrator.
+    expect(
+      within(agents)
+        .getAllByRole("checkbox")
+        .map((c) => c.closest("label").textContent),
+    ).toEqual(["Ali Agent", "Sara Agent"]);
+    await user.type(
+      screen.getByRole("searchbox", { name: "Search agents" }),
+      "sar",
+    );
+    expect(within(agents).getAllByRole("checkbox")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe(`/leads/all?agent=${sara.id}&page=1`),
+    );
+    await user.clear(screen.getByRole("searchbox", { name: "Search agents" }));
+    await user.click(
+      within(agents).getByRole("checkbox", { name: "Ali Agent" }),
+    );
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe(
+        `/leads/all?agent=${ali.id}%2C${sara.id}&page=1`,
+      ),
+    );
+    expect(address()).not.toContain("page=");
+    expect(
+      screen.getByRole("button", { name: "Filter by agent: All agents (2)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Filter by assignment")).toHaveValue(
+      "assigned",
+    );
+    const chips = screen.getByRole("group", { name: "Active filters" });
+    expect(
+      within(chips).getByRole("button", {
+        name: "Remove filter Assigned to Ali Agent, Sara Agent",
+      }),
+    ).toBeInTheDocument();
+    await user.click(
+      within(agents).getByRole("checkbox", { name: "Sara Agent" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Filter by agent: Ali Agent" }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await waitFor(() => expect(listCalls().at(-1)).toBe("/leads/all?page=1"));
+    // Unassigned leads have no agent.
+    await user.click(
+      within(agents).getByRole("checkbox", { name: "Ali Agent" }),
+    );
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "Agents" })).toBeNull();
+    await user.selectOptions(
+      screen.getByLabelText("Filter by assignment"),
+      "unassigned",
+    );
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe(
+        "/leads/all?assignment=unassigned&page=1",
+      ),
+    );
+  });
+
+  it("filters by Never called, and Assign to agents keeps the leads called since with their agent", async () => {
+    const user = userEvent.setup();
+    const base = mocks.api.getMockImplementation();
+    const plan = (applied) => ({
+      ...planFor([sara.id], applied),
+      reassigned: 0,
+      kept: 1,
+      results: [
+        {
+          id: rows[0].id,
+          name: "Customer 1",
+          result: "assigned",
+          agent: sara.id,
+        },
+        {
+          id: rows[1].id,
+          name: "Customer 2",
+          result: "kept",
+          reason:
+            "Called by Ali Agent since receiving it: stays with Ali Agent",
+        },
+      ],
+    });
+    mocks.api.mockImplementation(async (path, options = {}) =>
+      path === "/leads/distribute/preview"
+        ? plan(false)
+        : path === "/leads/distribute"
+          ? plan(true)
+          : base(path, options),
+    );
+    open(`/leads?agent=${ali.id},${sara.id}&call=never_called`);
+    await screen.findByText("Customer 1");
+    expect(listCalls().at(-1)).toBe(
+      `/leads/all?agent=${ali.id}%2C${sara.id}&call=never_called&page=1`,
+    );
+    expect(screen.getByLabelText("Filter by first call")).toHaveValue(
+      "never_called",
+    );
+    expect(
+      within(screen.getByRole("group", { name: "Active filters" })).getByRole(
+        "button",
+        { name: "Remove filter First call: Never called" },
+      ),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Select all 2 matching leads" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Assign to agents" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Assign the selected leads",
+    });
+    await user.click(within(dialog).getByRole("radio", { name: /Sara Agent/ }));
+    expect(
+      await within(dialog).findByText(/1 lead kept \(called since\)/),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("row", { name: /Customer 2/ }),
+    ).toHaveTextContent(
+      "Called by Ali Agent since receiving it: stays with Ali Agent",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Assign" }));
+    const report = await screen.findByRole("dialog", {
+      name: "Assignment results",
+    });
+    expect(
+      within(report).getByRole("row", { name: /Customer 2/ }),
+    ).toHaveTextContent("Kept with agent");
+    const sent = mocks.api.mock.calls
+      .filter(([p]) => p.startsWith("/leads/distribute"))
+      .map(([p, o]) => [p, o.body]);
+    expect(sent).toEqual([
+      [
+        "/leads/distribute/preview",
+        {
+          lead_ids: rows.map((r) => r.id),
+          agent_ids: [sara.id],
+          never_called: true,
+        },
+      ],
+      [
+        "/leads/distribute",
+        {
+          lead_ids: rows.map((r) => r.id),
+          agent_ids: [sara.id],
+          token: "a".repeat(32),
+          never_called: true,
+        },
+      ],
+    ]);
+  });
+
+  it("Reassign on one lead from a Never called list goes through the same checks, and stops when the lead was called", async () => {
+    const user = userEvent.setup();
+    const base = mocks.api.getMockImplementation();
+    let called = false;
+    const plan = (applied) => ({
+      ...planFor([sara.id], applied),
+      results: [
+        called
+          ? {
+              id: rows[1].id,
+              name: "Customer 2",
+              result: "kept",
+              reason:
+                "Called by Ali Agent since receiving it: stays with Ali Agent",
+            }
+          : {
+              id: rows[1].id,
+              name: "Customer 2",
+              result: "reassigned",
+              from: ali.id,
+              from_name: "Ali Agent",
+              agent: sara.id,
+            },
+      ],
+      reassigned: called ? 0 : 1,
+    });
+    mocks.api.mockImplementation(async (path, options = {}) =>
+      path === "/leads/distribute/preview"
+        ? plan(false)
+        : path === "/leads/distribute"
+          ? plan(true)
+          : base(path, options),
+    );
+    open("/leads?call=never_called");
+    await user.click(
+      await screen.findByRole("button", { name: "Reassign Customer 2" }),
+    );
+    let dialog = await screen.findByRole("dialog", {
+      name: "Reassign Customer 2",
+    });
+    await user.selectOptions(within(dialog).getByLabelText("Move to"), sara.id);
+    await user.click(within(dialog).getByRole("button", { name: "Reassign" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Reassign Customer 2" }),
+      ).toBeNull(),
+    );
+    const sent = () =>
+      mocks.api.mock.calls
+        .filter(([p]) => p.startsWith("/leads/"))
+        .filter(([p]) => /distribute|assign-bulk/.test(p))
+        .map(([p, o]) => [p, o.body]);
+    const body = {
+      lead_ids: [rows[1].id],
+      agent_ids: [sara.id],
+      never_called: true,
+    };
+    expect(sent()).toEqual([
+      ["/leads/distribute/preview", body],
+      ["/leads/distribute", { ...body, token: "a".repeat(32) }],
+    ]);
+    called = true;
+    await user.click(
+      screen.getByRole("button", { name: "Reassign Customer 2" }),
+    );
+    dialog = await screen.findByRole("dialog", { name: "Reassign Customer 2" });
+    await user.selectOptions(within(dialog).getByLabelText("Move to"), sara.id);
+    await user.click(within(dialog).getByRole("button", { name: "Reassign" }));
+    expect(
+      await within(dialog).findByText(
+        "Called by Ali Agent since receiving it: stays with Ali Agent",
+      ),
+    ).toBeInTheDocument();
+    expect(sent().at(-1)[0]).toBe("/leads/distribute/preview");
   });
 });

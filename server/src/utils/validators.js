@@ -291,10 +291,25 @@ export const adminLeadsQuery = z
       .regex(/^[\p{L}\p{N} @#()+._-]*$/u)
       .optional(),
     assignment: z.enum(["assigned", "unassigned"]).optional(),
-    agent: uuid.optional(),
+    // Update 082: one agent, or up to 100 different agents separated by
+    // commas.
+    agent: z
+      .string()
+      .transform((s) => s.split(","))
+      .pipe(
+        z
+          .array(uuid)
+          .min(1)
+          .max(100)
+          .refine((ids) => new Set(ids).size === ids.length),
+      )
+      .optional(),
     // Update 063: not_connected, overdue with no answered call in the
-    // current assignment.
-    call: z.enum(["uncalled", "missed", "not_connected"]).optional(),
+    // current assignment. Update 082: never_called, no call outcome saved
+    // by the lead's agent since receiving it.
+    call: z
+      .enum(["uncalled", "missed", "not_connected", "never_called"])
+      .optional(),
     status: z.enum(statuses).optional(),
     lost_reason: z.enum(lostReasons).optional(),
     temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
@@ -751,6 +766,9 @@ export const leadDistribution = z
       .string()
       .regex(/^[0-9a-f]{32}$/)
       .optional(),
+    // Update 082: from a Never called list, leads their agent has called
+    // since stay with that agent.
+    never_called: z.boolean().optional(),
   })
   .strict();
 // Attendance (update 040). Self-service bodies never carry a user id: the

@@ -4,7 +4,9 @@ import { readFile, readdir } from "node:fs/promises";
 // An in-memory CRM database with every migration, plus a minimal Supabase
 // client: rpc() calls the SQL function by named arguments, auth maps a bearer
 // token to the user with that id, and from() reads profiles for sign-in.
-export async function startCrmDatabase() {
+// With before, only the migrations before that one (a database as
+// production is before a release).
+export async function startCrmDatabase({ before } = {}) {
   const pg = new PGlite({ extensions: { pg_trgm } });
   const one = async (sql, args = []) => (await pg.query(sql, args)).rows[0];
   const all = async (sql, args = []) => (await pg.query(sql, args)).rows;
@@ -13,12 +15,13 @@ export async function startCrmDatabase() {
   );
   const dir = new URL("../../supabase/migrations/", import.meta.url);
   for (const f of (await readdir(dir)).sort())
-    await pg.exec(
-      (await readFile(new URL(f, dir), "utf8")).replace(
-        "create extension if not exists pgcrypto;",
-        "",
-      ),
-    );
+    if (!before || f < before)
+      await pg.exec(
+        (await readFile(new URL(f, dir), "utf8")).replace(
+          "create extension if not exists pgcrypto;",
+          "",
+        ),
+      );
   const db = {
     auth: {
       getUser: async (token) => ({

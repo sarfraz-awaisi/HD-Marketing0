@@ -33,6 +33,7 @@ import {
   LeadUsageFilter,
 } from "./LeadUsage";
 import { usageOption } from "../../lib/leadUsage";
+import AgentFilter from "./AgentFilter";
 // Administrators' All leads (update 057), built like an agent's Assigned
 // leads: the database searches every lead by name or contact number (or an
 // HD number written with HD), applies the filters together and counts and
@@ -51,10 +52,16 @@ import { usageOption } from "../../lib/leadUsage";
 // Update 075: Lead Usage (next to Export) keeps the leads assigned to
 // exactly that many different agents; Used N times in a lead's row opens its
 // agent history.
+// Update 082: Never called is no call outcome saved by the lead's agent
+// since receiving it, whatever its status or deadline; the agent filter
+// takes one agent, several or all of them (agent: their IDs, with commas).
+// Assign to agents from a Never called list keeps with their agent the
+// leads called since.
 const callLabels = {
   uncalled: "New",
   missed: "Missed first call",
   not_connected: "Not connected (overdue)",
+  never_called: "Never called",
 };
 const sources = [
   ["manual", "Manual"],
@@ -162,7 +169,12 @@ export default function AdminLeadList() {
     (a) => a.role === "agent",
   );
   const activeAgents = agents.filter((a) => a.active);
+  const agentIds = f.agent ? f.agent.split(",") : [];
   const agentName = (id) => agents.find((a) => a.id === id)?.name || "agent";
+  const agentNames =
+    agentIds.length > 3
+      ? plural(agentIds.length, "agent")
+      : agentIds.map(agentName).join(", ");
   const fileOptions = [
     ...(files.data?.data || []),
     ...(file.data ? [file.data] : []),
@@ -174,7 +186,7 @@ export default function AdminLeadList() {
     ...(f.agent
       ? [
           [
-            `Assigned to ${agentName(f.agent)}`,
+            `Assigned to ${agentNames}`,
             () => set({ agent: null, assignment: null }),
           ],
         ]
@@ -217,7 +229,7 @@ export default function AdminLeadList() {
   // Filters other than assignment, which the counts are about.
   const narrowed = chips.length > (f.agent || f.assignment ? 1 : 0);
   const totals = q.data?.totals;
-  const assignment = f.agent ? "agent:" + f.agent : f.assignment;
+  const assignment = f.agent ? "assigned" : f.assignment;
   async function selectAll() {
     setError("");
     try {
@@ -259,27 +271,19 @@ export default function AdminLeadList() {
         <select
           aria-label="Filter by assignment"
           value={assignment}
-          onChange={(e) => {
-            const v = e.target.value;
-            set(
-              v.startsWith("agent:")
-                ? { agent: v.slice(6), assignment: null }
-                : { assignment: v, agent: null },
-            );
-          }}
+          onChange={(e) => set({ assignment: e.target.value, agent: null })}
         >
           <option value="">All leads</option>
           <option value="assigned">Assigned</option>
           <option value="unassigned">Unassigned</option>
-          <optgroup label="Assigned to">
-            {agents.map((a) => (
-              <option key={a.id} value={"agent:" + a.id}>
-                {a.name}
-                {a.active ? "" : " (inactive)"}
-              </option>
-            ))}
-          </optgroup>
         </select>
+        <AgentFilter
+          agents={agents}
+          value={agentIds}
+          onChange={(ids) =>
+            set({ agent: ids.length ? ids.join(",") : null, assignment: null })
+          }
+        />
         <select
           aria-label="Filter by temperature"
           value={f.temperature}
@@ -483,6 +487,7 @@ export default function AdminLeadList() {
         <AssignLeadDialog
           lead={assignLead}
           agents={activeAgents}
+          neverCalled={f.call === "never_called"}
           onClose={() => setAssignLead(null)}
           onDone={(message) => {
             setAssignLead(null);
@@ -495,6 +500,7 @@ export default function AdminLeadList() {
           <DistributeDialog
             ids={selection.ids}
             agents={activeAgents}
+            neverCalled={f.call === "never_called"}
             onClose={() => setBulk(null)}
             onDone={(result) => {
               setBulk(null);
@@ -552,8 +558,30 @@ export default function AdminLeadList() {
 
 // One lead: assign it if it has no agent (never taking it from one who got
 // it meanwhile), or, once confirmed, move it to another agent or remove its
-// agent with the usual assignment rules.
-function AssignLeadDialog({ lead, agents, onClose, onDone }) {
+// agent with the usual assignment rules. From a Never called list (update
+// 082) the move goes through Assign to agents' checks: it stops if the lead
+// was called, marked Won or Lost, or moved since the list loaded.
+async function moveNeverCalled(lead, agent) {
+  const body = { lead_ids: [lead.id], agent_ids: [agent], never_called: true };
+  const plan = await api("/leads/distribute/preview", { method: "POST", body });
+  const [row] = plan.results;
+  if (row?.result === "reassigned" && row.from !== lead.assigned_agent)
+    throw new Error(
+      `${lead.name} moved to ${row.from_name || "another agent"} after this list loaded. Check the list again.`,
+    );
+  if (row?.result !== "reassigned")
+    throw new Error(row?.reason || "Not reassigned");
+  const result = await api("/leads/distribute", {
+    method: "POST",
+    body: { ...body, token: plan.token },
+  });
+  if (!result.applied || result.reassigned !== 1)
+    throw new Error(
+      `${lead.name} changed while you were reassigning it. Check the list again.`,
+    );
+  return { results: [{ result: "assigned" }] };
+}
+function AssignLeadDialog({ lead, agents, neverCalled, onClose, onDone }) {
   const [agent, setAgent] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -563,23 +591,26 @@ function AssignLeadDialog({ lead, agents, onClose, onDone }) {
     setBusy(true);
     setError("");
     try {
-      const result = current
-        ? await api("/leads/assign-bulk", {
-            method: "POST",
-            body: {
-              lead_ids: [lead.id],
-              mode,
-              ...(mode === "agent" ? { agent_id: agent } : {}),
-            },
-          })
-        : await api("/leads/assign-unassigned", {
-            method: "POST",
-            body: {
-              lead_ids: [lead.id],
-              mode,
-              ...(mode === "agent" ? { agent_id: agent } : {}),
-            },
-          });
+      const result =
+        current && neverCalled && mode === "agent"
+          ? await moveNeverCalled(lead, agent)
+          : current
+            ? await api("/leads/assign-bulk", {
+                method: "POST",
+                body: {
+                  lead_ids: [lead.id],
+                  mode,
+                  ...(mode === "agent" ? { agent_id: agent } : {}),
+                },
+              })
+            : await api("/leads/assign-unassigned", {
+                method: "POST",
+                body: {
+                  lead_ids: [lead.id],
+                  mode,
+                  ...(mode === "agent" ? { agent_id: agent } : {}),
+                },
+              });
       const [row] = result.results;
       if (row?.result !== "assigned")
         throw new Error(row?.reason || "Not assigned");
@@ -696,8 +727,10 @@ function BulkAssignDialog({ ids, onClose, onDone }) {
 // turn (update 062), whoever has them now. The preview, worked out by the
 // database, changes nothing. Confirmed, the database works the plan out
 // again under its assignment lock; if the leads or agents changed since the
-// preview, nothing moves and the new plan comes back to confirm.
-function DistributeDialog({ ids, agents, onClose, onDone }) {
+// preview, nothing moves and the new plan comes back to confirm. From a
+// Never called list (update 082) the leads their agent has called since stay
+// with that agent.
+function DistributeDialog({ ids, agents, neverCalled, onClose, onDone }) {
   const [mode, setMode] = useState("one"),
     [search, setSearch] = useState(""),
     [chosen, setChosen] = useState([]),
@@ -711,11 +744,15 @@ function DistributeDialog({ ids, agents, onClose, onDone }) {
     return () => clearTimeout(t);
   }, [chosen]);
   const preview = useQuery({
-    queryKey: ["lead-distribution", ids, asked],
+    queryKey: ["lead-distribution", ids, asked, neverCalled],
     queryFn: ({ signal }) =>
       api("/leads/distribute/preview", {
         method: "POST",
-        body: { lead_ids: ids, agent_ids: asked },
+        body: {
+          lead_ids: ids,
+          agent_ids: asked,
+          ...(neverCalled ? { never_called: true } : {}),
+        },
         signal,
       }),
     enabled: asked.length > 0,
@@ -751,7 +788,12 @@ function DistributeDialog({ ids, agents, onClose, onDone }) {
     try {
       const result = await api("/leads/distribute", {
         method: "POST",
-        body: { lead_ids: ids, agent_ids: chosen, token: plan.token },
+        body: {
+          lead_ids: ids,
+          agent_ids: chosen,
+          token: plan.token,
+          ...(neverCalled ? { never_called: true } : {}),
+        },
       });
       if (result.applied) return onDone(result);
       setNewer(result);
@@ -858,8 +900,12 @@ function DistributeDialog({ ids, agents, onClose, onDone }) {
 // Who gets how many (update 062): each agent's leads kept, newly assigned
 // and moved in, and the total they end with, then where moved leads come
 // from. A preview says it is worked out now and may change.
+// From a Never called list, leads called since are counted and listed as
+// kept with their agent (update 082).
 function DistributionSummary({ result, preview = false }) {
-  const failed = result.results.filter((r) => r.result === "failed");
+  const failed = result.results.filter((r) =>
+    ["failed", "kept"].includes(r.result),
+  );
   return (
     <div className="distribution-summary">
       {preview && (
@@ -874,6 +920,8 @@ function DistributionSummary({ result, preview = false }) {
         {plural(result.reassigned, "lead")} reassigned ·{" "}
         {plural(result.skipped, "lead")} not changed ·{" "}
         {plural(result.failed, "lead")} failed
+        {result.kept > 0 &&
+          ` · ${plural(result.kept, "lead")} kept (called since)`}
       </p>
       <div className="assignment-results">
         <Table
@@ -913,6 +961,7 @@ const resultLabels = {
   reassigned: "Reassigned",
   skipped: "Not changed",
   failed: "Failed",
+  kept: "Kept with agent",
 };
 // Leads that moved from another agent are counted and listed apart (update
 // 060); round-robin unassigned results have none. Shared leads (update 062)
