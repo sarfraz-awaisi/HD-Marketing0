@@ -97,7 +97,8 @@ export function createApp(db, options = {}) {
     express.raw({ type: "application/json", limit: "256kb" }),
     webhooksRouter(db),
   );
-  app.use(express.json({ limit: "256kb" }));
+  // Update 087: room for up to 20,000 selected lead IDs.
+  app.use(express.json({ limit: "1mb" }));
   app.use("/api/auth", limits.public, authRouter(db, options));
   app.use("/api/onboarding", limits.public, onboardingRouter(db));
   app.use(

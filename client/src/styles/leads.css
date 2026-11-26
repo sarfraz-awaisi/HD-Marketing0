@@ -490,23 +490,81 @@ dialog.lead-name-dialog {
     flex: 1 1 100%;
     width: 100%;
   }
+  /* The count and which leads they are share one line (update 087). */
+  .admin-leads .bulk-action-bar > b,
+  .admin-leads .bulk-action-bar > .selection-range {
+    flex: 0 0 auto;
+    width: auto;
+  }
 }
-/* Select all and Select the first N leads share one row (update 086). */
-.lead-select-row,
-.lead-select-first {
+/* Choose how many selected leads (update 087): which leads are selected,
+   then quick picks or a number typed, inside the selection bar. */
+.selection-range {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef2f6;
+  color: #14283e;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.how-many-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.how-many-panel {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #dce3eb;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+.how-many-panel p {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.how-many-chips,
+.how-many-custom {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
-}
-.lead-select-first {
   gap: 8px;
 }
-.lead-select-first input {
-  width: 110px;
+.how-many-chip {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 1px solid #cfd8e3;
+  border-radius: 999px;
+  background: #fff;
+  color: #14283e;
+  font: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    color 0.15s;
+}
+.how-many-chip:hover,
+.how-many-chip:focus-visible {
+  border-color: #14283e;
+}
+.how-many-chip[aria-pressed="true"] {
+  border-color: #14283e;
+  background: #14283e;
+  color: #fff;
+}
+.how-many-custom input {
+  width: 180px;
   min-height: 44px;
 }
-.lead-select-first .button {
+.how-many-custom .button {
   min-height: 44px;
 }
 /* Assignment results list customers' names, not import row numbers. */

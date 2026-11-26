@@ -1126,27 +1126,17 @@ describe("Never assigned page (update 084)", () => {
     ]);
   });
 
-  it("Select all takes up to 2,000 leads once agents are chosen (update 086); Delete waits for 500 or fewer", async () => {
+  it("Select all takes any number of leads (update 087); Assign to agents and Delete take them all", async () => {
     const user = userEvent.setup();
-    // Any agent: the usual 500, and a pointer to choosing agents.
-    listCount = 1430;
+    // Any agent, more leads than the old limits: Select all is there.
+    listCount = 2001;
     const first = open("/leads/never-assigned");
     expect(
-      await screen.findByText(
-        "Choose agents to select all the leads never assigned to them (2,000 at most), or narrow your search (500 at most).",
-      ),
+      await screen.findByRole("button", {
+        name: "Select all 2,001 matching leads",
+      }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Select all/ })).toBeNull();
     first.unmount();
-    // More than 2,000 never assigned to the chosen agent.
-    listCount = 2001;
-    const second = open(`/leads/never-assigned?agent=${ali.id}`);
-    expect(
-      await screen.findByText(
-        "Narrow your search or filters to select all matching leads (2,000 at most).",
-      ),
-    ).toBeInTheDocument();
-    second.unmount();
     listCount = 800;
     selectionIds = Array.from(
       { length: 800 },
@@ -1154,13 +1144,20 @@ describe("Never assigned page (update 084)", () => {
     );
     partialOnce = true;
     open(`/leads/never-assigned?agent=${ali.id}`);
+    // No number box until leads are selected.
+    await screen.findByRole("button", {
+      name: "Select all 800 matching leads",
+    });
+    expect(screen.queryByLabelText("Number of leads to select")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Choose how many/ }),
+    ).toBeNull();
     await user.click(
-      await screen.findByRole("button", {
-        name: "Select all 800 matching leads",
-      }),
+      screen.getByRole("button", { name: "Select all 800 matching leads" }),
     );
     expect(await screen.findByText("800 leads selected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    expect(screen.getByText("All matching")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Assign to agents" }));
     const dialog = await screen.findByRole("dialog", {
       name: "Assign the selected leads",
@@ -1189,47 +1186,80 @@ describe("Never assigned page (update 084)", () => {
       name: "Assignment results",
     });
     expect(
-      within(results).getByText(
-        /Some leads changed while they were being assigned/,
-      ),
+      within(results).getByText(/^Not every lead was assigned/),
     ).toBeInTheDocument();
   });
 
-  it("Select the first N leads: as many as typed, from #1 down (update 086)", async () => {
+  it("Choose how many: once leads are selected, a quick pick or a number keeps the first leads, from #1 down (update 087)", async () => {
     const user = userEvent.setup();
-    listCount = 800;
-    selectionIds = Array.from(
-      { length: 400 },
-      (_, i) => `57200000-0000-4000-8002-${String(i).padStart(12, "0")}`,
-    );
-    const first = open(`/leads/never-assigned?agent=${ali.id}`);
-    const box = await screen.findByLabelText("Number of leads to select");
-    expect(screen.getByText("From #1 down, 800 at most")).toBeInTheDocument();
-    await user.type(box, "900");
-    await user.click(screen.getByRole("button", { name: "Select" }));
-    expect(
-      await screen.findByText("Type a number from 1 to 800."),
-    ).toBeInTheDocument();
-    await user.clear(box);
-    await user.type(box, "400");
-    await user.click(screen.getByRole("button", { name: "Select" }));
-    expect(await screen.findByText("400 leads selected")).toBeInTheDocument();
-    const asked = mocks.api.mock.calls
-      .map(([p]) => p)
-      .filter((p) => p.startsWith("/leads/all/selection?"));
-    expect(asked).toEqual([
-      "/leads/all/selection?" +
-        new URLSearchParams({ never_assigned: ali.id, first: 400 }),
-    ]);
-    expect(screen.queryByText("Type a number from 1 to 800.")).toBeNull();
-    first.unmount();
-    // All leads, more than Select all takes: the first 500 at most.
     listCount = 1430;
     open("/leads");
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Select all 1,430 matching leads",
+      }),
+    );
+    // The mock returns this page's two leads as every matching lead.
+    expect(await screen.findByText("2 leads selected")).toBeInTheDocument();
+    expect(screen.getByText("All matching")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Choose how many" }));
+    const panel = screen.getByRole("group", { name: "Choose how many leads" });
     expect(
-      await screen.findByText("From #1 down, 500 at most"),
+      within(panel)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["50", "100", "250", "500", "1,000", "All 1,430", "Select"]);
+    expect(
+      within(panel).getByRole("button", { name: "All 1,430" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    // A quick pick.
+    selectionIds = Array.from(
+      { length: 250 },
+      (_, i) => `57200000-0000-4000-8002-${String(i).padStart(12, "0")}`,
+    );
+    await user.click(within(panel).getByRole("button", { name: "250" }));
+    expect(await screen.findByText("250 leads selected")).toBeInTheDocument();
+    expect(screen.getByText("#1–#250")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Choose how many leads" }),
+    ).toBeNull();
+    // A number typed: out of range first, then 1,200.
+    await user.click(screen.getByRole("button", { name: "Choose how many" }));
+    const box = screen.getByLabelText("Number of leads to select");
+    await user.type(box, "1500");
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(
+      await screen.findByText("Type a number from 1 to 1,430."),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Select all/ })).toBeNull();
+    // #1 and #2 are this page's leads.
+    selectionIds = [
+      rows[0].id,
+      rows[1].id,
+      ...Array.from(
+        { length: 1198 },
+        (_, i) => `57200000-0000-4000-8003-${String(i).padStart(12, "0")}`,
+      ),
+    ];
+    await user.clear(box);
+    await user.type(box, "1200");
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(await screen.findByText("1,200 leads selected")).toBeInTheDocument();
+    expect(screen.getByText("#1–#1,200")).toBeInTheDocument();
+    expect(
+      mocks.api.mock.calls
+        .map(([p]) => p)
+        .filter((p) => p.startsWith("/leads/all/selection?")),
+    ).toEqual([
+      "/leads/all/selection?",
+      "/leads/all/selection?first=250",
+      "/leads/all/selection?first=1200",
+    ]);
+    // Unticking a lead: no longer the first 1,200.
+    await user.click(
+      screen.getByRole("checkbox", { name: "Select Customer 2" }),
+    );
+    expect(await screen.findByText("1,199 leads selected")).toBeInTheDocument();
+    expect(screen.queryByText("#1–#1,200")).toBeNull();
   });
 
   it("is for administrators only", async () => {

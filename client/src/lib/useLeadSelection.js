@@ -1,8 +1,8 @@
 import { useState } from "react";
 // Store the filter with the selection: a changed filter clears it immediately,
 // while paging within that filter retains selected IDs. At most max leads
-// (500; Deleted leads allows 2,000, update 071, and so does Never assigned
-// with agents chosen, update 086).
+// (500; Deleted leads allows 2,000, update 071; All leads and Never
+// assigned take any number, update 087).
 export function useLeadSelection(filter, max = 500) {
   const [state, setState] = useState({ filter, ids: [] });
   // Update 071: a changed filter drops the selection for good, so going
