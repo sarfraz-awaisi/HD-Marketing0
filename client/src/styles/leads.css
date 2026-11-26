@@ -491,6 +491,24 @@ dialog.lead-name-dialog {
     width: 100%;
   }
 }
+/* Select all and Select the first N leads share one row (update 086). */
+.lead-select-row,
+.lead-select-first {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.lead-select-first {
+  gap: 8px;
+}
+.lead-select-first input {
+  width: 110px;
+  min-height: 44px;
+}
+.lead-select-first .button {
+  min-height: 44px;
+}
 /* Assignment results list customers' names, not import row numbers. */
 .assignment-results th:first-child,
 .assignment-results td:first-child {

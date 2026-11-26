@@ -157,9 +157,13 @@ export default function AdminLeadList({ neverAssigned = false }) {
     [bulk, setBulk] = useState(null),
     [results, setResults] = useState(null),
     [deleteIds, setDeleteIds] = useState(null),
+    [firstCount, setFirstCount] = useState(""),
     [error, setError] = useState("");
   const filters = new URLSearchParams(query(f, neverAssigned));
-  const selection = useLeadSelection(filters.toString());
+  // Update 086: Never assigned with agents chosen selects up to 2,000
+  // leads; Assign to agents works through them 500 at a time.
+  const selectMax = neverAssigned && f.agent ? 2000 : 500;
+  const selection = useLeadSelection(filters.toString(), selectMax);
   const users = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
@@ -243,6 +247,25 @@ export default function AdminLeadList({ neverAssigned = false }) {
     chips.length > (!neverAssigned && (f.agent || f.assignment) ? 1 : 0);
   const totals = q.data?.totals;
   const assignment = f.agent ? "assigned" : f.assignment;
+  // Update 086: the first leads of the list (#1 down), as many as typed,
+  // even when more match than Select all takes.
+  const firstMost = Math.min(q.data?.count ?? 0, selectMax);
+  async function selectFirst(event) {
+    event.preventDefault();
+    setError("");
+    const n = Number(firstCount);
+    if (!Number.isInteger(n) || n < 1 || n > firstMost)
+      return setError(
+        `Type a number from 1 to ${firstMost.toLocaleString("en-US")}.`,
+      );
+    const params = new URLSearchParams(filters);
+    params.set("first", n);
+    try {
+      selection.replace((await api("/leads/all/selection?" + params)).ids);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
   async function selectAll() {
     setError("");
     try {
@@ -386,17 +409,44 @@ export default function AdminLeadList({ neverAssigned = false }) {
       ) : q.error ? null : (
         <>
           <div className="lead-selection-tools">
-            {q.data.count > 500 ? (
-              <span className="lead-muted">
-                Narrow your search or filters to select all matching leads (500
-                at most).
-              </span>
-            ) : (
-              q.data.count > 0 && (
-                <Button variant="secondary" onClick={selectAll}>
-                  Select all {plural(q.data.count, "matching lead")}
-                </Button>
-              )
+            {q.data.count > 0 && (
+              <div className="lead-select-row">
+                {q.data.count > selectMax ? (
+                  <span className="lead-muted">
+                    {neverAssigned && !f.agent
+                      ? "Choose agents to select all the leads never assigned to them (2,000 at most), or narrow your search (500 at most)."
+                      : `Narrow your search or filters to select all matching leads (${selectMax.toLocaleString("en-US")} at most).`}
+                  </span>
+                ) : (
+                  <Button variant="secondary" onClick={selectAll}>
+                    Select all {plural(q.data.count, "matching lead")}
+                  </Button>
+                )}
+                <form
+                  className="lead-select-first"
+                  noValidate
+                  onSubmit={selectFirst}
+                >
+                  <span>Select the first</span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min="1"
+                    max={firstMost}
+                    placeholder="e.g. 400"
+                    aria-label="Number of leads to select"
+                    value={firstCount}
+                    onChange={(e) => setFirstCount(e.target.value)}
+                  />
+                  <span>leads</span>
+                  <Button type="submit" variant="secondary">
+                    Select
+                  </Button>
+                  <small className="lead-muted">
+                    From #1 down, {firstMost.toLocaleString("en-US")} at most
+                  </small>
+                </form>
+              </div>
             )}
             {selection.ids.length > 0 && (
               <div
@@ -418,8 +468,15 @@ export default function AdminLeadList({ neverAssigned = false }) {
                     Round-robin unassigned
                   </Button>
                 )}
+                {/* Delete takes 500 leads at a time (update 086). */}
                 <Button
                   variant="danger"
+                  disabled={selection.ids.length > 500}
+                  title={
+                    selection.ids.length > 500
+                      ? "Delete works on 500 leads or fewer at a time"
+                      : undefined
+                  }
                   onClick={() => setDeleteIds(selection.ids)}
                 >
                   Delete
@@ -1077,6 +1134,15 @@ function AssignmentResults({ result, onClose }) {
   const rows = result.results.filter((r) => r.result !== "assigned");
   return (
     <Modal title="Assignment results" onClose={onClose}>
+      {/* Update 086: a part that changed while a large selection was being
+          assigned, and the parts after it, were not assigned. */}
+      {result.partial && (
+        <div role="alert" className="error">
+          Some leads changed while they were being assigned, so they and the
+          leads after them were not assigned: they are listed below as failed.
+          Check them and assign them again.
+        </div>
+      )}
       {result.agents ? (
         <DistributionSummary result={result} />
       ) : (

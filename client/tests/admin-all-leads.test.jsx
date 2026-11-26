@@ -60,7 +60,7 @@ const lead = (n, extra = {}) => ({
   last_call_connected: null,
   ...extra,
 });
-let rows, posts, previews, staleOnce;
+let rows, posts, previews, staleOnce, listCount, selectionIds, partialOnce;
 // Update 062: the database's plan for the chosen agents, mocked for the two
 // selected leads (Customer 2 is Ali's).
 const planFor = (agentIds, applied, token = "a".repeat(32)) => {
@@ -135,6 +135,9 @@ beforeEach(() => {
   posts = [];
   previews = [];
   staleOnce = false;
+  listCount = null;
+  selectionIds = null;
+  partialOnce = false;
   rows = [
     lead(1, { ad_name: "Gulberg flats November" }),
     lead(2, {
@@ -148,12 +151,12 @@ beforeEach(() => {
   ];
   mocks.api.mockImplementation(async (path, options = {}) => {
     if (path.startsWith("/leads/all/selection?"))
-      return { ids: rows.map((r) => r.id) };
+      return { ids: selectionIds || rows.map((r) => r.id) };
     if (path.startsWith("/leads/all?"))
       return {
         page: Number(new URLSearchParams(path.split("?")[1]).get("page")) || 1,
         limit: 20,
-        count: rows.length,
+        count: listCount ?? rows.length,
         totals: { total: 41, assigned: 30, unassigned: 11 },
         data: rows,
       };
@@ -176,6 +179,10 @@ beforeEach(() => {
             ...planFor(options.body.agent_ids, false, "b".repeat(32)),
             stale: true,
           };
+        }
+        if (partialOnce) {
+          partialOnce = false;
+          return { ...planFor(options.body.agent_ids, true), partial: true };
         }
         return planFor(options.body.agent_ids, true);
       }
@@ -1117,6 +1124,112 @@ describe("Never assigned page (update 084)", () => {
       ["/leads/distribute/preview", body],
       ["/leads/distribute", { ...body, token: "a".repeat(32) }],
     ]);
+  });
+
+  it("Select all takes up to 2,000 leads once agents are chosen (update 086); Delete waits for 500 or fewer", async () => {
+    const user = userEvent.setup();
+    // Any agent: the usual 500, and a pointer to choosing agents.
+    listCount = 1430;
+    const first = open("/leads/never-assigned");
+    expect(
+      await screen.findByText(
+        "Choose agents to select all the leads never assigned to them (2,000 at most), or narrow your search (500 at most).",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Select all/ })).toBeNull();
+    first.unmount();
+    // More than 2,000 never assigned to the chosen agent.
+    listCount = 2001;
+    const second = open(`/leads/never-assigned?agent=${ali.id}`);
+    expect(
+      await screen.findByText(
+        "Narrow your search or filters to select all matching leads (2,000 at most).",
+      ),
+    ).toBeInTheDocument();
+    second.unmount();
+    listCount = 800;
+    selectionIds = Array.from(
+      { length: 800 },
+      (_, i) => `57200000-0000-4000-8001-${String(i).padStart(12, "0")}`,
+    );
+    partialOnce = true;
+    open(`/leads/never-assigned?agent=${ali.id}`);
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Select all 800 matching leads",
+      }),
+    );
+    expect(await screen.findByText("800 leads selected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Assign to agents" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Assign the selected leads",
+    });
+    expect(within(dialog).getByText(/^800 leads selected/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("radio", { name: /Sara Agent/ }));
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Assign" }),
+      ).toBeEnabled(),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Assign" }));
+    await waitFor(() =>
+      expect(posts.at(-1)).toEqual([
+        "/leads/distribute",
+        {
+          lead_ids: selectionIds,
+          agent_ids: [sara.id],
+          token: "a".repeat(32),
+          never_assigned: true,
+        },
+      ]),
+    );
+    // A part that changed while assigning comes back as not assigned.
+    const results = await screen.findByRole("dialog", {
+      name: "Assignment results",
+    });
+    expect(
+      within(results).getByText(
+        /Some leads changed while they were being assigned/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("Select the first N leads: as many as typed, from #1 down (update 086)", async () => {
+    const user = userEvent.setup();
+    listCount = 800;
+    selectionIds = Array.from(
+      { length: 400 },
+      (_, i) => `57200000-0000-4000-8002-${String(i).padStart(12, "0")}`,
+    );
+    const first = open(`/leads/never-assigned?agent=${ali.id}`);
+    const box = await screen.findByLabelText("Number of leads to select");
+    expect(screen.getByText("From #1 down, 800 at most")).toBeInTheDocument();
+    await user.type(box, "900");
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(
+      await screen.findByText("Type a number from 1 to 800."),
+    ).toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, "400");
+    await user.click(screen.getByRole("button", { name: "Select" }));
+    expect(await screen.findByText("400 leads selected")).toBeInTheDocument();
+    const asked = mocks.api.mock.calls
+      .map(([p]) => p)
+      .filter((p) => p.startsWith("/leads/all/selection?"));
+    expect(asked).toEqual([
+      "/leads/all/selection?" +
+        new URLSearchParams({ never_assigned: ali.id, first: 400 }),
+    ]);
+    expect(screen.queryByText("Type a number from 1 to 800.")).toBeNull();
+    first.unmount();
+    // All leads, more than Select all takes: the first 500 at most.
+    listCount = 1430;
+    open("/leads");
+    expect(
+      await screen.findByText("From #1 down, 500 at most"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Select all/ })).toBeNull();
   });
 
   it("is for administrators only", async () => {
