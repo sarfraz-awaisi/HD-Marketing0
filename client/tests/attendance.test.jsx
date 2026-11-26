@@ -702,6 +702,91 @@ describe("Attendance management", () => {
       within(month).getByText("3 present of 5 eligible days"),
     ).toBeInTheDocument();
   });
+  // Update 089: Active and Inactive employees are separate tabs; deleted
+  // accounts are never listed (the server leaves them out).
+  const bilal = {
+    id: "e1000000-0000-4000-8000-000000000009",
+    uid: 775619,
+    name: "Bilal Agent",
+    role: "agent",
+    active: false,
+  };
+  const withBilal = () => {
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) => {
+      if (path === "/admin/attendance/employees") return [ali, bilal];
+      if (path.startsWith(`/admin/attendance/employees/${bilal.id}?`))
+        return {
+          employee: {
+            ...bilal,
+            periods: [{ starts_on: "2026-10-19", ends_on: "2026-11-20" }],
+          },
+          totals: { present_days: 12, absent_days: 0 },
+          days: [],
+          leave: [],
+          corrections: [],
+        };
+      return base(path, options);
+    });
+  };
+  const employees = () =>
+    within(screen.getByLabelText("Employee"))
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+  it("Employee: active and inactive employees in separate tabs", async () => {
+    withBilal();
+    open("/attendance-management?tab=employee");
+    const active = await screen.findByRole("tab", {
+      name: "Active employees 1",
+    });
+    expect(active).toHaveAttribute("aria-selected", "true");
+    await waitFor(() =>
+      expect(employees()).toEqual(["Ali Agent · UID 775610"]),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Ali Agent" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Inactive employees 1" }));
+    await waitFor(() =>
+      expect(employees()).toEqual(["Bilal Agent · UID 775619"]),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Bilal Agent" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Inactive account/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Disabled accounts, with their attendance history kept/),
+    ).toBeInTheDocument();
+    expect(
+      calls("/admin/attendance/employees/").some((p) =>
+        p.startsWith(`/admin/attendance/employees/${bilal.id}?`),
+      ),
+    ).toBe(true);
+  });
+  it("Employee: a link to a disabled employee opens the Inactive tab", async () => {
+    withBilal();
+    open(`/attendance-management?tab=employee&user=${bilal.id}`);
+    expect(
+      await screen.findByRole("tab", { name: "Inactive employees 1" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      await screen.findByRole("heading", { name: "Bilal Agent" }),
+    ).toBeInTheDocument();
+  });
+  it("Employee: an empty Inactive tab says what to do", async () => {
+    open("/attendance-management?tab=employee");
+    expect(
+      await screen.findByRole("heading", { name: "Ali Agent" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Inactive employees 0" }));
+    expect(
+      await screen.findByText(
+        /No inactive employees\. When an employee leaves/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Employee")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Ali Agent" })).toBeNull();
+  });
   it("moves between sections with the keyboard and keeps deep links", async () => {
     open("/attendance-management?tab=holidays");
     const holidays = await screen.findByRole("tab", { name: "Holidays" });
