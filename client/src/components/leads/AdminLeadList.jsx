@@ -2,6 +2,7 @@ import "../../styles/leads.css";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ListOrdered } from "lucide-react";
 import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
@@ -157,13 +158,14 @@ export default function AdminLeadList({ neverAssigned = false }) {
     [bulk, setBulk] = useState(null),
     [results, setResults] = useState(null),
     [deleteIds, setDeleteIds] = useState(null),
+    [howMany, setHowMany] = useState(false),
     [firstCount, setFirstCount] = useState(""),
+    [picked, setPicked] = useState(null),
     [error, setError] = useState("");
   const filters = new URLSearchParams(query(f, neverAssigned));
-  // Update 086: Never assigned with agents chosen selects up to 2,000
-  // leads; Assign to agents works through them 500 at a time.
-  const selectMax = neverAssigned && f.agent ? 2000 : 500;
-  const selection = useLeadSelection(filters.toString(), selectMax);
+  // Update 087: any number of leads; what is done with them goes to the
+  // database 500 at a time.
+  const selection = useLeadSelection(filters.toString(), Infinity);
   const users = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
@@ -247,29 +249,44 @@ export default function AdminLeadList({ neverAssigned = false }) {
     chips.length > (!neverAssigned && (f.agent || f.assignment) ? 1 : 0);
   const totals = q.data?.totals;
   const assignment = f.agent ? "assigned" : f.assignment;
-  // Update 086: the first leads of the list (#1 down), as many as typed,
-  // even when more match than Select all takes.
-  const firstMost = Math.min(q.data?.count ?? 0, selectMax);
-  async function selectFirst(event) {
-    event.preventDefault();
+  // Update 087: once leads are selected, Choose how many keeps the first
+  // leads of the list (#1 down), a quick pick or a number typed.
+  const total = q.data?.count ?? 0;
+  const quickPicks = [50, 100, 250, 500, 1000, 2000].filter((n) => n < total);
+  const range =
+    picked?.filter === filters.toString() && picked.n === selection.ids.length
+      ? picked
+      : null;
+  async function selectFirst(n) {
     setError("");
-    const n = Number(firstCount);
-    if (!Number.isInteger(n) || n < 1 || n > firstMost)
+    if (!Number.isInteger(n) || n < 1 || n > total)
       return setError(
-        `Type a number from 1 to ${firstMost.toLocaleString("en-US")}.`,
+        `Type a number from 1 to ${total.toLocaleString("en-US")}.`,
       );
     const params = new URLSearchParams(filters);
     params.set("first", n);
     try {
-      selection.replace((await api("/leads/all/selection?" + params)).ids);
+      const ids = (await api("/leads/all/selection?" + params)).ids;
+      selection.replace(ids);
+      setPicked({ filter: filters.toString(), n: ids.length, all: false });
+      setHowMany(false);
+      setFirstCount("");
     } catch (e) {
       setError(e.message);
     }
   }
+  const clearSelection = () => {
+    selection.clear();
+    setPicked(null);
+    setHowMany(false);
+  };
   async function selectAll() {
     setError("");
     try {
-      selection.replace((await api("/leads/all/selection?" + filters)).ids);
+      const ids = (await api("/leads/all/selection?" + filters)).ids;
+      selection.replace(ids);
+      setPicked({ filter: filters.toString(), n: ids.length, all: true });
+      setHowMany(false);
     } catch (e) {
       setError(e.message);
     }
@@ -410,42 +427,10 @@ export default function AdminLeadList({ neverAssigned = false }) {
         <>
           <div className="lead-selection-tools">
             {q.data.count > 0 && (
-              <div className="lead-select-row">
-                {q.data.count > selectMax ? (
-                  <span className="lead-muted">
-                    {neverAssigned && !f.agent
-                      ? "Choose agents to select all the leads never assigned to them (2,000 at most), or narrow your search (500 at most)."
-                      : `Narrow your search or filters to select all matching leads (${selectMax.toLocaleString("en-US")} at most).`}
-                  </span>
-                ) : (
-                  <Button variant="secondary" onClick={selectAll}>
-                    Select all {plural(q.data.count, "matching lead")}
-                  </Button>
-                )}
-                <form
-                  className="lead-select-first"
-                  noValidate
-                  onSubmit={selectFirst}
-                >
-                  <span>Select the first</span>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="1"
-                    max={firstMost}
-                    placeholder="e.g. 400"
-                    aria-label="Number of leads to select"
-                    value={firstCount}
-                    onChange={(e) => setFirstCount(e.target.value)}
-                  />
-                  <span>leads</span>
-                  <Button type="submit" variant="secondary">
-                    Select
-                  </Button>
-                  <small className="lead-muted">
-                    From #1 down, {firstMost.toLocaleString("en-US")} at most
-                  </small>
-                </form>
+              <div>
+                <Button variant="secondary" onClick={selectAll}>
+                  Select all {plural(q.data.count, "matching lead")}
+                </Button>
               </div>
             )}
             {selection.ids.length > 0 && (
@@ -455,6 +440,22 @@ export default function AdminLeadList({ neverAssigned = false }) {
                 aria-label="Selected lead actions"
               >
                 <b>{plural(selection.ids.length, "lead")} selected</b>
+                {range && (
+                  <span className="selection-range">
+                    {range.all
+                      ? "All matching"
+                      : `#1–#${range.n.toLocaleString("en-US")}`}
+                  </span>
+                )}
+                <Button
+                  variant="secondary"
+                  className="how-many-toggle"
+                  aria-expanded={howMany}
+                  onClick={() => setHowMany((open) => !open)}
+                >
+                  <ListOrdered size={16} aria-hidden="true" />
+                  Choose how many
+                </Button>
                 <Button onClick={() => setBulk({ mode: "distribute" })}>
                   Assign to agents
                 </Button>
@@ -468,22 +469,68 @@ export default function AdminLeadList({ neverAssigned = false }) {
                     Round-robin unassigned
                   </Button>
                 )}
-                {/* Delete takes 500 leads at a time (update 086). */}
                 <Button
                   variant="danger"
-                  disabled={selection.ids.length > 500}
-                  title={
-                    selection.ids.length > 500
-                      ? "Delete works on 500 leads or fewer at a time"
-                      : undefined
-                  }
                   onClick={() => setDeleteIds(selection.ids)}
                 >
                   Delete
                 </Button>
-                <Button variant="secondary" onClick={selection.clear}>
+                <Button variant="secondary" onClick={clearSelection}>
                   Clear selection
                 </Button>
+                {howMany && (
+                  <div
+                    className="how-many-panel"
+                    role="group"
+                    aria-label="Choose how many leads"
+                  >
+                    <p>
+                      Keep the first leads of the list, from #1 down, out of{" "}
+                      {plural(total, "matching lead")}.
+                    </p>
+                    <div className="how-many-chips">
+                      {quickPicks.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          className="how-many-chip"
+                          aria-pressed={!!range && !range.all && range.n === n}
+                          onClick={() => selectFirst(n)}
+                        >
+                          {n.toLocaleString("en-US")}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="how-many-chip"
+                        aria-pressed={!!range?.all}
+                        onClick={selectAll}
+                      >
+                        All {total.toLocaleString("en-US")}
+                      </button>
+                    </div>
+                    <form
+                      className="how-many-custom"
+                      noValidate
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        selectFirst(Number(firstCount));
+                      }}
+                    >
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="1"
+                        max={total}
+                        placeholder="Or type a number"
+                        aria-label="Number of leads to select"
+                        value={firstCount}
+                        onChange={(e) => setFirstCount(e.target.value)}
+                      />
+                      <Button type="submit">Select</Button>
+                    </form>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -599,7 +646,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
             onDone={(result) => {
               setBulk(null);
               setResults(result);
-              selection.clear();
+              clearSelection();
               done();
             }}
           />
@@ -610,7 +657,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
             onDone={(result) => {
               setBulk(null);
               setResults(result);
-              selection.clear();
+              clearSelection();
               done();
             }}
           />
@@ -641,7 +688,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
           onClose={() => setDeleteIds(null)}
           onDeleted={(result) => {
             setDeleteIds(null);
-            selection.clear();
+            clearSelection();
             done(`${result.deleted} deleted, ${result.failed} kept`);
           }}
         />
@@ -1048,6 +1095,12 @@ function DistributeDialog({
         ) : (
           !preview.error && <Loader />
         ))}
+      {busy && ids.length > 500 && (
+        <p className="lead-muted" role="status">
+          Assigning {plural(ids.length, "lead")}, 500 at a time. Keep this
+          window open.
+        </p>
+      )}
       <footer>
         <Button variant="secondary" disabled={busy} onClick={onClose}>
           Cancel
@@ -1134,12 +1187,12 @@ function AssignmentResults({ result, onClose }) {
   const rows = result.results.filter((r) => r.result !== "assigned");
   return (
     <Modal title="Assignment results" onClose={onClose}>
-      {/* Update 086: a part that changed while a large selection was being
-          assigned, and the parts after it, were not assigned. */}
+      {/* Updates 086 and 087: a part that changed while a large selection
+          was being assigned, and the parts after it, were not assigned. */}
       {result.partial && (
         <div role="alert" className="error">
-          Some leads changed while they were being assigned, so they and the
-          leads after them were not assigned: they are listed below as failed.
+          Not every lead was assigned: some changed, or the CRM could not
+          finish, so they and the leads after them are listed below as failed.
           Check them and assign them again.
         </div>
       )}

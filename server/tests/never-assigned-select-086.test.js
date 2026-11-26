@@ -267,7 +267,7 @@ describe("Never assigned with 1,101 leads (database)", () => {
     await t?.pg.close();
   });
 
-  it("Select all takes up to 2,000 Never assigned leads; every other list keeps 500", async () => {
+  it("Select all takes every Never assigned lead; update 087 lifts the limits", async () => {
     const one = (await selection({ never_assigned: abru })).body.ids;
     expect(one).toHaveLength(1100);
     expect(one).not.toContain(given);
@@ -276,30 +276,6 @@ describe("Never assigned with 1,101 leads (database)", () => {
     ).toHaveLength(1100);
     expect((await selection({ never_assigned: owais })).body.ids).toHaveLength(
       1101,
-    );
-    expect((await selection({}, 400)).body.error).toBe(
-      "Choose filters that match 500 leads or fewer to select them all.",
-    );
-    // More than 500 to assign only from Never assigned, never over 2,000.
-    const many = all.slice(1, 502);
-    expect(
-      (
-        await request(app())
-          .post("/api/leads/distribute/preview")
-          .set(as(admin))
-          .send({ lead_ids: many, agent_ids: [alisha] })
-          .expect(400)
-      ).body.error,
-    ).toBe(
-      "Invalid input: Choose 1–500 distinct leads and 1–50 distinct agents",
-    );
-    await distribute(
-      "/preview",
-      {
-        lead_ids: Array.from({ length: 2001 }, (_, i) => leadId(i)),
-        agent_ids: [alisha],
-      },
-      400,
     );
   }, 120000);
 
@@ -324,12 +300,8 @@ describe("Never assigned with 1,101 leads (database)", () => {
     expect(
       (await selection({ never_assigned: owais, first: 2000 })).body.ids,
     ).toHaveLength(1101);
-    // All leads: 1,101 match, more than Select all takes; the first 500 do.
-    expect((await selection({ first: 500 })).body.ids).toHaveLength(500);
-    expect((await selection({ first: 501 }, 400)).body.error).toBe(
-      "Invalid input: Choose up to 500 leads to select (2,000 on Never assigned with agents chosen)",
-    );
-    await selection({ never_assigned: owais, first: 2001 }, 400);
+    // All leads: any number since update 087.
+    expect((await selection({ first: 501 })).body.ids).toHaveLength(501);
     await selection({ never_assigned: owais, first: 0 }, 400);
   }, 120000);
 
@@ -431,11 +403,12 @@ describe("update 086 on a database at 085, as production is", () => {
         .get("/api/leads/all/selection?never_assigned=" + abru + extra)
         .set({ Authorization: "Bearer " + admin })
         .expect(status);
+    // Before 086 (and 087), the server asks for the updates.
     expect((await select(503)).body.error).toBe(
-      "Selecting more than 500 Never assigned leads needs CRM database update 086 after 085.",
+      "Selecting this many leads needs CRM database update 087 after 086.",
     );
     expect((await select(503, "&first=10")).body.error).toBe(
-      "Selecting the first leads needs CRM database update 086 after 085.",
+      "Selecting this many leads needs CRM database update 087 after 086.",
     );
     expect(await check()).toMatchObject({
       release_stage: "at 085, ready for 086",

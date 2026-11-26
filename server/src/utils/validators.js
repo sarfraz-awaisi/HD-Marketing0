@@ -323,15 +323,11 @@ export const adminLeadsQuery = z
     // Update 075: Lead usage, exactly 2–5 different agents.
     usage: z.enum(["2", "3", "4", "5"]).transform(Number).optional(),
     page: z.coerce.number().int().min(1).max(100000).default(1),
-    // Update 086: Select all takes only the first leads of the list; up to
-    // 2,000 from Never assigned, 500 elsewhere (the database checks).
-    first: z.coerce.number().int().min(1).max(2000).optional(),
+    // Update 086: Select all takes only the first leads of the list, as
+    // many as asked (update 087).
+    first: z.coerce.number().int().min(1).max(100000).optional(),
   })
   .strict()
-  .refine((q) => !q.first || q.first <= (q.never_assigned ? 2000 : 500), {
-    message:
-      "Choose up to 500 leads to select (2,000 on Never assigned with agents chosen)",
-  })
   .refine((q) => !(q.agent && q.assignment === "unassigned"), {
     message: "An agent's leads are assigned leads",
   });
@@ -724,6 +720,14 @@ export const leadIds = z
   .min(1)
   .max(500)
   .refine((ids) => new Set(ids).size === ids.length, "Choose distinct leads");
+// Update 087: what administrators do with selected leads takes any number;
+// the server sends them to the database 500 at a time. 20,000 only guards
+// the server against oversized requests.
+export const manyLeadIds = z
+  .array(uuid)
+  .min(1)
+  .max(20000)
+  .refine((ids) => new Set(ids).size === ids.length, "Choose distinct leads");
 // Delete instantly's review (update 071): up to 2,000 leads selected in
 // Deleted leads; they are then erased 250 at a time.
 export const erasePreviewIds = z
@@ -746,7 +750,7 @@ export const bulkAssignment = z
 // round-robin; leads that have an agent are never taken from them.
 export const unassignedAssignment = z
   .object({
-    lead_ids: leadIds,
+    lead_ids: manyLeadIds,
     mode: z.enum(["agent", "round_robin"]),
     agent_id: uuid.optional(),
   })
@@ -763,15 +767,8 @@ export const selectedAssignment = z
 // nothing changed since.
 export const leadDistribution = z
   .object({
-    // Update 086: up to 2,000 from the Never assigned page, 500 elsewhere.
-    lead_ids: z
-      .array(uuid)
-      .min(1)
-      .max(2000)
-      .refine(
-        (ids) => new Set(ids).size === ids.length,
-        "Choose distinct leads",
-      ),
+    // Update 087: any number, 500 to each database call.
+    lead_ids: manyLeadIds,
     agent_ids: z
       .array(uuid)
       .min(1, "Choose at least one agent")
@@ -794,9 +791,6 @@ export const leadDistribution = z
   .strict()
   .refine((b) => !(b.never_called && b.never_assigned), {
     message: "Choose one kind of list",
-  })
-  .refine((b) => b.never_assigned || b.lead_ids.length <= 500, {
-    message: "Choose 1–500 distinct leads and 1–50 distinct agents",
   });
 // Attendance (update 040). Self-service bodies never carry a user id: the
 // employee always comes from the verified session.

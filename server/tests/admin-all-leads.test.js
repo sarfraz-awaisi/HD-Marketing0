@@ -240,7 +240,7 @@ describe("administrators' All leads (update 057)", () => {
     });
   });
 
-  it("selects up to 500 matching leads", async () => {
+  it("selects every matching lead, however many (update 087)", async () => {
     await newLead("Pick me", "+923000000010");
     await newLead("Pick me too", "+923000000011", { assigned_agent: ali });
     const { body } = await request(app())
@@ -255,14 +255,16 @@ describe("administrators' All leads (update 057)", () => {
         admin +
         "','t'); end loop; end $$",
     );
-    expect(
-      (
-        await request(app())
-          .get("/api/leads/all/selection")
-          .set(as(admin))
-          .expect(400)
-      ).body.error,
-    ).toBe("Choose filters that match 500 leads or fewer to select them all.");
+    const every = (
+      await request(app())
+        .get("/api/leads/all/selection")
+        .set(as(admin))
+        .expect(200)
+    ).body.ids;
+    expect(every.length).toBeGreaterThan(500);
+    expect(every.length).toBe(
+      (await one("select count(*)::int n from active_leads")).n,
+    );
   });
 
   it("assigns only the selected leads that have no agent, reporting each one", async () => {

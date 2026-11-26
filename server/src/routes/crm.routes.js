@@ -39,6 +39,7 @@ import {
   selectedAssignment,
   leadDistribution,
   leadIds,
+  manyLeadIds,
   erasePreviewIds,
   auditQuery,
   leadName,
@@ -52,7 +53,12 @@ import {
 import { normalizePhone, csvCell } from "../utils/phoneMask.js";
 import { callingProvider, callCapabilities } from "../services/cloudCalling.js";
 import { assign } from "../services/leadAssignment.js";
-import { distributeInParts } from "../services/leadDistribution.js";
+import {
+  distributeInParts,
+  eachPart,
+  partSize,
+  wholeRounds,
+} from "../services/leadDistribution.js";
 import { importLeadFile, fileRpc } from "../services/importFiles.js";
 import { documentsRouter } from "./documents.routes.js";
 import { accountsRouter } from "./accounts.routes.js";
@@ -311,16 +317,21 @@ export function crmRouter(db, options = {}) {
     async (req, res) => {
       const body = z
         .union([
-          z.object({ lead_ids: leadIds }).strict(),
+          z.object({ lead_ids: manyLeadIds }).strict(),
           z.object({ import_id: uuid }).strict(),
         ])
         .parse(req.body);
-      res.json(
-        await leadManagementRpc(db, "lead_delete_preview", {
+      const preview = (leads) =>
+        leadManagementRpc(db, "lead_delete_preview", {
           p_actor: req.user.id,
-          p_leads: body.lead_ids || null,
+          p_leads: leads,
           p_import: body.import_id || null,
-        }),
+        });
+      // Update 087: any number of selected leads, 500 to each call.
+      res.json(
+        body.lead_ids
+          ? await eachPart(preview, body.lead_ids)
+          : await preview(null),
       );
     },
   );
@@ -384,16 +395,22 @@ export function crmRouter(db, options = {}) {
   router.post("/leads/delete", adminOnly, sensitiveLimit, async (req, res) => {
     z.object({}).strict().parse(req.query);
     const body = z
-      .object({ lead_ids: leadIds, reason: deleteReason })
+      .object({ lead_ids: manyLeadIds, reason: deleteReason })
       .strict()
       .parse(req.body);
+    // Update 087: any number of leads, 500 to each call.
     res.json(
-      await leadManagementRpc(db, "delete_leads", {
-        p_lead_ids: body.lead_ids,
-        p_actor: req.user.id,
-        p_reason: body.reason,
-        p_request: req.id,
-      }),
+      await eachPart(
+        (part) =>
+          leadManagementRpc(db, "delete_leads", {
+            p_lead_ids: part,
+            p_actor: req.user.id,
+            p_reason: body.reason,
+            p_request: req.id,
+          }),
+        body.lead_ids,
+        "Not deleted: the CRM could not finish. Select it and delete it again.",
+      ),
     );
   });
   router.post("/leads/restore", adminOnly, sensitiveLimit, async (req, res) => {
@@ -754,7 +771,7 @@ export function crmRouter(db, options = {}) {
       if (ids && first && error.message === "Choose valid lead filters")
         throw Object.assign(
           new Error(
-            "Selecting the first leads needs CRM database update 086 after 085.",
+            "Selecting this many leads needs CRM database update 087 after 086.",
           ),
           { status: 503 },
         );
@@ -763,16 +780,12 @@ export function crmRouter(db, options = {}) {
           new Error("Never assigned needs CRM database update 084 after 083."),
           { status: 503 },
         );
-      // Update 086: before it, the database selects 500 leads at most.
-      if (
-        ids &&
-        q.never_assigned &&
-        error.message ===
-          "Choose filters that match 500 leads or fewer to select them all."
-      )
+      // Update 087: before it, the database selects 500 leads at most
+      // (2,000 on Never assigned, update 086).
+      if (ids && / leads or fewer to select them all\.$/.test(error.message))
         throw Object.assign(
           new Error(
-            "Selecting more than 500 Never assigned leads needs CRM database update 086 after 085.",
+            "Selecting this many leads needs CRM database update 087 after 086.",
           ),
           { status: 503 },
         );
@@ -842,18 +855,35 @@ export function crmRouter(db, options = {}) {
     sensitiveLimit,
     async (req, res) => {
       const body = unassignedAssignment.parse(req.body);
+      // Update 087: any number of leads, 500 to each call; round-robin in
+      // whole rounds of the active agents it shares among.
+      let size = partSize;
+      if (body.mode === "round_robin" && body.lead_ids.length > partSize) {
+        const agents = await db
+          .from("profiles")
+          .select("id")
+          .eq("role", "agent")
+          .eq("active", true);
+        size = wholeRounds(agents.data?.length || 1);
+      }
       res.json(
-        await salesRpc(
-          db,
-          "assign_unassigned_leads",
-          {
-            p_lead_ids: body.lead_ids,
-            p_actor: req.user.id,
-            p_mode: body.mode,
-            p_agent: body.agent_id || null,
-            p_request: req.id,
-          },
-          "057 after 056",
+        await eachPart(
+          (part) =>
+            salesRpc(
+              db,
+              "assign_unassigned_leads",
+              {
+                p_lead_ids: part,
+                p_actor: req.user.id,
+                p_mode: body.mode,
+                p_agent: body.agent_id || null,
+                p_request: req.id,
+              },
+              "057 after 056",
+            ),
+          body.lead_ids,
+          "Not assigned: the CRM could not finish. Select it and assign it again.",
+          size,
         ),
       );
     },
@@ -889,7 +919,8 @@ export function crmRouter(db, options = {}) {
   // leads or agents changed since the preview. Update 082: from a Never
   // called list, leads their agent has called since stay with that agent.
   // Update 084: from the Never assigned page, no lead goes to an agent it
-  // has had. Update 086: up to 2,000 from there, 500 to each call.
+  // has had. Update 086: up to 2,000 from there, 500 to each call; update
+  // 087: any number from any list.
   for (const [path, apply, limit] of [
     ["/leads/distribute/preview", false, reportLimit],
     ["/leads/distribute", true, sensitiveLimit],
@@ -919,14 +950,12 @@ export function crmRouter(db, options = {}) {
               : "062 after 061",
         );
       res.json(
-        body.never_assigned
-          ? await distributeInParts(call, {
-              ids: body.lead_ids,
-              agents: body.agent_ids,
-              apply,
-              token: body.token,
-            })
-          : await call(body.lead_ids, apply, body.token || null),
+        await distributeInParts(call, {
+          ids: body.lead_ids,
+          agents: body.agent_ids,
+          apply,
+          token: body.token,
+        }),
       );
     });
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
