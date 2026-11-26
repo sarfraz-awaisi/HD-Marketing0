@@ -8,7 +8,11 @@ import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
 import { useUrlFilters } from "../../lib/useUrlFilters";
 import { useLeadSelection } from "../../lib/useLeadSelection";
-import { callOutcomes, followUpNotice } from "../../lib/calls";
+import {
+  callOutcomes,
+  followUpNotice,
+  reassignableOutcomes,
+} from "../../lib/calls";
 import { firstCallState } from "../../lib/firstCall";
 import { temperatureText } from "../../lib/temperature";
 import {
@@ -35,6 +39,7 @@ import {
 } from "./LeadUsage";
 import { usageOption } from "../../lib/leadUsage";
 import AgentFilter from "./AgentFilter";
+import OutcomeFilter from "./OutcomeFilter";
 // Administrators' All leads (update 057), built like an agent's Assigned
 // leads: the database searches every lead by name or contact number (or an
 // HD number written with HD), applies the filters together and counts and
@@ -62,6 +67,9 @@ import AgentFilter from "./AgentFilter";
 // the agent filter (here: never assigned to any of them) and the call
 // outcome; its moves, one lead or many, go only to agents a lead has never
 // had, checked again when confirmed.
+// Update 088: Never assigned leaves out, in the database, the leads whose
+// latest saved call outcome shows an agent working on them; its call outcome
+// filter takes any of the other outcomes (outcomes: with commas).
 const callLabels = {
   uncalled: "New",
   missed: "Missed first call",
@@ -89,14 +97,15 @@ const keys = [
   "usage",
   "page",
 ];
-const neverKeys = ["q", "agent", "outcome", "page"];
+const neverKeys = ["q", "agent", "outcomes", "page"];
 // What the database is asked for, from the address.
 const query = (f, neverAssigned = false) =>
   neverAssigned
     ? {
         ...(f.q ? { search: f.q } : {}),
         ...(f.agent ? { never_assigned: f.agent } : {}),
-        ...(f.outcome ? { outcome: f.outcome } : {}),
+        ...(f.outcomes ? { outcomes: f.outcomes } : {}),
+        reassignable: "true",
       }
     : {
         ...(f.q ? { search: f.q } : {}),
@@ -230,6 +239,14 @@ export default function AdminLeadList({ neverAssigned = false }) {
     ...(f.outcome
       ? [[`Latest call: ${f.outcome}`, () => set({ outcome: null })]]
       : []),
+    ...(f.outcomes
+      ? [
+          [
+            `Latest call: ${f.outcomes.split(",").join(", ")}`,
+            () => set({ outcomes: null }),
+          ],
+        ]
+      : []),
     ...(f.source
       ? [[`Source: ${sourceLabel(f.source)}`, () => set({ source: null })]]
       : []),
@@ -243,7 +260,12 @@ export default function AdminLeadList({ neverAssigned = false }) {
       ? [[`Lead Usage: ${usageOption(f.usage)}`, () => set({ usage: null })]]
       : []),
   ];
-  const reset = () => change(Object.fromEntries(keys.map((k) => [k, null])));
+  const reset = () =>
+    change(
+      Object.fromEntries(
+        (neverAssigned ? neverKeys : keys).map((k) => [k, null]),
+      ),
+    );
   // Filters other than assignment, which the counts are about.
   const narrowed =
     chips.length > (!neverAssigned && (f.agent || f.assignment) ? 1 : 0);
@@ -323,7 +345,9 @@ export default function AdminLeadList({ neverAssigned = false }) {
       <p className="pipeline-count-note">
         {narrowed
           ? "Counts of the leads matching your search and filters."
-          : "Counts of every lead in the CRM, not in Deleted leads."}
+          : neverAssigned
+            ? "Counts of every lead in the CRM no agent is working on, not in Deleted leads."
+            : "Counts of every lead in the CRM, not in Deleted leads."}
       </p>
       <div className="toolbar lead-toolbar">
         <LeadSearch value={f.q} onSearch={(text) => set({ q: text })} />
@@ -373,18 +397,28 @@ export default function AdminLeadList({ neverAssigned = false }) {
             ))}
           </select>
         )}
-        <select
-          aria-label="Filter by call outcome"
-          value={f.outcome}
-          onChange={(e) => set({ outcome: e.target.value })}
-        >
-          <option value="">All call outcomes</option>
-          {callOutcomes.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
+        {neverAssigned ? (
+          <OutcomeFilter
+            options={reassignableOutcomes}
+            value={f.outcomes ? f.outcomes.split(",") : []}
+            onChange={(list) =>
+              set({ outcomes: list.length ? list.join(",") : null })
+            }
+          />
+        ) : (
+          <select
+            aria-label="Filter by call outcome"
+            value={f.outcome}
+            onChange={(e) => set({ outcome: e.target.value })}
+          >
+            <option value="">All call outcomes</option>
+            {callOutcomes.map((o) => (
+              <option key={o} value={o}>
+                {o}
+              </option>
+            ))}
+          </select>
+        )}
         {!neverAssigned && (
           <>
             <select

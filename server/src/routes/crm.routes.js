@@ -742,6 +742,8 @@ export function crmRouter(db, options = {}) {
   // Update 082: several agents go to the database as agents, one as agent.
   // Update 084: never_assigned, the leads none of these agents has had.
   // Update 086: first, only that many from the top of the list (selection).
+  // Update 088: reassignable and outcomes, the Never assigned page's call
+  // outcome rules.
   const adminLeads = async (req, ids) => {
     const { import_id, page, agent, first, ...q } = adminLeadsQuery.parse(
       req.query,
@@ -768,6 +770,14 @@ export function crmRouter(db, options = {}) {
     } catch (error) {
       const refused = countryRefusal(q, "Choose valid lead filters", error);
       if (refused !== error) throw refused;
+      if (
+        (q.reassignable || q.outcomes) &&
+        error.message === "Choose valid lead filters"
+      )
+        throw Object.assign(
+          new Error("Never assigned needs CRM database update 088 after 087."),
+          { status: 503 },
+        );
       if (ids && first && error.message === "Choose valid lead filters")
         throw Object.assign(
           new Error(

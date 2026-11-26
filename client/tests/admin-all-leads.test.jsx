@@ -968,10 +968,10 @@ describe("All leads: several agents and Never called (update 082)", () => {
 });
 
 describe("Never assigned page (update 084)", () => {
-  it("is in the Leads menu with only search, agent and call outcome filters, and asks for leads never assigned to the chosen agents", async () => {
+  it("is in the Leads menu with only search, agent and call outcome filters, and asks for leads never assigned to the chosen agents, by the outcomes chosen (update 088)", async () => {
     const user = userEvent.setup();
     rows[1] = { ...rows[1], agents_used: 3 };
-    open("/leads/never-assigned");
+    open("/leads/never-assigned?page=2");
     expect(
       await screen.findByRole("heading", { name: "Never assigned" }),
     ).toBeInTheDocument();
@@ -990,35 +990,91 @@ describe("Never assigned page (update 084)", () => {
     expect(screen.queryByRole("button", { name: /^Lead Usage/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Total/ })).toBeNull();
     expect(screen.getByText("Total")).toBeInTheDocument();
-    const outcome = screen.getByLabelText("Filter by call outcome");
-    expect(within(outcome).getAllByRole("option")[0]).toHaveTextContent(
-      "All call outcomes",
+    // Update 088: the page's rule goes with every request.
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe("/leads/all?reassignable=true&page=2"),
     );
+    expect(screen.queryByLabelText("Filter by call outcome")).toBeNull();
+    await user.click(
+      screen.getByRole("checkbox", { name: "Select Customer 1" }),
+    );
+    expect(await screen.findByText("1 lead selected")).toBeInTheDocument();
+    // Call outcomes as checkboxes: only those an agent is not working on.
+    await user.click(
+      screen.getByRole("button", {
+        name: "Filter by call outcome: Any call outcome",
+      }),
+    );
+    const outcomes = screen.getByRole("group", { name: "Call outcomes" });
     expect(
-      within(outcome)
-        .getAllByRole("option")
-        .slice(1)
-        .map((o) => o.value),
-    ).toEqual(callOutcomes);
+      within(outcomes)
+        .getAllByRole("checkbox")
+        .map((box) => box.parentElement.textContent),
+    ).toEqual([
+      "No answer",
+      "Busy",
+      "Wrong number",
+      "Number off",
+      "Not interested",
+    ]);
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe(
+        "/leads/all?" +
+          new URLSearchParams({
+            outcomes: "No answer,Busy,Wrong number,Number off,Not interested",
+            reassignable: "true",
+            page: 1,
+          }),
+      ),
+    );
+    // A changed filter: page 1, nothing selected.
+    expect(screen.queryByText("1 lead selected")).toBeNull();
+    expect(
+      screen.getByRole("button", {
+        name: "Filter by call outcome: 5 call outcomes",
+      }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe("/leads/all?reassignable=true&page=1"),
+    );
+    await user.click(within(outcomes).getByRole("checkbox", { name: "Busy" }));
+    await user.click(
+      within(outcomes).getByRole("checkbox", { name: "No answer" }),
+    );
     await user.click(
       screen.getByRole("button", { name: "Filter by agent: Any agent" }),
     );
     await user.click(screen.getByRole("checkbox", { name: "Ali Agent" }));
     await user.click(screen.getByRole("checkbox", { name: "Sara Agent" }));
-    await user.selectOptions(outcome, "No answer");
     await waitFor(() =>
       expect(listCalls().at(-1)).toBe(
         "/leads/all?" +
           new URLSearchParams({
             never_assigned: `${ali.id},${sara.id}`,
-            outcome: "No answer",
+            outcomes: "No answer,Busy",
+            reassignable: "true",
             page: 1,
           }),
       ),
     );
     expect(
+      screen.getByRole("button", {
+        name: "Filter by call outcome: No answer, Busy",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Latest call: No answer, Busy"),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText("Never assigned to Ali Agent, Sara Agent"),
     ).toBeInTheDocument();
+    // Reset filters clears the outcomes too.
+    await user.click(screen.getByRole("button", { name: /^Reset/ }));
+    await waitFor(() =>
+      expect(listCalls().at(-1)).toBe("/leads/all?reassignable=true&page=1"),
+    );
     expect(listCalls().some((p) => /[?&]agent=/.test(p))).toBe(false);
     // Lead Usage shows as in All leads.
     expect(

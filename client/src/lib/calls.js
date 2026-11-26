@@ -13,6 +13,18 @@ export const callOutcomes = [
   // Update 079: the customer answered and the opportunity is over.
   "Closed lost",
 ];
+// Update 088: the outcomes that show an agent working on a lead, which the
+// Never assigned page leaves out; it can filter by the others.
+export const workingOutcomes = [
+  "Interested",
+  "Follow-up required",
+  "Site visit scheduled",
+  "Deal discussion",
+  "Closed lost",
+];
+export const reassignableOutcomes = callOutcomes.filter(
+  (o) => !workingOutcomes.includes(o),
+);
 // Outcomes of a call that did not connect.
 export const unansweredOutcomes = [
   "No answer",
