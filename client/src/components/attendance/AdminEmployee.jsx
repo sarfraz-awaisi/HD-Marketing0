@@ -13,48 +13,98 @@ import { dayLabel, startOfMonth, todayPk } from "../../lib/calendar";
 import { Button, ErrorBox, Loader, Table } from "../common/UI";
 import { PunctualityBadge, RequestBadge, StateBadge } from "./Badges";
 import { ManageDayDialog } from "./AttendanceManage";
-// One employee's attendance over a date range, including disabled accounts.
+// One employee's attendance over a date range. Update 089: Active
+// employees and Inactive employees (disabled accounts, kept with their
+// attendance history until their final salary is settled) are separate
+// tabs; deleted accounts are never listed.
+const groups = [
+  ["active", "Active employees"],
+  ["inactive", "Inactive employees"],
+];
 export default function AdminEmployee({ userId, onSelect }) {
   const today = todayPk();
   const [from, setFrom] = useState(startOfMonth(today)),
     [to, setTo] = useState(today),
-    [managing, setManaging] = useState(null);
+    [managing, setManaging] = useState(null),
+    [picked, setPicked] = useState(null);
   const people = useQuery({
     queryKey: ["attendance-admin", "employees"],
     queryFn: ({ signal }) => api("/admin/attendance/employees", { signal }),
   });
   const list = Array.isArray(people.data) ? people.data : [];
+  const inGroup = (key) => list.filter((p) => p.active === (key === "active"));
+  // The tab chosen, or else the one of the employee in the address.
+  const current = list.find((p) => p.id === userId);
+  const group = picked || (current && !current.active ? "inactive" : "active");
+  const shown = inGroup(group);
+  const chosen = shown.some((p) => p.id === userId) ? userId : null;
+  const first = shown[0]?.id;
   useEffect(() => {
-    if (!userId && list[0]) onSelect(list[0].id);
-  }, [userId, list, onSelect]);
+    if (!chosen && first) onSelect(first);
+  }, [chosen, first, onSelect]);
   const q = useQuery({
-    queryKey: ["attendance-admin", "employee", userId, from, to],
+    queryKey: ["attendance-admin", "employee", chosen, from, to],
     queryFn: ({ signal }) =>
       api(
-        `/admin/attendance/employees/${userId}?` +
+        `/admin/attendance/employees/${chosen}?` +
           new URLSearchParams({ from, to }),
         { signal },
       ),
-    enabled: Boolean(userId) && from <= to,
+    enabled: Boolean(chosen) && from <= to,
   });
   const d = q.data,
     t = d?.totals || {};
   return (
     <>
+      <div className="review-tabs" role="tablist" aria-label="Employees">
+        {groups.map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={group === key}
+            className={group === key ? "active" : ""}
+            onClick={() => setPicked(key)}
+          >
+            {label}
+            {people.data && (
+              <>
+                {" "}
+                <b>{inGroup(key).length}</b>
+              </>
+            )}
+          </button>
+        ))}
+      </div>
+      {group === "inactive" && (
+        <p className="field-hint">
+          Disabled accounts, with their attendance history kept for the final
+          salary. Deleting an account removes the employee from Attendance
+          Management.
+        </p>
+      )}
+      {people.data && !shown.length && (
+        <div className="empty">
+          {group === "inactive"
+            ? "No inactive employees. When an employee leaves, disable their account in Accounts to review their attendance here."
+            : "No active employees with attendance yet."}
+        </div>
+      )}
       <div className="toolbar">
-        <select
-          aria-label="Employee"
-          value={userId || ""}
-          onChange={(e) => onSelect(e.target.value)}
-        >
-          {list.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.uid ? ` · UID ${p.uid}` : ""}
-              {p.active ? "" : " (inactive)"}
-            </option>
-          ))}
-        </select>
+        {shown.length > 0 && (
+          <select
+            aria-label="Employee"
+            value={chosen || ""}
+            onChange={(e) => onSelect(e.target.value)}
+          >
+            {shown.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.uid ? ` · UID ${p.uid}` : ""}
+              </option>
+            ))}
+          </select>
+        )}
         <label>
           From
           <input
@@ -79,7 +129,7 @@ export default function AdminEmployee({ userId, onSelect }) {
           (from > to && "The range must end on or after its start.")
         }
       />
-      {q.isPending && userId ? (
+      {q.isPending && chosen ? (
         <Loader />
       ) : d ? (
         <>
@@ -192,7 +242,7 @@ export default function AdminEmployee({ userId, onSelect }) {
             />
             {managing && (
               <ManageDayDialog
-                userId={userId}
+                userId={chosen}
                 day={managing}
                 name={d.employee.name}
                 onClose={() => setManaging(null)}
@@ -256,10 +306,7 @@ export default function AdminEmployee({ userId, onSelect }) {
             </section>
           </div>
         </>
-      ) : (
-        !people.isPending &&
-        !list.length && <div className="empty">No employees yet.</div>
-      )}
+      ) : null}
     </>
   );
 }
