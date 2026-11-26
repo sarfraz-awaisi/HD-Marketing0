@@ -52,6 +52,7 @@ import {
 import { normalizePhone, csvCell } from "../utils/phoneMask.js";
 import { callingProvider, callCapabilities } from "../services/cloudCalling.js";
 import { assign } from "../services/leadAssignment.js";
+import { distributeInParts } from "../services/leadDistribution.js";
 import { importLeadFile, fileRpc } from "../services/importFiles.js";
 import { documentsRouter } from "./documents.routes.js";
 import { accountsRouter } from "./accounts.routes.js";
@@ -723,8 +724,11 @@ export function crmRouter(db, options = {}) {
   // 057 refuses them, after this server has already checked them.
   // Update 082: several agents go to the database as agents, one as agent.
   // Update 084: never_assigned, the leads none of these agents has had.
+  // Update 086: first, only that many from the top of the list (selection).
   const adminLeads = async (req, ids) => {
-    const { import_id, page, agent, ...q } = adminLeadsQuery.parse(req.query);
+    const { import_id, page, agent, first, ...q } = adminLeadsQuery.parse(
+      req.query,
+    );
     try {
       return await salesRpc(
         db,
@@ -739,7 +743,7 @@ export function crmRouter(db, options = {}) {
                 ? { agent: agent[0] }
                 : {}),
             ...(import_id ? { import: import_id } : {}),
-            ...(ids ? { ids: true } : { page }),
+            ...(ids ? { ids: true, ...(first ? { first } : {}) } : { page }),
           },
         },
         "057 after 056",
@@ -747,9 +751,29 @@ export function crmRouter(db, options = {}) {
     } catch (error) {
       const refused = countryRefusal(q, "Choose valid lead filters", error);
       if (refused !== error) throw refused;
+      if (ids && first && error.message === "Choose valid lead filters")
+        throw Object.assign(
+          new Error(
+            "Selecting the first leads needs CRM database update 086 after 085.",
+          ),
+          { status: 503 },
+        );
       if (q.never_assigned && error.message === "Choose valid lead filters")
         throw Object.assign(
           new Error("Never assigned needs CRM database update 084 after 083."),
+          { status: 503 },
+        );
+      // Update 086: before it, the database selects 500 leads at most.
+      if (
+        ids &&
+        q.never_assigned &&
+        error.message ===
+          "Choose filters that match 500 leads or fewer to select them all."
+      )
+        throw Object.assign(
+          new Error(
+            "Selecting more than 500 Never assigned leads needs CRM database update 086 after 085.",
+          ),
           { status: 503 },
         );
       if (
@@ -865,15 +889,15 @@ export function crmRouter(db, options = {}) {
   // leads or agents changed since the preview. Update 082: from a Never
   // called list, leads their agent has called since stay with that agent.
   // Update 084: from the Never assigned page, no lead goes to an agent it
-  // has had.
+  // has had. Update 086: up to 2,000 from there, 500 to each call.
   for (const [path, apply, limit] of [
     ["/leads/distribute/preview", false, reportLimit],
     ["/leads/distribute", true, sensitiveLimit],
   ])
     router.post(path, adminOnly, limit, async (req, res) => {
       const body = leadDistribution.parse(req.body);
-      res.json(
-        await salesRpc(
+      const call = (ids, carry, token) =>
+        salesRpc(
           db,
           body.never_assigned
             ? "admin_distribute_never_assigned"
@@ -882,10 +906,10 @@ export function crmRouter(db, options = {}) {
               : "admin_distribute_leads",
           {
             p_actor: req.user.id,
-            p_lead_ids: body.lead_ids,
+            p_lead_ids: ids,
             p_agents: body.agent_ids,
-            p_apply: apply,
-            p_token: body.token || null,
+            p_apply: carry,
+            p_token: token,
             p_request: req.id,
           },
           body.never_assigned
@@ -893,7 +917,16 @@ export function crmRouter(db, options = {}) {
             : body.never_called
               ? "082 after 081"
               : "062 after 061",
-        ),
+        );
+      res.json(
+        body.never_assigned
+          ? await distributeInParts(call, {
+              ids: body.lead_ids,
+              agents: body.agent_ids,
+              apply,
+              token: body.token,
+            })
+          : await call(body.lead_ids, apply, body.token || null),
       );
     });
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
