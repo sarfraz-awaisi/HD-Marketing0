@@ -13,6 +13,7 @@ import {
   dealerChanges,
   dealerDecision,
   dealerChangeDecision,
+  dealerBulk,
 } from "../utils/validators.js";
 // Dealer affiliate network (update 049). Every handler runs after the shared
 // auth middleware; staff never reach it (staffAccess). The signed-in account
@@ -198,6 +199,84 @@ export function dealersRouter(db) {
         );
       },
     );
+  // Bulk actions on the selected dealers (administrators): Delete, or
+  // Approve or Reject pending dealers. Each dealer goes through the same
+  // database function as its own action, in its own transaction, so the
+  // database checks the administrator and the dealer again and records the
+  // usual audit entry. A dealer changed after it was selected is left as it
+  // is and reported, as is one that cannot be done; the others go ahead.
+  router.post("/bulk", adminOnly, sensitiveLimit, async (req, res) => {
+    const body = dealerBulk.parse(req.body || {});
+    const results = [];
+    let stopped = null;
+    for (const item of body.dealers) {
+      if (stopped) {
+        results.push({ id: item.id, result: "failed", reason: stopped });
+        continue;
+      }
+      try {
+        let dealer;
+        if (body.action === "delete") {
+          const now = await call(req, "dealer_detail", { p_id: item.id });
+          if (!now.deleted_at && now.updated_at !== item.expected_updated_at)
+            throw Object.assign(
+              new Error(
+                "Changed after you selected it. Check it and delete it again.",
+              ),
+              { status: 409 },
+            );
+          dealer = await call(req, "dealer_delete", {
+            p_id: item.id,
+            p_reason: body.reason || null,
+            p_request: req.id,
+          });
+        } else
+          dealer = await attendanceRpc(
+            db,
+            "dealer_review",
+            {
+              p_actor: req.user.id,
+              p_id: item.id,
+              p_decision: body.action === "approve" ? "approved" : "rejected",
+              p_reason: body.action === "reject" ? body.reason || null : null,
+              p_expected: item.expected_updated_at,
+              p_request: req.id,
+            },
+            update059,
+          );
+        results.push({
+          id: item.id,
+          reference: dealer.reference,
+          name: dealer.name,
+          result: dealer.unchanged ? "unchanged" : "done",
+        });
+      } catch (error) {
+        // A dealer's own problem (not found, changed, already reviewed) is
+        // reported; anything else stops the rest, which are reported too.
+        if (error.status >= 400 && error.status < 500 && error.status !== 403) {
+          results.push({
+            id: item.id,
+            result: "failed",
+            reason: error.message,
+          });
+          continue;
+        }
+        if (!results.some((r) => r.result !== "failed")) throw error;
+        stopped =
+          "Not done: the CRM could not finish. Select it and try again.";
+        results.push({ id: item.id, result: "failed", reason: stopped });
+      }
+    }
+    const count = (result) => results.filter((r) => r.result === result).length;
+    res.json({
+      action: body.action,
+      done: count("done"),
+      unchanged: count("unchanged"),
+      failed: count("failed"),
+      ...(stopped ? { partial: true } : {}),
+      results,
+    });
+  });
   router.post("/:id/delete", adminOnly, sensitiveLimit, async (req, res) => {
     const data = dealerReason.parse(req.body || {});
     res.json(

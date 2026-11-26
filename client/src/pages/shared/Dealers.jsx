@@ -5,6 +5,7 @@ import { CircleCheck, CircleX, Clock, Copy, Pencil, Store } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { api, date } from "../../lib/api";
 import { useDebouncedValue } from "../../lib/useDebouncedValue";
+import { useLeadSelection } from "../../lib/useLeadSelection";
 import { dealerSorts, formatDealerPhone } from "../../lib/dealers";
 import { KpiTile } from "../../components/dashboard/Widgets";
 import {
@@ -28,7 +29,9 @@ import "../../styles/dealers.css";
 // The server decides what each person may see: an agent's list, counts and
 // search only ever contain their own dealers. Update 059: agents edit their
 // own dealers; changes to an approved dealer wait for an administrator, and
-// Edit requests lists those dealers.
+// Edit requests lists those dealers. Administrators select dealers (kept
+// while paging, cleared when the tab or a filter changes) and act on them
+// together: Delete, or Approve or Reject pending dealers (BulkDialog).
 const tabsFor = (admin) => [
   ["all", "All"],
   ["pending", "Pending"],
@@ -44,6 +47,137 @@ const blankFilters = {
   duplicates: false,
 };
 const limit = 20;
+// Bulk actions: up to 200 dealers at a time.
+const bulkMax = 200;
+const bulkActions = {
+  delete: ["Delete", "Deleting…", "deleted"],
+  approve: ["Approve", "Approving…", "approved"],
+  reject: ["Reject", "Rejecting…", "rejected"],
+};
+const plural = (n, one = "dealer") =>
+  `${n.toLocaleString("en-US")} ${n === 1 ? one : one + "s"}`;
+
+// Confirms a bulk action on the selected dealers and shows what was done.
+// The server checks each dealer again and leaves out any changed since it
+// was selected; the button is busy until the reply, so it is sent once.
+function BulkDialog({ action, dealers, onClose, onDone }) {
+  const [reason, setReason] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState(""),
+    [result, setResult] = useState(null);
+  const [verb, busyText, past] = bulkActions[action];
+  const names = new Map(dealers.map((d) => [d.id, d]));
+  async function confirm() {
+    setBusy(true);
+    setError("");
+    try {
+      const reply = await api("/dealers/bulk", {
+        method: "POST",
+        body: {
+          action,
+          dealers: dealers.map((d) => ({
+            id: d.id,
+            expected_updated_at: d.updated_at,
+          })),
+          ...(action !== "approve" && reason.trim()
+            ? { reason: reason.trim() }
+            : {}),
+        },
+      });
+      const failed = reply.results.filter((r) => r.result === "failed");
+      onDone(reply, failed);
+      if (failed.length) setResult(reply);
+      else onClose();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Modal
+      title={`${verb} ${plural(dealers.length)}`}
+      onClose={() => !busy && onClose()}
+    >
+      <ErrorBox error={error} />
+      {result ? (
+        <>
+          <p role="status">
+            {plural(result.done + result.unchanged)} {past}.{" "}
+            {plural(result.failed)} not {past}:
+          </p>
+          <ul className="dealer-bulk-failed">
+            {result.results
+              .filter((r) => r.result === "failed")
+              .map((r) => (
+                <li key={r.id}>
+                  <strong>
+                    {names.get(r.id)?.reference} {names.get(r.id)?.name}
+                  </strong>
+                  : {r.reason}
+                </li>
+              ))}
+          </ul>
+          <p className="field-hint">
+            They stay selected, so you can check them and try again.
+          </p>
+          <div className="actions">
+            <Button onClick={onClose}>Done</Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p>
+            {action === "delete"
+              ? "These dealers leave every list, including the agents'. Each can be restored from Deleted; their details, change requests and history stay."
+              : action === "approve"
+                ? "These pending dealers become approved."
+                : "These pending dealers are rejected; their agents see the reason and can correct and resubmit them."}{" "}
+            A dealer changed after you selected it is left as it is.
+          </p>
+          <ul className="dealer-bulk-list">
+            {dealers.slice(0, 10).map((d) => (
+              <li key={d.id}>
+                {d.reference} · {d.name}
+              </li>
+            ))}
+            {dealers.length > 10 && (
+              <li>and {plural(dealers.length - 10, "more dealer")}</li>
+            )}
+          </ul>
+          {action !== "approve" && (
+            <label>
+              Reason (optional)
+              <input
+                maxLength={300}
+                value={reason}
+                disabled={busy}
+                onChange={(e) => setReason(e.target.value)}
+              />
+            </label>
+          )}
+          <div className="actions">
+            <Button
+              variant="secondary"
+              disabled={busy}
+              autoFocus
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant={action === "approve" ? undefined : "danger"}
+              disabled={busy}
+              onClick={confirm}
+            >
+              {busy ? busyText : `${verb} ${plural(dealers.length)}`}
+            </Button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
 
 function Tabs({ tabs, tab, counts, onChange }) {
   const refs = useRef({});
@@ -103,7 +237,10 @@ export default function Dealers() {
     : "all";
   const [filters, setFilters] = useState(blankFilters),
     [page, setPage] = useState(1),
-    [modal, setModal] = useState(null);
+    [modal, setModal] = useState(null),
+    [menu, setMenu] = useState(false),
+    [bulk, setBulk] = useState(null),
+    [error, setError] = useState("");
   const debounced = useDebouncedValue(filters);
   const query = new URLSearchParams({ page, limit });
   if (tab === "deleted") query.set("view", "deleted");
@@ -118,6 +255,43 @@ export default function Dealers() {
     queryFn: ({ signal }) => api("/dealers?" + query, { signal }),
     placeholderData: (previous) => previous,
   });
+  // Selection for bulk actions (administrators; not in Deleted): the list
+  // without its page, so paging keeps it and any other change clears it.
+  // Each selected dealer is remembered as last listed, for its version.
+  const selectable = admin && tab !== "deleted";
+  const listKey = new URLSearchParams(query);
+  listKey.delete("page");
+  const selection = useLeadSelection(listKey.toString(), bulkMax);
+  const seen = useRef(new Map());
+  for (const d of list.data?.data || []) seen.current.set(d.id, d);
+  const selected = selection.ids.map((id) => seen.current.get(id));
+  const allPending =
+    selected.length > 0 && selected.every((d) => d?.status === "pending");
+  const clearSelection = () => {
+    selection.clear();
+    setMenu(false);
+  };
+  async function selectAll() {
+    setError("");
+    const total = list.data?.count ?? 0;
+    if (total > bulkMax)
+      return setError(
+        `Select all takes up to ${bulkMax} dealers. Narrow the filters first.`,
+      );
+    try {
+      const found = [];
+      for (let p = 1; p <= Math.ceil(total / 100); p++) {
+        const q = new URLSearchParams(listKey);
+        q.set("page", p);
+        q.set("limit", 100);
+        found.push(...(await api("/dealers?" + q)).data);
+      }
+      for (const d of found) seen.current.set(d.id, d);
+      selection.replace(found.map((d) => d.id));
+    } catch (e) {
+      setError(e.message);
+    }
+  }
   const people = useQuery({
     queryKey: ["users"],
     queryFn: ({ signal }) => api("/users", { signal }),
@@ -374,11 +548,75 @@ export default function Dealers() {
             </Button>
           )}
         </div>
-        <ErrorBox error={list.error} />
+        <ErrorBox error={error || list.error} />
+        {selectable && rows.length > 0 && (
+          <div className="lead-selection-tools dealer-selection-tools">
+            <div>
+              <Button variant="secondary" onClick={selectAll}>
+                Select all {plural(list.data.count, "matching dealer")}
+              </Button>
+            </div>
+            {selection.ids.length > 0 && (
+              <div
+                className="bulk-action-bar"
+                role="toolbar"
+                aria-label="Selected dealer actions"
+              >
+                <b>{plural(selection.ids.length)} selected</b>
+                <Button
+                  aria-expanded={menu}
+                  aria-controls="dealer-bulk-menu"
+                  onClick={() => setMenu((open) => !open)}
+                >
+                  Bulk actions
+                </Button>
+                <Button variant="secondary" onClick={clearSelection}>
+                  Clear selection
+                </Button>
+                {menu && (
+                  <div
+                    id="dealer-bulk-menu"
+                    className="dealer-bulk-menu"
+                    role="group"
+                    aria-label="Bulk actions"
+                  >
+                    <Button variant="danger" onClick={() => setBulk("delete")}>
+                      Delete selected
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={!allPending}
+                      onClick={() => setBulk("approve")}
+                    >
+                      Approve selected
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={!allPending}
+                      onClick={() => setBulk("reject")}
+                    >
+                      Reject selected
+                    </Button>
+                    {!allPending && (
+                      <p className="field-hint">
+                        Approve and Reject are for pending dealers only: select
+                        them in Pending.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {list.isPending ? (
           <Loader />
         ) : rows.length ? (
-          <Table columns={columns} rows={rows} />
+          <Table
+            columns={columns}
+            rows={rows}
+            selection={selectable ? selection : undefined}
+          />
         ) : list.error ? null : (
           <div className="panel empty">
             {filtered || tab !== "all"
@@ -395,6 +633,23 @@ export default function Dealers() {
           onPage={setPage}
         />
       </section>
+      {bulk && (
+        <BulkDialog
+          action={bulk}
+          dealers={selected.filter(Boolean)}
+          onClose={() => setBulk(null)}
+          onDone={(reply, failed) => {
+            refresh();
+            // Only the dealers not done stay selected.
+            selection.replace(failed.map((r) => r.id));
+            setMenu(false);
+            toast(
+              `${plural(reply.done + reply.unchanged)} ${bulkActions[bulk][2]}` +
+                (failed.length ? `, ${plural(failed.length)} not` : ""),
+            );
+          }}
+        />
+      )}
       {modal && (
         <Modal
           className="dealer-dialog"
