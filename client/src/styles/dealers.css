@@ -185,3 +185,23 @@ dialog.dealer-dialog {
     white-space: normal;
   }
 }
+
+/* Bulk actions on selected dealers (administrators). */
+.dealer-bulk-menu {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dealer-bulk-menu .field-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+.dealer-bulk-list,
+.dealer-bulk-failed {
+  max-height: 220px;
+  margin: 0 0 12px;
+  padding-left: 20px;
+  overflow-y: auto;
+}

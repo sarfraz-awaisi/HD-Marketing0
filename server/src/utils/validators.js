@@ -1693,6 +1693,28 @@ export const dealerChangeDecision = z
     expected_dealer_updated_at: z.iso.datetime({ offset: true }),
   })
   .strict();
+// Administrators' bulk actions on selected dealers: Delete, or Approve or
+// Reject pending dealers, each from the version selected.
+export const dealerBulk = z
+  .object({
+    action: z.enum(["delete", "approve", "reject"]),
+    dealers: z
+      .array(
+        z
+          .object({
+            id: uuid,
+            expected_updated_at: z.iso.datetime({ offset: true }),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(200)
+      .refine((list) => new Set(list.map((d) => d.id)).size === list.length, {
+        message: "Choose each dealer once",
+      }),
+    reason: z.string().trim().max(300).optional(),
+  })
+  .strict();
 export const dealerListQuery = z
   .object({
     ...pageFields,

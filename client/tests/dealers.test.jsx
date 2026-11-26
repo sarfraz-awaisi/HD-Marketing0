@@ -518,3 +518,267 @@ describe("administrators", () => {
     ]);
   });
 });
+
+// Bulk actions on selected dealers (administrators): the server checks the
+// role, each dealer and its version again (server/tests/dealer-bulk.test.js).
+describe("administrators' bulk actions", () => {
+  const many = Array.from({ length: 25 }, (_, i) => ({
+    ...pending,
+    id: "m" + (i + 1),
+    reference: "DL-0001" + String(i + 1).padStart(2, "0"),
+    name: "Dealer " + (i + 1),
+    updated_at: `2026-11-05T05:00:${String(i).padStart(2, "0")}.5+00:00`,
+  }));
+  let reply, hold;
+  beforeEach(() => {
+    reply = null;
+    hold = null;
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) => {
+      if (path === "/dealers/bulk") {
+        sent.push([path, options.method, options.body]);
+        if (hold) await hold;
+        return (
+          reply || {
+            action: options.body.action,
+            done: options.body.dealers.length,
+            unchanged: 0,
+            failed: 0,
+            results: options.body.dealers.map((d) => ({
+              id: d.id,
+              result: "done",
+            })),
+          }
+        );
+      }
+      return base(path, options);
+    });
+  });
+  // A list of 25 pending dealers, paged as the server pages it.
+  const manyDealers = () => {
+    const base = mocks.api.getMockImplementation();
+    mocks.api.mockImplementation(async (path, options) => {
+      if (path.startsWith("/dealers?")) {
+        const q = new URLSearchParams(path.split("?")[1]);
+        const page = Number(q.get("page")),
+          limit = Number(q.get("limit"));
+        const matching = q.get("search") ? many.slice(0, 1) : many;
+        return {
+          count: matching.length,
+          page,
+          limit,
+          summary: { total: 25, pending: 25, approved: 0, rejected: 0 },
+          data: matching.slice((page - 1) * limit, page * limit).map(forAdmin),
+        };
+      }
+      return base(path, options);
+    });
+  };
+  const bar = () =>
+    screen.queryByRole("toolbar", { name: "Selected dealer actions" });
+
+  it("select one by one or a page, keep the choice across pages, and clear it when a filter changes", async () => {
+    manyDealers();
+    open(admin);
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: "Select Dealer 1" }),
+    );
+    expect(within(bar()).getByText("1 dealer selected")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select all on this page" }),
+    );
+    expect(within(bar()).getByText("20 dealers selected")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: "Select Dealer 21" }),
+    );
+    expect(within(bar()).getByText("21 dealers selected")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Previous" }));
+    expect(
+      await screen.findByRole("checkbox", { name: "Select Dealer 1" }),
+    ).toBeChecked();
+    fireEvent.change(screen.getByLabelText("Search dealers"), {
+      target: { value: "Dealer 1" },
+    });
+    await waitFor(() => expect(bar()).toBeNull());
+    expect(
+      await screen.findByRole("button", {
+        name: "Select all 1 matching dealer",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("Select all takes every matching dealer, from every page", async () => {
+    manyDealers();
+    open(admin);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Select all 25 matching dealers",
+      }),
+    );
+    expect(
+      await within(await screen.findByRole("toolbar")).findByText(
+        "25 dealers selected",
+      ),
+    ).toBeInTheDocument();
+    expect(listCalls().at(-1)).toBe("/dealers?limit=100&page=1");
+  });
+
+  it("delete asks first: Cancel sends nothing; Confirm sends once, with each dealer's version, then clears the selection", async () => {
+    open(admin);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Select all 2 matching dealers",
+      }),
+    );
+    await waitFor(() => expect(bar()).not.toBeNull());
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Bulk actions" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    let dialog = await screen.findByRole("dialog", {
+      name: "Delete 2 dealers",
+    });
+    expect(
+      within(dialog).getByText("DL-000012 · Khan Estate"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("DL-000013 · Old Office"),
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sent).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    dialog = await screen.findByRole("dialog", { name: "Delete 2 dealers" });
+    fireEvent.change(within(dialog).getByLabelText("Reason (optional)"), {
+      target: { value: " Closed " },
+    });
+    let release;
+    hold = new Promise((resolve) => (release = resolve));
+    const confirm = within(dialog).getByRole("button", {
+      name: "Delete 2 dealers",
+    });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(
+      within(dialog).getByRole("button", { name: "Deleting…" }),
+    ).toBeDisabled();
+    release();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(sent).toEqual([
+      [
+        "/dealers/bulk",
+        "POST",
+        {
+          action: "delete",
+          dealers: [
+            { id: "d1", expected_updated_at: pending.updated_at },
+            { id: "d2", expected_updated_at: rejected.updated_at },
+          ],
+          reason: "Closed",
+        },
+      ],
+    ]);
+    expect(await screen.findByText("2 dealers deleted")).toBeInTheDocument();
+    expect(bar()).toBeNull();
+  });
+
+  it("says which dealers were not done and why, and keeps only those selected", async () => {
+    reply = {
+      action: "delete",
+      done: 1,
+      unchanged: 0,
+      failed: 1,
+      results: [
+        { id: "d1", result: "done" },
+        {
+          id: "d2",
+          result: "failed",
+          reason:
+            "Changed after you selected it. Check it and delete it again.",
+        },
+      ],
+    };
+    open(admin);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Select all 2 matching dealers",
+      }),
+    );
+    await waitFor(() => expect(bar()).not.toBeNull());
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Bulk actions" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete selected" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Delete 2 dealers",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Delete 2 dealers" }),
+    );
+    expect(
+      await within(dialog).findByText(
+        /1 dealer deleted\. 1 dealer not deleted/,
+      ),
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "DL-000013 Old Office: Changed after you selected it. Check it and delete it again.",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(within(bar()).getByText("1 dealer selected")).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "Select Old Office" }),
+    ).toBeChecked();
+  });
+
+  it("approve and reject only pending dealers", async () => {
+    open(admin);
+    fireEvent.click(
+      await screen.findByRole("checkbox", { name: "Select Old Office" }),
+    );
+    fireEvent.click(
+      within(bar()).getByRole("button", { name: "Bulk actions" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Approve selected" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Reject selected" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/Approve and Reject are for pending dealers only/),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Old Office" }),
+    );
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Select Khan Estate" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve selected" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Approve 1 dealer",
+    });
+    expect(within(dialog).queryByLabelText("Reason (optional)")).toBeNull();
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Approve 1 dealer" }),
+    );
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0][2]).toEqual({
+      action: "approve",
+      dealers: [{ id: "d1", expected_updated_at: pending.updated_at }],
+    });
+  });
+
+  it("are not offered to agents", async () => {
+    open(agent);
+    expect(await screen.findByText("Khan Estate")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /^Select/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Select all/ })).toBeNull();
+  });
+
+  it("are not offered in Deleted", async () => {
+    open(admin, "/dealers?tab=deleted");
+    expect(await screen.findByText("Khan Estate")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /^Select/ })).toBeNull();
+  });
+});
