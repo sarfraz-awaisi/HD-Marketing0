@@ -317,6 +317,32 @@ export const adminLeadsQuery = z
     lost_reason: z.enum(lostReasons).optional(),
     temperature: z.enum(["hot", "warm", "cold", "none"]).optional(),
     outcome: z.enum(outcomes).optional(),
+    // Update 088: Never assigned (reassignable) leaves out the leads an
+    // agent is working on, by the latest saved call outcome; outcomes keeps
+    // any of the other five, separated by commas.
+    reassignable: z
+      .literal("true")
+      .transform(() => true)
+      .optional(),
+    outcomes: z
+      .string()
+      .transform((s) => s.split(","))
+      .pipe(
+        z
+          .array(
+            z.enum([
+              "No answer",
+              "Busy",
+              "Wrong number",
+              "Number off",
+              "Not interested",
+            ]),
+          )
+          .min(1)
+          .max(5)
+          .refine((list) => new Set(list).size === list.length),
+      )
+      .optional(),
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     import_id: uuid.optional(),
     country: countryFilter,
@@ -330,6 +356,9 @@ export const adminLeadsQuery = z
   .strict()
   .refine((q) => !(q.agent && q.assignment === "unassigned"), {
     message: "An agent's leads are assigned leads",
+  })
+  .refine((q) => !(q.outcome && q.outcomes), {
+    message: "Choose the call outcomes in one filter",
   });
 // Administrators' Lead pipeline (update 055): the agents, by name or UID,
 // then one agent's pipeline, current or earlier contacts.

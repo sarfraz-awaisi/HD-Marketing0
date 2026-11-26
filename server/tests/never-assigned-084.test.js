@@ -157,7 +157,7 @@ describe("Never assigned list (update 084)", () => {
         answered: true,
         started_at: new Date(Date.now() - 600000).toISOString(),
         duration_seconds: 60,
-        outcome: "Interested",
+        outcome: "Not interested",
         notes: "Called",
         deal_tags: [],
       }),
@@ -172,8 +172,14 @@ describe("Never assigned list (update 084)", () => {
       )
     ).phone;
     expect(ids(await never([abru], { search: number.slice(-7) }))).toEqual([c]);
-    expect(ids(await never([abru], { outcome: "Interested" }))).toEqual([a]);
-    expect(ids(await never([alisha], { outcome: "Interested" }))).toEqual([]);
+    expect(ids(await never([abru], { outcome: "Not interested" }))).toEqual([
+      a,
+    ]);
+    expect(ids(await never([alisha], { outcome: "Not interested" }))).toEqual(
+      [],
+    );
+    // Update 088: a lead an agent is working on is left out.
+    expect(ids(await never([abru], { outcome: "Interested" }))).toEqual([]);
     await list({ never_assigned: abru, outcome: "Maybe" }, admin, 400);
   });
 
