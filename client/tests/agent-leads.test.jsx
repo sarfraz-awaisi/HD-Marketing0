@@ -226,7 +226,17 @@ describe("Assigned leads", () => {
       "Sort leads",
     ])
       expect(screen.queryByLabelText(label)).toBe(null);
-    expect(screen.getByLabelText("Filter by first call")).toBeInTheDocument();
+    // The first-call states: "New" is the uncalled filter, as before.
+    expect(
+      [...screen.getByLabelText("Filter by first call").options].map((o) => [
+        o.value,
+        o.textContent,
+      ]),
+    ).toEqual([
+      ["", "Any first-call state"],
+      ["uncalled", "New"],
+      ["missed", "Missed first call"],
+    ]);
     expect(screen.getByLabelText("Search leads")).toHaveAttribute(
       "placeholder",
       "Search by name or phone number…",
