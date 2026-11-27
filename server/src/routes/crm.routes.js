@@ -38,6 +38,9 @@ import {
   unassignedAssignment,
   selectedAssignment,
   leadDistribution,
+  autoAssignPreview,
+  autoAssignSave,
+  autoAssignState,
   leadIds,
   manyLeadIds,
   erasePreviewIds,
@@ -61,6 +64,7 @@ import {
   wholeRounds,
 } from "../services/leadDistribution.js";
 import { importLeadFile, fileRpc } from "../services/importFiles.js";
+import { autoAssignRpc, runAutoAssign } from "../services/autoAssign.js";
 import { documentsRouter } from "./documents.routes.js";
 import { accountsRouter } from "./accounts.routes.js";
 import { securityRouter } from "./security.routes.js";
@@ -984,6 +988,78 @@ export function crmRouter(db, options = {}) {
           : await distributeInParts(call, job),
       );
     });
+  // Update 091: automatic lead distribution (All leads → Unassigned → Auto
+  // Assign Settings). Administrators only, here and in the database. The
+  // worker's job autoAssignLeads assigns the batches; Run now assigns the
+  // complete batches waiting at once, through the same database function.
+  router.get("/leads/auto-assign", adminOnly, async (req, res) =>
+    res
+      .set("Cache-Control", "no-store")
+      .json(
+        await autoAssignRpc(db, "auto_assign_status", { p_actor: req.user.id }),
+      ),
+  );
+  router.post(
+    "/leads/auto-assign/preview",
+    adminOnly,
+    reportLimit,
+    async (req, res) => {
+      const body = autoAssignPreview.parse(req.body);
+      res.json(
+        await autoAssignRpc(db, "auto_assign_preview", {
+          p_actor: req.user.id,
+          p_batch: body.batch_size,
+          p_rules: body.agents,
+          p_scope: body.scope,
+        }),
+      );
+    },
+  );
+  router.put(
+    "/leads/auto-assign",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const body = autoAssignSave.parse(req.body);
+      res.json(
+        await autoAssignRpc(db, "auto_assign_save", {
+          p_actor: req.user.id,
+          p_version: body.version,
+          p_state: body.state,
+          p_batch: body.batch_size,
+          p_scope: body.scope,
+          p_rules: body.agents,
+          p_request: req.id,
+        }),
+      );
+    },
+  );
+  router.post(
+    "/leads/auto-assign/state",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      const body = autoAssignState.parse(req.body);
+      res.json(
+        await autoAssignRpc(db, "auto_assign_state", {
+          p_actor: req.user.id,
+          p_state: body.state,
+          p_request: req.id,
+        }),
+      );
+    },
+  );
+  router.post(
+    "/leads/auto-assign/run",
+    adminOnly,
+    sensitiveLimit,
+    async (req, res) => {
+      z.object({})
+        .strict()
+        .parse(req.body ?? {});
+      res.json(await runAutoAssign(db, req.user.id, req.id));
+    },
+  );
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {
     const q = listQuery.parse(req.query);
     let query = db

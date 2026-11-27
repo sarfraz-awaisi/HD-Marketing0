@@ -2,7 +2,7 @@ import "../../styles/leads.css";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListOrdered } from "lucide-react";
+import { ListOrdered, Settings2 } from "lucide-react";
 import { api, date } from "../../lib/api";
 import { useAuth } from "../../context/AuthContext";
 import { invalidateWorkspace } from "../../lib/invalidateWorkspace";
@@ -40,6 +40,7 @@ import {
 import { usageOption } from "../../lib/leadUsage";
 import AgentFilter from "./AgentFilter";
 import OutcomeFilter from "./OutcomeFilter";
+import AutoAssignSettings from "./AutoAssignSettings";
 // Administrators' All leads (update 057), built like an agent's Assigned
 // leads: the database searches every lead by name or contact number (or an
 // HD number written with HD), applies the filters together and counts and
@@ -185,6 +186,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
     [howMany, setHowMany] = useState(false),
     [firstCount, setFirstCount] = useState(""),
     [picked, setPicked] = useState(null),
+    [autoAssign, setAutoAssign] = useState(false),
     [error, setError] = useState("");
   const filters = new URLSearchParams(query(f, neverAssigned));
   // Update 087: any number of leads; what is done with them goes to the
@@ -356,6 +358,18 @@ export default function AdminLeadList({ neverAssigned = false }) {
               {label} <b>{n ?? "…"}</b>
             </button>
           ),
+        )}
+        {/* Update 091: automatic lead distribution, with the Unassigned
+            leads in view. */}
+        {!neverAssigned && assignment === "unassigned" && (
+          <Button
+            variant="secondary"
+            className="auto-assign-open"
+            onClick={() => setAutoAssign(true)}
+          >
+            <Settings2 size={16} aria-hidden="true" />
+            Auto Assign Settings
+          </Button>
         )}
       </div>
       <p className="pipeline-count-note">
@@ -734,6 +748,13 @@ export default function AdminLeadList({ neverAssigned = false }) {
         ))}
       {results && (
         <AssignmentResults result={results} onClose={() => setResults(null)} />
+      )}
+      {autoAssign && (
+        <AutoAssignSettings
+          agents={activeAgents}
+          onClose={() => setAutoAssign(false)}
+          onAssigned={() => done()}
+        />
       )}
       {historyLead && (
         <LeadHistoryDialog

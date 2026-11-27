@@ -10,6 +10,7 @@ import { cleanupPropertyPhotos } from "./cleanupPropertyPhotos.js";
 import { cleanupPropertyDocuments } from "./cleanupPropertyDocuments.js";
 import { cleanupKnowledgeFiles } from "./cleanupKnowledgeFiles.js";
 import { processMetaLeads } from "./processMetaLeads.js";
+import { autoAssignLeads } from "./autoAssignLeads.js";
 import { validateRuntime } from "../config/runtime.js";
 import { randomUUID } from "node:crypto";
 import { createJobRunner, selectJobs, workerLease } from "./maintenance.js";
@@ -44,6 +45,8 @@ const allJobs = [
   ["cleanupPropertyDocuments", cleanupPropertyDocuments],
   ["cleanupKnowledgeFiles", cleanupKnowledgeFiles],
   ["processMetaLeads", processMetaLeads],
+  // Update 091: automatic lead distribution, only when named.
+  ["autoAssignLeads", autoAssignLeads],
   ["attendanceReconciliation", attendanceReconciliation],
   ["purgeDeletedLeads", purgeDeletedLeads],
 ];
