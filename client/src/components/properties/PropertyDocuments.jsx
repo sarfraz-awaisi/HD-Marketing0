@@ -18,7 +18,7 @@ import {
   shareText,
   uploadDocument,
 } from "../../lib/propertyDocuments";
-import { Button, ErrorBox, useToast } from "../common/UI";
+import { Button, ErrorBox, Loader, useToast } from "../common/UI";
 import "../../styles/properties.css";
 // Update 054: a property's PDF documents in its details. Whoever can see the
 // property can view, download and share them; whoever can change it (canManage)
@@ -217,7 +217,7 @@ export default function PropertyDocuments({ property, canManage }) {
         </p>
       )}
       {q.isPending ? (
-        <p className="field-hint">Loading documents…</p>
+        <Loader />
       ) : !docs.length ? (
         <p className="field-hint">
           {canManage

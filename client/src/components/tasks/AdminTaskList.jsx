@@ -560,7 +560,7 @@ export default function AdminTaskList({ scope }) {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         <Table
           columns={[

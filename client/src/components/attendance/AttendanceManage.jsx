@@ -298,7 +298,7 @@ export function DayEditor({ userId, day, onSaved }) {
     setNote("");
     setForm(info ? startingForm(info) : null);
   }, [info]);
-  if (q.isPending) return <Loader />;
+  if (q.isPending) return <Loader variant="cards" />;
   if (q.error) return <ErrorBox error={q.error} />;
   if (!form) return null;
   const blocked = blockedReason(info);

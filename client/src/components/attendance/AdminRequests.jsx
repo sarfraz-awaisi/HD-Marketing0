@@ -104,7 +104,7 @@ export default function AdminRequests({ kind }) {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : q.error ? null : (
         <>
           <Table

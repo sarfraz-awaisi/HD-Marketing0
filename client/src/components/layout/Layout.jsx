@@ -1,6 +1,6 @@
 import { formatLeadNo } from "../../lib/formatLeadNo";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { useEffect, useId, useRef, useState } from "react";
+import { Suspense, useEffect, useId, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   LogOut,
@@ -14,7 +14,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { api, date } from "../../lib/api";
 import { preloadRoute } from "../../lib/routeLoaders";
-import { Button, ErrorBox } from "../common/UI";
+import { Button, ErrorBox, Loader } from "../common/UI";
 import AccountUid from "../accounts/AccountUid";
 import IdleGuard from "../common/IdleGuard";
 import { useSecurityAlertSummary } from "../../lib/securityAlerts";
@@ -498,7 +498,11 @@ export default function Layout() {
         )}
         <main>
           <div className="fx-page" key={pathname}>
-            <Outlet />
+            {/* A page opening for the first time keeps the menu and top bar
+                and shows its skeleton here. */}
+            <Suspense fallback={<Loader variant="page" />}>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
         <footer className="watermark">

@@ -51,7 +51,7 @@ export default function SiteVisits() {
         </div>
       </div>
       {viewSwitch}
-      <Suspense fallback={<Loader />}>
+      <Suspense fallback={<Loader variant="table" />}>
         <VisitCalendar />
       </Suspense>
     </>

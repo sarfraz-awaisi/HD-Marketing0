@@ -558,7 +558,7 @@ export default function KpiManage() {
       </div>
       <ErrorBox error={error || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : !kpis.length ? (
         <div className="panel empty">
           {showArchived ? "No archived KPIs." : "No KPIs yet. Add one."}

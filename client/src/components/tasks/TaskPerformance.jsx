@@ -127,7 +127,7 @@ export default function TaskPerformance() {
       )}
       <ErrorBox error={q.error} />
       {q.isPending && from <= to ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : d ? (
         <>
           <section className="kpi-grid task-kpis" aria-label="Period totals">

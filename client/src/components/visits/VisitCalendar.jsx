@@ -166,7 +166,7 @@ export default function VisitCalendar() {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : mode === "week" ? (
         <div className="calendar-week">
           {grid.map((day) => (

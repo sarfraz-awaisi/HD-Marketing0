@@ -488,7 +488,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
       <ActiveFilters items={chips} onReset={reset} />
       <ErrorBox error={error || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : q.error ? null : (
         <>
           <div className="lead-selection-tools">

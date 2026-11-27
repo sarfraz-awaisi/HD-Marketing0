@@ -173,7 +173,7 @@ function History({ agent, range, onClose }) {
       </p>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         <>
           <div className="table-scroll">
@@ -367,7 +367,7 @@ export default function KpiReport() {
       )}
       <ErrorBox error={q.error} />
       {valid && q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : r && !r.agents.length ? (
         <div className="panel empty">No agents had KPIs in this period.</div>
       ) : (

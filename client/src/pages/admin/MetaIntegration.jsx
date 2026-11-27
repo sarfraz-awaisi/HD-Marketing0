@@ -241,7 +241,7 @@ export default function MetaIntegration() {
       )}
       <MetaHealth />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : (
         q.data && (
           <>

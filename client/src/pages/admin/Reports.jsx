@@ -926,7 +926,7 @@ export default function Reports() {
             onAgent={(id) => change({ agent: id })}
           />
         ) : q.isPending ? (
-          <Loader />
+          <Loader variant="cards" />
         ) : q.error ? null : tab === "summary" ? (
           <Summary
             data={q.data}

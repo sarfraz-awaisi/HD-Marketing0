@@ -45,7 +45,7 @@ const MyNotifications = lazy(routeLoaders.MyNotifications);
 // rules; this only keeps each workspace to its own pages.
 export function Protected({ role, roles }) {
   const { user, loading } = useAuth();
-  if (loading) return <Loader />;
+  if (loading) return <Loader variant="app" />;
   if (!user) return <Navigate to="/login" replace />;
   if (user.mfa_required) return <Navigate to="/login" replace />;
   if (role && user.role !== role) return <Navigate to="/" replace />;
@@ -85,7 +85,7 @@ class PageLoadError extends Component {
 export default function App() {
   return (
     <PageLoadError>
-      <Suspense fallback={<Loader />}>
+      <Suspense fallback={<Loader variant="app" />}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/accept-invitation" element={<AcceptInvitation />} />

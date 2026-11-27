@@ -29,7 +29,7 @@ export default function MyProfile() {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="detail" />
       ) : p ? (
         <section className="panel" aria-label="Profile details">
           <dl className="task-facts profile-facts">

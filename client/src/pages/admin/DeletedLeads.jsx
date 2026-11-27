@@ -214,7 +214,7 @@ export default function DeletedLeads() {
           </div>
         )}
         {rows.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <Table
             showSerial

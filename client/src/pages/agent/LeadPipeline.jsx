@@ -161,7 +161,7 @@ export default function LeadPipeline() {
         )}
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : q.error ? null : (
           <>
             <div className="pipeline-table">

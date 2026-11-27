@@ -205,7 +205,7 @@ function OverdueReports({ from, to }) {
       </p>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : rows.length ? (
         <Table
           columns={[
@@ -299,7 +299,7 @@ export default function AdminReports({ initialDate }) {
         </div>
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <Table
             columns={[

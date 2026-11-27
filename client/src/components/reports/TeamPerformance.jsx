@@ -366,7 +366,7 @@ function AgentDays({ row, dayParams, onOpen }) {
           Choose 62 days or fewer to see this agent day by day.
         </p>
       ) : days.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : days.data ? (
         <Table
           rows={days.data.days.map((d) => ({ ...d, id: d.day }))}
@@ -500,7 +500,7 @@ export default function TeamPerformance({
         </p>
       )}
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : !q.data ? null : agent && !selected ? (
         <p className="empty">
           This agent has nothing in this period.{" "}

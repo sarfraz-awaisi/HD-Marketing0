@@ -81,7 +81,7 @@ export default function AdminSettings() {
         </Link>
       </section>
       {q.isPending ? (
-        <Loader />
+        <Loader variant="detail" />
       ) : q.error ? (
         <ErrorBox error={q.error} />
       ) : (

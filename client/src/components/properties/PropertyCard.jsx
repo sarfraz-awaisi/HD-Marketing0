@@ -53,7 +53,13 @@ export default function PropertyCard({ property, onView }) {
             }}
           />
         ) : (
-          <span className="property-cover-placeholder">
+          <span
+            className={
+              !batched && photos.isPending
+                ? "property-cover-placeholder is-loading"
+                : "property-cover-placeholder"
+            }
+          >
             <Building2 size={44} aria-hidden="true" />
             <small>
               {!batched && photos.isPending

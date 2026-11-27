@@ -610,7 +610,7 @@ export default function Dealers() {
           </div>
         )}
         {list.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : rows.length ? (
           <Table
             columns={columns}

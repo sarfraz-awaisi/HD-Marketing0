@@ -72,7 +72,7 @@ function Overview({ onTab }) {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : o ? (
         <>
           <section className="kpi-grid task-kpis" aria-label="Day totals">
@@ -229,7 +229,7 @@ function RulesSettings() {
       setBusy(false);
     }
   }
-  if (q.isPending) return <Loader />;
+  if (q.isPending) return <Loader variant="cards" />;
   const s = q.data || {};
   return (
     <section className="panel task-settings">

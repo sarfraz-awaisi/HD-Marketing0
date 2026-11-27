@@ -114,7 +114,7 @@ export default function StaffDashboard() {
             </Link>
           </div>
           {tasks.isPending ? (
-            <Loader />
+            <Loader variant="table" rows={3} />
           ) : t.today?.length ? (
             <div className="task-list">
               {t.today.slice(0, 5).map((task) => (

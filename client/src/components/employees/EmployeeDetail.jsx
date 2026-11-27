@@ -145,7 +145,7 @@ export default function EmployeeDetail({ id, departments, onClose }) {
       className="task-dialog employee-dialog"
     >
       {q.isPending ? (
-        <Loader />
+        <Loader variant="detail" />
       ) : q.error ? (
         <ErrorBox error={q.error} />
       ) : (

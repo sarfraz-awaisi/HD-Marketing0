@@ -192,7 +192,7 @@ function CallHistory({ lead, onClose }) {
       </header>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         !q.error && (
           <Table
@@ -401,7 +401,7 @@ export default function ReportDrilldown({
           )}
           <ErrorBox error={q.error} />
           {q.isPending ? (
-            <Loader />
+            <Loader variant="table" />
           ) : (
             data && (
               <>

@@ -19,13 +19,120 @@ export function Button({ children, variant = "", className = "", ...props }) {
     </button>
   );
 }
-export function Loader() {
+// Skeleton screens: grey placeholders shaped like what is loading. One
+// status tells screen readers "Loading workspace…"; the shapes are hidden
+// from them. variant: app (the whole workspace, while signing in), page (a
+// page's heading, filters and list, while it opens), table (a list's rows),
+// cards (overview cards and a panel), detail (a record's heading and
+// fields), lines (dialogs and small sections, the default).
+const bar = (key, width, kind = "") => (
+  <span
+    key={key}
+    className={kind ? `skeleton-bar ${kind}` : "skeleton-bar"}
+    style={{ width }}
+  />
+);
+const lines = (widths) => (
+  <div className="skeleton-lines">{widths.map((w, i) => bar(i, w))}</div>
+);
+const cellWidths = ["72%", "56%", "40%", "64%", "48%"];
+function TableShape({ rows }) {
+  const row = (r, head) => (
+    <div key={r} className={head ? "skeleton-row head" : "skeleton-row"}>
+      {[0, 1, 2, 3].map((c) =>
+        bar(c, head ? "45%" : cellWidths[(r + c) % cellWidths.length]),
+      )}
+    </div>
+  );
   return (
-    <div role="status" className="loading">
-      <span className="spinner" />
-      <div className="loading-copy">
-        <span>Loading workspace…</span>
-        <span className="fx-skeleton" aria-hidden="true" />
+    <div className="skeleton-table">
+      {row(-1, true)}
+      {Array.from({ length: rows }, (_, r) => row(r))}
+    </div>
+  );
+}
+function PageShape({ rows }) {
+  return (
+    <>
+      <div className="skeleton-heading">
+        {bar(0, "72px", "small")}
+        {bar(1, "min(280px, 70%)", "title")}
+        {bar(2, "min(460px, 90%)")}
+      </div>
+      <div className="skeleton-toolbar">
+        {["min(260px, 100%)", "150px", "150px", "120px"].map((w, i) =>
+          bar(i, w, "control"),
+        )}
+      </div>
+      <TableShape rows={rows} />
+    </>
+  );
+}
+const shapes = {
+  lines: () => lines(["92%", "76%", "58%"]),
+  table: ({ rows }) => <TableShape rows={rows} />,
+  page: ({ rows }) => <PageShape rows={rows} />,
+  cards: () => (
+    <>
+      <div className="skeleton-cards">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="skeleton-card">
+            {bar(0, "45%", "small")}
+            {bar(1, "60%", "title")}
+          </div>
+        ))}
+      </div>
+      <div className="skeleton-card wide">
+        {bar(0, "30%", "title")}
+        {lines(["94%", "82%", "88%", "64%"])}
+      </div>
+    </>
+  ),
+  detail: () => (
+    <div className="skeleton-card wide">
+      {bar(0, "min(320px, 70%)", "title")}
+      {bar(1, "min(200px, 50%)")}
+      <div className="skeleton-fields">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <div key={i}>
+            {bar(0, "40%", "small")}
+            {bar(1, cellWidths[i % cellWidths.length])}
+          </div>
+        ))}
+      </div>
+    </div>
+  ),
+  app: ({ rows }) => (
+    <div className="skeleton-app">
+      <div className="skeleton-sidebar">
+        {bar("logo", "70%", "title")}
+        {Array.from({ length: 8 }, (_, i) =>
+          bar(i, i % 3 ? "78%" : "62%", "control"),
+        )}
+      </div>
+      <div className="skeleton-main">
+        <div className="skeleton-topbar">
+          {bar(0, "min(220px, 50%)")}
+          {bar(1, "36px", "control")}
+        </div>
+        <div className="skeleton-content">
+          <PageShape rows={rows} />
+        </div>
+      </div>
+    </div>
+  ),
+};
+export function Loader({ variant = "lines", rows = 6 }) {
+  const Shape = shapes[variant] || shapes.lines;
+  return (
+    <div
+      role="status"
+      aria-busy="true"
+      className={`skeleton skeleton--${variant}`}
+    >
+      <span className="visually-hidden">Loading workspace…</span>
+      <div className="skeleton-shapes" aria-hidden="true">
+        <Shape rows={rows} />
       </div>
     </div>
   );

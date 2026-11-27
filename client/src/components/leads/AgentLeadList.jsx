@@ -138,7 +138,7 @@ export default function AgentLeadList({ importId }) {
         <ActiveFilters items={filters} onReset={reset} />
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : q.error ? null : (
           <>
             <div className="assigned-table">

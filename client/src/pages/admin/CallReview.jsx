@@ -99,7 +99,7 @@ export default function CallReview() {
         </div>
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <>
             <Table

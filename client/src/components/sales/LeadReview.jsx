@@ -132,7 +132,7 @@ export default function LeadReview() {
       </div>
       <ErrorBox error={error || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : q.error ? null : !rows.length ? (
         <div className="empty">
           {kind === "missed"
