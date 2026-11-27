@@ -97,7 +97,7 @@ export default function SecurityAlerts() {
         </div>
         <ErrorBox error={list.error} />
         {list.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <>
             <Table

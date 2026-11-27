@@ -128,7 +128,7 @@ export default function AdminHolidays() {
         </div>
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <Table
             rows={Array.isArray(q.data) ? q.data : []}

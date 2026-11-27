@@ -137,7 +137,7 @@ export default function LoginHistory() {
         </div>
         <ErrorBox error={list.error} />
         {list.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <Table
             rows={list.data?.data || []}

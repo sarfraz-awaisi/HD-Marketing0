@@ -148,7 +148,7 @@ function SocialDetail({ id }) {
       </div>
       <ErrorBox error={q.error || error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : (
         d && (
           <>
@@ -522,7 +522,7 @@ function SocialInbox() {
         </div>
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           !q.error && (
             <>
@@ -645,7 +645,7 @@ function SocialInbox() {
           <>
             <ErrorBox error={reporting.error} />
             {reporting.isPending ? (
-              <Loader />
+              <Loader variant="table" />
             ) : (
               reporting.data && (
                 <>

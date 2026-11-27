@@ -481,7 +481,7 @@ export default function KpiReviews() {
       {!valid && <ErrorBox error="Choose a start on or before the end." />}
       <ErrorBox error={error || list.error} />
       {valid && list.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         r && (
           <section className="panel kpi-review-list">

@@ -70,7 +70,7 @@ export default function AdminAttendanceSettings() {
       setBusy(false);
     }
   }
-  if (q.isPending) return <Loader />;
+  if (q.isPending) return <Loader variant="detail" />;
   if (q.error) return <ErrorBox error={q.error} />;
   const current = q.data.current;
   return (

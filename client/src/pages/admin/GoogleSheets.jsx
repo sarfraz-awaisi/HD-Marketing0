@@ -172,7 +172,7 @@ function Rejections({ source, onClose }) {
       </p>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         <Table
           // One rejection per row of the Sheet.
@@ -309,7 +309,7 @@ export default function GoogleSheets() {
       </div>
       <ErrorBox error={(!modal && error) || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         q.data && (
           <>

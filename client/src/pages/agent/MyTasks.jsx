@@ -186,7 +186,7 @@ export default function MyTasks() {
     if (q.data && window.location.hash === "#daily-report")
       document.getElementById("daily-report")?.scrollIntoView();
   }, [q.data]);
-  if (q.isPending) return <Loader />;
+  if (q.isPending) return <Loader variant="cards" />;
   if (q.error) return <ErrorBox error={q.error} />;
   const d = q.data;
   const s = d.summary || {};

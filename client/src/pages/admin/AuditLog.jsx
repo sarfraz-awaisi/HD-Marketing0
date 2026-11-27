@@ -341,7 +341,7 @@ export default function AuditLog() {
           </p>
         )}
         {q.isPending && !badRange ? (
-          <Loader />
+          <Loader variant="table" />
         ) : q.data && rows.length === 0 ? (
           <div className="empty">
             {filtered

@@ -165,7 +165,7 @@ function AccountDetails({
     };
   }, [account.id, request]);
   if (error) return <ErrorBox error={error} />;
-  if (!data) return <Loader />;
+  if (!data) return <Loader variant="detail" />;
   return (
     <div className="account-details">
       <div className="account-person">
@@ -1230,7 +1230,7 @@ export default function Accounts() {
             </div>
             <ErrorBox error={pageError} />
             {loading ? (
-              <Loader />
+              <Loader variant="cards" />
             ) : data?.data?.length ? (
               <div className="account-grid fx-stagger">
                 {data.data.map((account) => (

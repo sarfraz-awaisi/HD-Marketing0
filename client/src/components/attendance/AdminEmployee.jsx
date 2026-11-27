@@ -130,7 +130,7 @@ export default function AdminEmployee({ userId, onSelect }) {
         }
       />
       {q.isPending && chosen ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : d ? (
         <>
           <section className="panel attendance-profile">

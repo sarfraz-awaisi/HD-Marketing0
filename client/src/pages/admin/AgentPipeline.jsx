@@ -303,7 +303,7 @@ export default function AgentPipeline() {
         <ActiveFilters items={filters} onReset={reset} />
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : q.error ? null : (
           <>
             <div className="pipeline-table">

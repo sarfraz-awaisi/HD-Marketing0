@@ -391,7 +391,7 @@ function IndividualTimings({ data, onEdit }) {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         <>
           <Table
@@ -541,7 +541,7 @@ function ShiftHistory() {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : !q.data?.data?.length ? (
         <div className="empty">No shift changes yet.</div>
       ) : (
@@ -830,7 +830,7 @@ export default function ShiftManagement({
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : q.data ? (
         <>
           {current === "roles" && (

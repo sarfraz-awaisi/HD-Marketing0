@@ -86,7 +86,7 @@ function MyRequests({ kind }) {
     <>
       <ErrorBox error={error || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : (
         <Table
           rows={rows}
@@ -227,7 +227,7 @@ export default function MyAttendance() {
     invalidateAttendance(qc);
     toast(message);
   };
-  if (q.isPending) return <Loader />;
+  if (q.isPending) return <Loader variant="cards" />;
   const policy = data.policy,
     month = data.month || {};
   const canCheckIn =

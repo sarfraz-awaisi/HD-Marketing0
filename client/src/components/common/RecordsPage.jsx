@@ -371,7 +371,7 @@ export default function RecordsPage({
         )}
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <>
             <Table

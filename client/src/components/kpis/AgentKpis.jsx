@@ -201,7 +201,7 @@ export default function AgentKpis() {
       </section>
       <ErrorBox error={error || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : !items.length ? (
         <div className="panel empty">No KPIs are set for you on this day.</div>
       ) : (

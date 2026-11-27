@@ -73,7 +73,7 @@ export default function AgentPipelines() {
         </div>
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : q.error ? null : (
           <>
             <div className="agent-directory">

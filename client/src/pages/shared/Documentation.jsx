@@ -277,7 +277,7 @@ function EntryEditor({ id, onPending, onSaved }) {
     queryFn: ({ signal }) => api("/documents/" + id, { signal }),
     enabled: !!id,
   });
-  if (id && q.isPending) return <Loader />;
+  if (id && q.isPending) return <Loader variant="detail" />;
   if (id && q.error)
     return (
       <>
@@ -421,7 +421,7 @@ export default function Documentation() {
         <>
           <ErrorBox error={entry.error} />
           {entry.isPending ? (
-            <Loader />
+            <Loader variant="detail" />
           ) : (
             entry.data &&
             !entry.error && (
@@ -590,7 +590,7 @@ export default function Documentation() {
           )}
           <ErrorBox error={list.error} />
           {list.isPending ? (
-            <Loader />
+            <Loader variant="table" />
           ) : (
             !list.error &&
             (list.data?.data?.length ? (

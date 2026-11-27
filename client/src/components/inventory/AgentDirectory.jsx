@@ -43,7 +43,7 @@ export default function AgentDirectory({ onOpen }) {
       <ErrorBox error={q.error} />
       <section className="panel">
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <Table
             rows={q.data?.data || []}

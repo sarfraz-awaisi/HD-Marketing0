@@ -11,6 +11,7 @@ import "./styles/index.css";
 import "./styles/animations.css";
 import "./styles/tokens.css";
 import "./styles/theme.css";
+import "./styles/skeleton.css";
 const queryClient = new QueryClient({ defaultOptions: queryDefaults });
 loadFonts();
 createRoot(document.getElementById("root")).render(

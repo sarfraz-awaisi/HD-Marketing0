@@ -180,7 +180,7 @@ export default function Team() {
         </div>
         <ErrorBox error={q.error} />
         {q.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : (
           <Table
             rows={q.data?.data || []}

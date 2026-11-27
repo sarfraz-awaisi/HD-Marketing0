@@ -387,7 +387,7 @@ export default function InventoryList({
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : q.data?.data.length ? (
         <div className="property-grid fx-stagger">
           {q.data.data.map((p) => (

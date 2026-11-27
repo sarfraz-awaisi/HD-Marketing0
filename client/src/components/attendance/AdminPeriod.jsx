@@ -178,7 +178,7 @@ export default function AdminPeriod({ mode, openEmployee }) {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : q.error ? null : (
         <>
           <Table

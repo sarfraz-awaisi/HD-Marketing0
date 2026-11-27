@@ -147,7 +147,7 @@ export default function CheckoutRequests() {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : rows.length ? (
         <ul className="request-list">
           {rows.map((r) => {

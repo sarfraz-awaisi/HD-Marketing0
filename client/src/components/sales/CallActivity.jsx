@@ -80,7 +80,7 @@ export function TeamCallActivity({ onOpen, onOpenTeam }) {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : q.error ? null : (
         <Table
           rows={(q.data?.agents || []).map((a) => ({ ...a, id: a.agent_id }))}
@@ -261,7 +261,7 @@ export function MyCalls({ onOpen }) {
         </div>
       )}
       {queue.isPending ? (
-        <Loader />
+        <Loader variant="table" />
       ) : rows.length ? (
         rows.map((lead) => {
           const state = firstCallState(lead);

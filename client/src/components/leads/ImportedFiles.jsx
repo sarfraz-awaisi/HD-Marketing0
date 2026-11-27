@@ -109,7 +109,7 @@ export default function ImportedFiles({ assignable = false }) {
         </div>
         <ErrorBox error={files.error} />
         {files.isPending ? (
-          <Loader />
+          <Loader variant="table" />
         ) : files.error ? null : !files.data?.data?.length ? (
           <div className="empty">
             {admin

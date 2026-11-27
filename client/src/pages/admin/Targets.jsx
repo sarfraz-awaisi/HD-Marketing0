@@ -155,7 +155,7 @@ export default function Targets() {
       </section>
       <ErrorBox error={error || q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : rows.length ? (
         <div className="target-grid fx-stagger">
           {rows.map((t) => (

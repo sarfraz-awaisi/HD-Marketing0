@@ -95,7 +95,7 @@ export default function LeadDetail() {
       setBusy(false);
     }
   }
-  if (q.isPending) return <Loader />;
+  if (q.isPending) return <Loader variant="detail" />;
   if (q.error) return <ErrorBox error={q.error} />;
   const lead = q.data;
   // Update 061: on a lead reassigned to them, an agent's timeline holds the

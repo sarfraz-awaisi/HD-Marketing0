@@ -109,7 +109,7 @@ function TodayKpis() {
       </div>
       <ErrorBox error={q.error} />
       {q.isPending ? (
-        <Loader />
+        <Loader variant="cards" />
       ) : (
         !q.error && (
           <p>
@@ -195,7 +195,7 @@ export default function Dashboard() {
   const followups = snapshot.data?.followups || [];
   const visits = snapshot.data?.visits || [];
   const leaders = snapshot.data?.leaders || [];
-  if (metrics.isPending) return <Loader />;
+  if (metrics.isPending) return <Loader variant="cards" />;
   const d = metrics.data || {};
   const onTime = d.first_calls_with_deadline
     ? Math.round((d.on_time_first_calls / d.first_calls_with_deadline) * 100)
