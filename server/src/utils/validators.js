@@ -859,6 +859,51 @@ export const leadDistribution = z
   .refine((b) => b.never_assigned || !(b.uncalled || b.quotas), {
     message: "Choose one kind of list",
   });
+// Update 091: automatic lead distribution. Each agent once, a percentage
+// above 0 and up to 100 with at most two decimals, adding up to exactly 100
+// (worked out in hundredths, so 33.33 + 33.33 + 33.34 is exact).
+const hundredths = (n) => Math.round(n * 100);
+const autoAssignFields = {
+  batch_size: z.number().int().min(1).max(500),
+  scope: z.enum(["new", "backlog"]),
+  agents: z
+    .array(
+      z
+        .object({
+          agent_id: uuid,
+          percent: z
+            .number()
+            .gt(0)
+            .max(100)
+            .refine(
+              (p) => Math.abs(p * 100 - hundredths(p)) < 1e-6,
+              "Use at most two decimals",
+            ),
+        })
+        .strict(),
+    )
+    .min(1, "Choose at least one agent")
+    .max(50)
+    .refine(
+      (list) => new Set(list.map((a) => a.agent_id)).size === list.length,
+      "Choose each agent once",
+    )
+    .refine(
+      (list) => list.reduce((n, a) => n + hundredths(a.percent), 0) === 10000,
+      "The percentages must add up to exactly 100",
+    ),
+};
+export const autoAssignPreview = z.object(autoAssignFields).strict();
+export const autoAssignSave = z
+  .object({
+    ...autoAssignFields,
+    version: z.number().int().min(0),
+    state: z.enum(["on", "off", "paused"]),
+  })
+  .strict();
+export const autoAssignState = z
+  .object({ state: z.enum(["on", "off", "paused"]) })
+  .strict();
 // Attendance (update 040). Self-service bodies never carry a user id: the
 // employee always comes from the verified session.
 const isoDay = z.iso.date();

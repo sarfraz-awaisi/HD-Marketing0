@@ -875,3 +875,123 @@ dialog.lead-name-dialog {
 .agent-filter-list .checkbox-field:hover {
   background: var(--gold-light);
 }
+
+/* Update 091: Auto Assign Settings, next to the Unassigned count. */
+.auto-assign-open {
+  margin-left: auto;
+}
+dialog.auto-assign-dialog {
+  width: min(780px, calc(100% - 32px));
+}
+.auto-assign-status {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.auto-assign-status p {
+  margin: 0;
+}
+.auto-assign-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px var(--space-4);
+  margin: 0;
+}
+.auto-assign-facts dt {
+  color: var(--ink-3);
+}
+.auto-assign-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.auto-assign-actions,
+.auto-assign-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.auto-assign-form,
+.auto-assign-agents {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.auto-assign-batch,
+.auto-assign-percent {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.auto-assign-batch input,
+.auto-assign-percent input {
+  width: 6.5rem;
+}
+.auto-assign-total {
+  margin: 0;
+}
+.auto-assign-issues {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.auto-assign-confirm {
+  padding: var(--space-3);
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--warning-soft);
+}
+.auto-assign-confirm p {
+  flex-basis: 100%;
+  margin: 0;
+}
+.auto-assign-history h3 {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-md);
+}
+@media (max-width: 480px) {
+  .auto-assign-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .auto-assign-facts dd {
+    margin-bottom: var(--space-2);
+  }
+  .auto-assign-open {
+    margin-left: 0;
+  }
+}
+/* On phones the dialog's tables read as labelled cards, as the lead list
+   does, so the number boxes and Remove stay in view. */
+@media (max-width: 560px) {
+  .auto-assign-dialog thead {
+    display: none;
+  }
+  .auto-assign-dialog table,
+  .auto-assign-dialog tbody,
+  .auto-assign-dialog tr {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .auto-assign-dialog tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .auto-assign-dialog td {
+    display: grid;
+    grid-template-columns: minmax(0, 110px) minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    border: 0;
+    white-space: normal;
+  }
+  .auto-assign-dialog td::before {
+    content: attr(data-label);
+    color: var(--ink-3);
+    font-size: 11px;
+    font-weight: 600;
+  }
+}
