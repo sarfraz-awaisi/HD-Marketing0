@@ -143,6 +143,130 @@ export async function distributeInParts(call, { ids, agents, apply, token }) {
   return merge(done, { applied: true, stale: false, token: now });
 }
 
+// Never Worked (update 090): how many of the selected leads to take from
+// each current agent, unassigned leads as a group of their own. The plan
+// for every selected lead is worked out first, as a preview; from each
+// group, of the leads that plan can move, the newest are taken first
+// (highest HD number), as many as asked, and only those go through Assign
+// to agents with its own preview, token and stale check. The rest stay
+// where they are. A number above what a group can give takes nothing from
+// any group (over). The token covers the whole plan, the leads taken and
+// their plan, so confirming moves nothing if any selected lead, its group
+// or the numbers changed since the preview: the new plan comes back.
+const sourceKey = (id) => id ?? "unassigned";
+export function takeByQuotas(results, quotas) {
+  const groups = new Map();
+  for (const r of results)
+    if (moves.includes(r.result)) {
+      if (r.lead_no == null)
+        throw Object.assign(
+          new Error("Never Worked needs CRM database update 090 after 089."),
+          { status: 503 },
+        );
+      const key = sourceKey(r.from);
+      if (!groups.has(key))
+        groups.set(key, {
+          id: r.from ?? null,
+          name: r.from ? r.from_name || "an agent" : "Unassigned leads",
+          leads: [],
+        });
+      groups.get(key).leads.push(r);
+    }
+  const asked = new Map(quotas.map((q) => [sourceKey(q.from), q.take]));
+  // A number for a group with nothing to give (it may have changed).
+  for (const [key, take] of asked)
+    if (take > 0 && !groups.has(key))
+      groups.set(key, {
+        id: key === "unassigned" ? null : key,
+        name: null,
+        leads: [],
+      });
+  const sources = [...groups.entries()]
+    .map(([key, g]) => ({
+      id: g.id,
+      name: g.name,
+      available: g.leads.length,
+      take: asked.get(key) ?? 0,
+      leads: g.leads.sort(
+        (a, b) => b.lead_no - a.lead_no || (a.id < b.id ? -1 : 1),
+      ),
+    }))
+    .sort(
+      (a, b) =>
+        (a.id === null) - (b.id === null) ||
+        b.available - a.available ||
+        String(a.name).localeCompare(String(b.name)),
+    );
+  const over = sources.some((s) => s.take > s.available);
+  return {
+    over,
+    ids: over
+      ? []
+      : sources.flatMap((s) => s.leads.slice(0, s.take).map((r) => r.id)),
+    sources: sources.map(({ leads, ...s }) => s),
+  };
+}
+
+export async function distributeByQuotas(
+  call,
+  { ids, agents, quotas, apply, token },
+) {
+  const whole = await distributeInParts(call, { ids, agents, apply: false });
+  const picked = takeByQuotas(whole.results, quotas);
+  const plan = picked.ids.length
+    ? await distributeInParts(call, { ids: picked.ids, agents, apply: false })
+    : null;
+  const now = createHash("md5")
+    .update(
+      [whole.token, [...picked.ids].sort().join(","), plan?.token ?? ""].join(
+        "|",
+      ),
+    )
+    .digest("hex");
+  // Leads that cannot move, from the whole plan, stay listed with why.
+  const others = whole.results.filter((r) => !moves.includes(r.result));
+  const shape = (base, state) => ({
+    ...merge(
+      [
+        {
+          ...base,
+          results: [...(base === whole ? [] : base.results), ...others],
+        },
+      ],
+      state,
+    ),
+    sources: picked.sources,
+    over: picked.over,
+  });
+  const preview = (stale) =>
+    shape(plan ?? whole, { applied: false, stale, token: now });
+  if (!apply || token !== now || !plan)
+    return preview(!!token && token !== now);
+  const done = await distributeInParts(call, {
+    ids: picked.ids,
+    agents,
+    apply: true,
+    token: plan.token,
+  });
+  // Changed in the moment before the move: the new plan to confirm.
+  if (!done.applied)
+    return {
+      ...(await distributeByQuotas(call, {
+        ids,
+        agents,
+        quotas,
+        apply: false,
+      })),
+      stale: true,
+    };
+  return shape(done, {
+    applied: true,
+    stale: false,
+    token: now,
+    ...(done.partial ? { partial: true } : {}),
+  });
+}
+
 // Round-robin unassigned, Delete and Delete's preview (update 087): any
 // number of leads, in parts of 500 one after another, counts added up and
 // each lead's result kept. If a part fails after earlier ones were done,

@@ -54,6 +54,7 @@ import { normalizePhone, csvCell } from "../utils/phoneMask.js";
 import { callingProvider, callCapabilities } from "../services/cloudCalling.js";
 import { assign } from "../services/leadAssignment.js";
 import {
+  distributeByQuotas,
   distributeInParts,
   eachPart,
   partSize,
@@ -743,7 +744,8 @@ export function crmRouter(db, options = {}) {
   // Update 084: never_assigned, the leads none of these agents has had.
   // Update 086: first, only that many from the top of the list (selection).
   // Update 088: reassignable and outcomes, the Never assigned page's call
-  // outcome rules.
+  // outcome rules. Update 090: agent_uncalled, Never Worked's Assigned but
+  // Never Called.
   const adminLeads = async (req, ids) => {
     const { import_id, page, agent, first, ...q } = adminLeadsQuery.parse(
       req.query,
@@ -770,12 +772,17 @@ export function crmRouter(db, options = {}) {
     } catch (error) {
       const refused = countryRefusal(q, "Choose valid lead filters", error);
       if (refused !== error) throw refused;
+      if (q.agent_uncalled && error.message === "Choose valid lead filters")
+        throw Object.assign(
+          new Error("Never Worked needs CRM database update 090 after 089."),
+          { status: 503 },
+        );
       if (
         (q.reassignable || q.outcomes) &&
         error.message === "Choose valid lead filters"
       )
         throw Object.assign(
-          new Error("Never assigned needs CRM database update 088 after 087."),
+          new Error("Never Worked needs CRM database update 088 after 087."),
           { status: 503 },
         );
       if (ids && first && error.message === "Choose valid lead filters")
@@ -787,7 +794,7 @@ export function crmRouter(db, options = {}) {
         );
       if (q.never_assigned && error.message === "Choose valid lead filters")
         throw Object.assign(
-          new Error("Never assigned needs CRM database update 084 after 083."),
+          new Error("Never Worked needs CRM database update 084 after 083."),
           { status: 503 },
         );
       // Update 087: before it, the database selects 500 leads at most
@@ -930,7 +937,9 @@ export function crmRouter(db, options = {}) {
   // called list, leads their agent has called since stay with that agent.
   // Update 084: from the Never assigned page, no lead goes to an agent it
   // has had. Update 086: up to 2,000 from there, 500 to each call; update
-  // 087: any number from any list.
+  // 087: any number from any list. Update 090, Never Worked only: from
+  // Assigned but Never Called, leads their agent has called since stay;
+  // with quotas, only that many leads from each current agent move.
   for (const [path, apply, limit] of [
     ["/leads/distribute/preview", false, reportLimit],
     ["/leads/distribute", true, sensitiveLimit],
@@ -940,11 +949,13 @@ export function crmRouter(db, options = {}) {
       const call = (ids, carry, token) =>
         salesRpc(
           db,
-          body.never_assigned
-            ? "admin_distribute_never_assigned"
-            : body.never_called
-              ? "admin_distribute_never_called"
-              : "admin_distribute_leads",
+          body.uncalled
+            ? "admin_distribute_agent_uncalled"
+            : body.never_assigned
+              ? "admin_distribute_never_assigned"
+              : body.never_called
+                ? "admin_distribute_never_called"
+                : "admin_distribute_leads",
           {
             p_actor: req.user.id,
             p_lead_ids: ids,
@@ -953,19 +964,24 @@ export function crmRouter(db, options = {}) {
             p_token: token,
             p_request: req.id,
           },
-          body.never_assigned
-            ? "084 after 083"
-            : body.never_called
-              ? "082 after 081"
-              : "062 after 061",
+          body.uncalled
+            ? "090 after 089"
+            : body.never_assigned
+              ? "084 after 083"
+              : body.never_called
+                ? "082 after 081"
+                : "062 after 061",
         );
+      const job = {
+        ids: body.lead_ids,
+        agents: body.agent_ids,
+        apply,
+        token: body.token,
+      };
       res.json(
-        await distributeInParts(call, {
-          ids: body.lead_ids,
-          agents: body.agent_ids,
-          apply,
-          token: body.token,
-        }),
+        body.quotas
+          ? await distributeByQuotas(call, { ...job, quotas: body.quotas })
+          : await distributeInParts(call, job),
       );
     });
   router.get("/leads/selection", adminOnly, reportLimit, async (req, res) => {

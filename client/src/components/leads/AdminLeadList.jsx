@@ -1,5 +1,5 @@
 import "../../styles/leads.css";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListOrdered } from "lucide-react";
@@ -70,6 +70,11 @@ import OutcomeFilter from "./OutcomeFilter";
 // Update 088: Never assigned leaves out, in the database, the leads whose
 // latest saved call outcome shows an agent working on them; its call outcome
 // filter takes any of the other outcomes (outcomes: with commas).
+// Update 090: the page is Never Worked. Its category Assigned but Never
+// Called lists the leads their current agent has saved no call outcome on
+// since receiving them (the agent filter is then the current agents), and
+// Assign to agents there takes as many leads as asked from each current
+// agent, newest first.
 const callLabels = {
   uncalled: "New",
   missed: "Missed first call",
@@ -97,13 +102,22 @@ const keys = [
   "usage",
   "page",
 ];
-const neverKeys = ["q", "agent", "outcomes", "page"];
+const neverKeys = ["q", "category", "agent", "outcomes", "page"];
+const categories = [
+  ["", "Never Assigned to Selected Agent"],
+  ["uncalled", "Assigned but Never Called"],
+];
 // What the database is asked for, from the address.
 const query = (f, neverAssigned = false) =>
   neverAssigned
     ? {
         ...(f.q ? { search: f.q } : {}),
-        ...(f.agent ? { never_assigned: f.agent } : {}),
+        ...(f.agent
+          ? {
+              [f.category === "uncalled" ? "agent" : "never_assigned"]: f.agent,
+            }
+          : {}),
+        ...(f.category === "uncalled" ? { agent_uncalled: "true" } : {}),
         ...(f.outcomes ? { outcomes: f.outcomes } : {}),
         reassignable: "true",
       }
@@ -161,6 +175,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
   const back = location.pathname + location.search;
   const { f, change, page, q } = useAdminLeads(neverAssigned);
   const set = (values) => change({ ...values, page: null });
+  const uncalled = neverAssigned && f.category === "uncalled";
   const [dialLead, setDialLead] = useState(null),
     [assignLead, setAssignLead] = useState(null),
     [historyLead, setHistoryLead] = useState(null),
@@ -213,7 +228,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
     ...(f.agent
       ? [
           [
-            `${neverAssigned ? "Never assigned to" : "Assigned to"} ${agentNames}`,
+            `${uncalled ? "Current agent:" : neverAssigned ? "Never assigned to" : "Assigned to"} ${agentNames}`,
             () => set({ agent: null, assignment: null }),
           ],
         ]
@@ -268,7 +283,8 @@ export default function AdminLeadList({ neverAssigned = false }) {
     );
   // Filters other than assignment, which the counts are about.
   const narrowed =
-    chips.length > (!neverAssigned && (f.agent || f.assignment) ? 1 : 0);
+    chips.length >
+    ((!neverAssigned || uncalled) && (f.agent || f.assignment) ? 1 : 0);
   const totals = q.data?.totals;
   const assignment = f.agent ? "assigned" : f.assignment;
   // Update 087: once leads are selected, Choose how many keeps the first
@@ -345,9 +361,11 @@ export default function AdminLeadList({ neverAssigned = false }) {
       <p className="pipeline-count-note">
         {narrowed
           ? "Counts of the leads matching your search and filters."
-          : neverAssigned
-            ? "Counts of every lead in the CRM no agent is working on, not in Deleted leads."
-            : "Counts of every lead in the CRM, not in Deleted leads."}
+          : uncalled
+            ? "Counts of every assigned lead whose current agent has saved no call outcome on it since receiving it, for every agent, leaving out leads an agent is working on."
+            : neverAssigned
+              ? "Counts of every lead in the CRM no agent is working on, not in Deleted leads."
+              : "Counts of every lead in the CRM, not in Deleted leads."}
       </p>
       <div className="toolbar lead-toolbar">
         <LeadSearch value={f.q} onSearch={(text) => set({ q: text })} />
@@ -362,8 +380,22 @@ export default function AdminLeadList({ neverAssigned = false }) {
             <option value="unassigned">Unassigned</option>
           </select>
         )}
+        {neverAssigned && (
+          <select
+            aria-label="Lead category"
+            value={uncalled ? "uncalled" : ""}
+            onChange={(e) => set({ category: e.target.value || null })}
+          >
+            {categories.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        )}
         <AgentFilter
           agents={agents}
+          current={uncalled}
           value={agentIds}
           onChange={(ids) =>
             set({ agent: ids.length ? ids.join(",") : null, assignment: null })
@@ -578,7 +610,9 @@ export default function AdminLeadList({ neverAssigned = false }) {
               empty={
                 chips.length
                   ? "No leads match your search or filters. Reset filters to see every lead."
-                  : "No leads yet. Import a CSV or Excel file, add a lead, or turn on a Google Sheet."
+                  : uncalled
+                    ? "No assigned lead is waiting for its current agent's first saved call outcome."
+                    : "No leads yet. Import a CSV or Excel file, add a lead, or turn on a Google Sheet."
               }
               columns={[
                 {
@@ -660,6 +694,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
           agents={activeAgents}
           neverCalled={f.call === "never_called"}
           neverAssigned={neverAssigned}
+          uncalled={uncalled}
           onClose={() => setAssignLead(null)}
           onDone={(message) => {
             setAssignLead(null);
@@ -674,6 +709,7 @@ export default function AdminLeadList({ neverAssigned = false }) {
             agents={activeAgents}
             neverCalled={f.call === "never_called"}
             neverAssigned={neverAssigned}
+            uncalled={uncalled}
             filterAgents={agentIds}
             filterLabel={agentNames}
             onClose={() => setBulk(null)}
@@ -737,9 +773,10 @@ export default function AdminLeadList({ neverAssigned = false }) {
 // 082) the move goes through Assign to agents' checks: it stops if the lead
 // was called, marked Won or Lost, or moved since the list loaded. From the
 // Never assigned page (update 084) likewise, and it stops if the lead has
-// had that agent.
+// had that agent; from Assigned but Never Called (update 090) also if its
+// agent has called it since.
 async function moveChecked(lead, agent, list) {
-  const body = { lead_ids: [lead.id], agent_ids: [agent], [list]: true };
+  const body = { lead_ids: [lead.id], agent_ids: [agent], ...list };
   const moving = lead.assigned_agent ? "reassigned" : "assigned";
   const plan = await api("/leads/distribute/preview", { method: "POST", body });
   const [row] = plan.results;
@@ -763,6 +800,7 @@ function AssignLeadDialog({
   agents,
   neverCalled,
   neverAssigned,
+  uncalled = false,
   onClose,
   onDone,
 }) {
@@ -773,9 +811,9 @@ function AssignLeadDialog({
   const choices = agents.filter((a) => a.id !== current);
   const had = new Set(neverAssigned ? lead.agents_had || [] : []);
   const checked = neverAssigned
-    ? "never_assigned"
+    ? { never_assigned: true, ...(uncalled ? { uncalled: true } : {}) }
     : current && neverCalled
-      ? "never_called"
+      ? { never_called: true }
       : null;
   async function save(mode) {
     setBusy(true);
@@ -931,33 +969,58 @@ function BulkAssignDialog({ ids, onClose, onDone }) {
 // with that agent. From the Never assigned page (update 084) each lead goes
 // only to a chosen agent it has never had; the agents chosen here are the
 // ones who receive leads, whoever the page is filtered by.
+// Never Worked (update 090): from Assigned but Never Called, leads their
+// agent has called since stay with that agent; and the admin enters how many
+// leads to take from each current agent (Take, empty or 0 for none), the
+// newest first. Only those move; editing a number only changes the preview.
 function DistributeDialog({
   ids,
   agents,
   neverCalled,
   neverAssigned,
+  uncalled = false,
   filterAgents = [],
   filterLabel = "",
   onClose,
   onDone,
 }) {
   const list = neverAssigned
-    ? { never_assigned: true }
+    ? { never_assigned: true, ...(uncalled ? { uncalled: true } : {}) }
     : neverCalled
       ? { never_called: true }
       : {};
   const [mode, setMode] = useState("one"),
     [search, setSearch] = useState(""),
     [chosen, setChosen] = useState([]),
-    [asked, setAsked] = useState([]),
+    [takes, setTakes] = useState({}),
+    [asked, setAsked] = useState({ agents: [], quotas: "" }),
     [newer, setNewer] = useState(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const names = useRef({});
+  // The numbers typed, as the server takes them: whole numbers above 0.
+  const typed = Object.entries(takes).filter(([, v]) => v !== "");
+  const quotaKey = !neverAssigned
+    ? ""
+    : typed.some(([, v]) => !/^\d+$/.test(v))
+      ? "bad"
+      : JSON.stringify(
+          typed
+            .filter(([, v]) => Number(v) > 0)
+            .map(([k, v]) => ({
+              from: k === "unassigned" ? null : k,
+              take: Number(v),
+            }))
+            .sort((a, b) => String(a.from).localeCompare(String(b.from))),
+        );
   // The preview follows the choice after a short pause, not every click.
   useEffect(() => {
-    const t = setTimeout(() => setAsked(chosen), 300);
+    const t = setTimeout(
+      () => setAsked({ agents: chosen, quotas: quotaKey }),
+      300,
+    );
     return () => clearTimeout(t);
-  }, [chosen]);
+  }, [chosen, quotaKey]);
   const preview = useQuery({
     queryKey: ["lead-distribution", ids, asked, list],
     queryFn: ({ signal }) =>
@@ -965,16 +1028,55 @@ function DistributeDialog({
         method: "POST",
         body: {
           lead_ids: ids,
-          agent_ids: asked,
+          agent_ids: asked.agents,
           ...list,
+          ...(neverAssigned ? { quotas: JSON.parse(asked.quotas) } : {}),
         },
         signal,
       }),
-    enabled: asked.length > 0,
+    enabled: asked.agents.length > 0 && asked.quotas !== "bad",
     gcTime: 0,
+    // Never Worked: the Take table stays while the numbers are worked out.
+    ...(neverAssigned ? { placeholderData: (previous) => previous } : {}),
   });
-  const ready = asked.join() === chosen.join() && !preview.isFetching;
+  const ready =
+    asked.agents.join() === chosen.join() &&
+    asked.quotas === quotaKey &&
+    !preview.isFetching &&
+    !preview.isPlaceholderData;
   const plan = newer || (chosen.length && ready ? preview.data : null);
+  // Each current agent's leads that can go to the chosen agents, and the
+  // number typed for them.
+  const sources = chosen.length
+    ? ((newer || preview.data)?.sources || []).map((src) => {
+        const key = src.id ?? "unassigned";
+        if (src.name) names.current[key] = src.name;
+        const value = takes[key] ?? "";
+        const bad =
+          value === ""
+            ? ""
+            : !/^\d+$/.test(value)
+              ? "Enter a whole number"
+              : Number(value) > src.available
+                ? `At most ${src.available.toLocaleString("en-US")}`
+                : "";
+        return {
+          ...src,
+          id: key,
+          name: src.name || names.current[key] || "An agent",
+          value,
+          bad,
+          take: bad ? 0 : Number(value || 0),
+        };
+      })
+    : [];
+  const takeTotal = sources.reduce((n, src) => n + src.take, 0);
+  const available = sources.reduce((n, src) => n + src.available, 0);
+  const takeProblem = quotaKey === "bad" || sources.some((src) => src.bad);
+  const setTake = (key, value) => {
+    setNewer(null);
+    setTakes((now) => ({ ...now, [key]: value }));
+  };
   const words = search.trim().toLowerCase();
   const shown = agents.filter(
     (a) =>
@@ -1015,6 +1117,7 @@ function DistributeDialog({
           agent_ids: chosen,
           token: plan.token,
           ...list,
+          ...(neverAssigned ? { quotas: JSON.parse(quotaKey) } : {}),
         },
       });
       if (result.applied) return onDone(result);
@@ -1038,15 +1141,18 @@ function DistributeDialog({
       {neverAssigned && (
         <div className="pipeline-hint" role="note">
           <p>
-            {filterAgents.length
-              ? `Page filter: leads never assigned to ${filterLabel}. `
-              : "Page filter: any agent. "}
+            {uncalled
+              ? `Page filter: leads not called by ${filterAgents.length ? `${filterLabel} (their current agent)` : "their current agent"} since receiving them. `
+              : filterAgents.length
+                ? `Page filter: leads never assigned to ${filterLabel}. `
+                : "Page filter: any agent. "}
             The agents you choose below receive the leads, and they need not be
             the filter&apos;s agents. Each lead goes only to a chosen agent it
             has never had; a lead that had every chosen agent, or is marked Won
-            or Lost, stays where it is.
+            or Lost{uncalled ? ", or was called by its agent meanwhile" : ""},
+            stays where it is.
           </p>
-          {filtered.length > 0 && (
+          {!uncalled && filtered.length > 0 && (
             <Button
               variant="secondary"
               disabled={busy}
@@ -1117,6 +1223,70 @@ function DistributeDialog({
         {mode === "turns" &&
           " Each gets an even share; leads already with one of them stay where their share allows."}
       </p>
+      {neverAssigned && chosen.length > 0 && (
+        <div
+          className="quota-table"
+          role="group"
+          aria-label="Leads to take from each current agent"
+          aria-busy={!ready && !newer}
+        >
+          <p>
+            Enter how many leads to take from each current agent; 0 or empty
+            takes none. From each agent the newest leads (highest HD number) are
+            taken first, and the rest stay where they are.
+          </p>
+          {sources.length > 0 ? (
+            <>
+              <Table
+                rows={sources}
+                columns={[
+                  { key: "name", label: "Current agent" },
+                  {
+                    key: "available",
+                    label: "Available",
+                    render: (r) => r.available.toLocaleString("en-US"),
+                  },
+                  {
+                    key: "take",
+                    label: "Take",
+                    render: (r) => (
+                      <span className="quota-take">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          max={r.available}
+                          step="1"
+                          placeholder="0"
+                          aria-label={`Leads to take from ${r.name}`}
+                          aria-invalid={!!r.bad}
+                          value={r.value}
+                          disabled={busy}
+                          onChange={(e) => setTake(r.id, e.target.value)}
+                        />
+                        {r.bad && (
+                          <small className="field-error">{r.bad}</small>
+                        )}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+              <p role="status">
+                Selected for reassignment: {plural(takeTotal, "lead")} ·
+                Remaining, not moved:{" "}
+                {plural(Math.max(0, available - takeTotal), "lead")}
+              </p>
+            </>
+          ) : (
+            (newer || preview.data) && (
+              <p className="lead-muted">
+                None of the selected leads can go to the chosen agents.
+              </p>
+            )
+          )}
+        </div>
+      )}
       {newer && (
         <div role="alert" className="error">
           The leads or agents changed after the preview, so nothing was
@@ -1139,7 +1309,10 @@ function DistributeDialog({
         <Button variant="secondary" disabled={busy} onClick={onClose}>
           Cancel
         </Button>
-        <Button disabled={busy || !plan || !moves} onClick={confirm}>
+        <Button
+          disabled={busy || !plan || !moves || plan.over || takeProblem}
+          onClick={confirm}
+        >
           {busy ? "Assigning…" : plan && !moves ? "Nothing to move" : "Assign"}
         </Button>
       </footer>
@@ -1186,12 +1359,30 @@ function DistributionSummary({ result, preview = false }) {
           ]}
         />
       </div>
-      {result.moved_from.length > 0 && (
-        <p>
-          Moved from:{" "}
-          {result.moved_from.map((f) => `${f.name} (${f.count})`).join(", ")}
-        </p>
-      )}
+      {/* Never Worked (update 090): the Take table shows where leads come
+          from; once assigned, how many were taken from each agent. */}
+      {result.sources
+        ? !preview &&
+          result.sources.some((f) => f.take > 0) && (
+            <p>
+              Taken from:{" "}
+              {result.sources
+                .filter((f) => f.take > 0)
+                .map(
+                  (f) =>
+                    `${f.name || "an agent"} (${f.take} of ${f.available})`,
+                )
+                .join(", ")}
+            </p>
+          )
+        : result.moved_from.length > 0 && (
+            <p>
+              Moved from:{" "}
+              {result.moved_from
+                .map((f) => `${f.name} (${f.count})`)
+                .join(", ")}
+            </p>
+          )}
       {preview && failed.length > 0 && (
         <div className="import-results assignment-results">
           <Table

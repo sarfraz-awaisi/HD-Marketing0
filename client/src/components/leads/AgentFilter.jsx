@@ -2,8 +2,15 @@ import { useEffect, useId, useRef, useState } from "react";
 // The agent filter of All leads (update 082): one agent, several or all of
 // them, as checkboxes with a search by name or UID, Select all (every agent
 // the search shows) and Clear all. `value` is the chosen agent IDs; onChange
-// gets the new list in the agents' order, empty for any agent.
-export default function AgentFilter({ agents, value, onChange }) {
+// gets the new list in the agents' order, empty for any agent. current
+// (Never Worked's Assigned but Never Called, update 090): the agents who
+// have the leads now.
+export default function AgentFilter({
+  agents,
+  value,
+  onChange,
+  current = false,
+}) {
   const id = useId();
   const box = useRef(null);
   const [open, setOpen] = useState(false),
@@ -29,7 +36,9 @@ export default function AgentFilter({ agents, value, onChange }) {
   );
   const names = agents.filter((a) => chosen.has(a.id)).map((a) => a.name);
   const label = !value.length
-    ? "Any agent"
+    ? current
+      ? "Any current agent"
+      : "Any agent"
     : agents.length > 1 && agents.every((a) => chosen.has(a.id))
       ? `All agents (${agents.length})`
       : value.length <= 2 && names.length === value.length
@@ -47,7 +56,7 @@ export default function AgentFilter({ agents, value, onChange }) {
       <button
         type="button"
         className="agent-filter-button"
-        aria-label={`Filter by agent: ${label}`}
+        aria-label={`Filter by ${current ? "current agent" : "agent"}: ${label}`}
         aria-expanded={open}
         aria-controls={open ? `${id}-agents` : undefined}
         title={names.length > 2 ? names.join(", ") : undefined}
