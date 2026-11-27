@@ -298,7 +298,7 @@ describe("update 088 on a database at 087, as production is", () => {
 
   it("asks for 088 first, applies once, reruns as a no-op and refuses before 087", async () => {
     expect((await never({}, 503)).error).toBe(
-      "Never assigned needs CRM database update 088 after 087.",
+      "Never Worked needs CRM database update 088 after 087.",
     );
     expect((await list()).count).toBe(2);
     expect(await check()).toMatchObject({

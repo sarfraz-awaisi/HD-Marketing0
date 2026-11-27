@@ -38,8 +38,9 @@ import {
 // carry child links, shown under it in a group that opens and closes: an
 // agent's My leads holds Assigned leads and the Lead pipeline (update 052),
 // an administrator's Leads all leads and the Lead pipeline of each agent
-// (update 055) and Never assigned (update 084), and Integrations Meta Lead
-// Ads and Google Sheets (update 056).
+// (update 055) and Never Worked (update 084, named Never assigned until
+// update 090; its address is unchanged), and Integrations Meta Lead Ads and
+// Google Sheets (update 056).
 export const adminNavigation = [
   { label: "", links: [["/", "Overview", LayoutDashboard]] },
   {
@@ -52,7 +53,7 @@ export const adminNavigation = [
         [
           ["/leads", "All leads", ListOrdered],
           ["/leads/pipeline", "Lead pipeline", TrendingUp],
-          ["/leads/never-assigned", "Never assigned", UserX],
+          ["/leads/never-assigned", "Never Worked", UserX],
         ],
       ],
       ["/tasks", "Task assign", FileSpreadsheet],

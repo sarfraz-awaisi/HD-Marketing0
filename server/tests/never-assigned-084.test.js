@@ -343,7 +343,7 @@ describe("update 084 on a database at 083, as production is", () => {
     await people(cur.pg);
     const [a] = await leads(2, abru);
     expect((await list({ never_assigned: abru }, admin, 503)).error).toBe(
-      "Never assigned needs CRM database update 084 after 083.",
+      "Never Worked needs CRM database update 084 after 083.",
     );
     await distribute("/preview", { lead_ids: [a], agent_ids: [alisha] }).expect(
       503,

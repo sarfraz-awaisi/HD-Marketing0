@@ -343,6 +343,13 @@ export const adminLeadsQuery = z
           .refine((list) => new Set(list).size === list.length),
       )
       .optional(),
+    // Update 090: Never Worked's Assigned but Never Called, no call outcome
+    // saved by the lead's current agent since receiving it; agent is then
+    // the current agents.
+    agent_uncalled: z
+      .literal("true")
+      .transform(() => true)
+      .optional(),
     source: z.enum(["manual", "CSV", "Meta", "WhatsApp", "other"]).optional(),
     import_id: uuid.optional(),
     country: countryFilter,
@@ -359,7 +366,15 @@ export const adminLeadsQuery = z
   })
   .refine((q) => !(q.outcome && q.outcomes), {
     message: "Choose the call outcomes in one filter",
-  });
+  })
+  .refine(
+    (q) =>
+      !(
+        q.agent_uncalled &&
+        (q.never_assigned || q.call || q.assignment === "unassigned")
+      ),
+    { message: "Choose one Never Worked category" },
+  );
 // Administrators' Lead pipeline (update 055): the agents, by name or UID,
 // then one agent's pipeline, current or earlier contacts.
 const pipelineSearch = z
@@ -816,9 +831,32 @@ export const leadDistribution = z
     // Update 084: from the Never assigned page, each lead goes only to an
     // agent it has never had.
     never_assigned: z.boolean().optional(),
+    // Update 090, Never Worked only: uncalled, from Assigned but Never
+    // Called (leads their agent has called since stay); quotas, how many
+    // leads to take from each current agent (from: null for unassigned
+    // leads). A source left out, or 0, gives none.
+    uncalled: z.boolean().optional(),
+    quotas: z
+      .array(
+        z
+          .object({
+            from: uuid.nullable(),
+            take: z.number().int().min(0).max(20000),
+          })
+          .strict(),
+      )
+      .max(200)
+      .refine(
+        (list) => new Set(list.map((q) => q.from)).size === list.length,
+        "Enter each agent's number once",
+      )
+      .optional(),
   })
   .strict()
   .refine((b) => !(b.never_called && b.never_assigned), {
+    message: "Choose one kind of list",
+  })
+  .refine((b) => b.never_assigned || !(b.uncalled || b.quotas), {
     message: "Choose one kind of list",
   });
 // Attendance (update 040). Self-service bodies never carry a user id: the

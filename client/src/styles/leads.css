@@ -666,6 +666,25 @@ dialog.lead-name-dialog {
 .distribution-summary table {
   min-width: 0;
 }
+/* Update 090: Never Worked's Take table, one row per current agent. */
+.quota-table {
+  margin-top: var(--space-3);
+}
+.quota-table table {
+  min-width: 0;
+}
+.quota-table[aria-busy="true"] table {
+  opacity: 0.7;
+}
+.quota-take {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.quota-take input {
+  width: 7rem;
+  max-width: 100%;
+}
 
 /* Update 065: the country flag beside a number, and the Country filter. */
 .lead-phone-with-flag {
