@@ -18,7 +18,7 @@ import { CustomerCell, DetailsLink, LastCallCell } from "./LeadCells";
 // database searches every page by name or contact number and returns only
 // the agent's own leads; a file keeps its import order.
 const callLabels = {
-  uncalled: "New",
+  uncalled: "New Leads",
   missed: "Missed first call",
 };
 export default function AgentLeadList({ importId }) {

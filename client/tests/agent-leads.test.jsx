@@ -226,7 +226,7 @@ describe("Assigned leads", () => {
       "Sort leads",
     ])
       expect(screen.queryByLabelText(label)).toBe(null);
-    // The first-call states: "New" is the uncalled filter, as before.
+    // The first-call states: "New Leads" is the uncalled filter, as before.
     expect(
       [...screen.getByLabelText("Filter by first call").options].map((o) => [
         o.value,
@@ -234,7 +234,7 @@ describe("Assigned leads", () => {
       ]),
     ).toEqual([
       ["", "Any first-call state"],
-      ["uncalled", "New"],
+      ["uncalled", "New Leads"],
       ["missed", "Missed first call"],
     ]);
     expect(screen.getByLabelText("Search leads")).toHaveAttribute(
